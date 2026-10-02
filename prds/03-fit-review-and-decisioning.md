@@ -19,7 +19,7 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 
 ##### Non-Goals
 - **Storage of the decision/feedback** — owned by PRD 02 (`record_decision`, `set_decision`, `clear_decision`, `pending_review`).
-- **ATS resolution and full-JD capture mechanics** — owned by PRD 01 (`resolve.py`, `fetch.py`); this spec owns only the manual path's *JSON-LD fallback* wiring (`XC-5`).
+- **ATS resolution and full-JD capture mechanics** — owned by PRD 01 (`resolve.py`, `fetch.py`, and the schema.org `JobPosting` fallback `jobposting.py` this path uses) (`XC-5`).
 - **What happens to an Apply row afterward** (packets, resume checklists, tracker) — PRD 04.
 - **How feedback is consumed** for prompt refinement — PRD 05.
 - **Any LLM in the review loop** — deliberately excluded to keep per-posting cost at zero.
@@ -60,7 +60,7 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 - **Writes no `search_findings` row:** that table is per-agent *search-coverage* telemetry; a supplied posting would inflate an agent's coverage (consistent with PRD 02).
 - **Company/title derivation:** interactive by default — `company_from_board` (pure: split the board slug on `-_.+`, title-case) offers a pre-filled company for correction, and the ATS-canonical title is offered; `--no-input` accepts the derived values or fails if they cannot be derived. `update_jd_capture` is called with `title=None` on this path so a user's title override is never clobbered by the ATS transcription.
 - **Unsupported ATS is not a rejection (P0, `XC-5`):** the pipeline's index check applies only to postings an *agent* found; the user has already vouched for a hand-added one, so it inserts with a `NULL jd_markdown` if capture fails.
-- **JSON-LD fallback — manual path only (P0, owned here):** capture order is **supported ATS fetcher → schema.org JSON-LD (`ats/jsonld.py`) → `NULL`**, never the reverse (Greenhouse and Lever publish no JSON-LD, so their platform fetcher is the only source). The **search path deliberately does not use this fallback** (PRD 01) — a successful JSON-LD capture is never evidence a posting is live.
+- **Capture order (P0, `XC-5`):** PRD 01's **supported ATS fetcher → schema.org `JobPosting` data (`ats/jobposting.py`) → `NULL`**, never the reverse. A successful capture is never evidence a posting is live; this path needs none, because the user has vouched for the posting.
 
 -----
 #### User Experience
@@ -92,7 +92,7 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 -----
 #### Integration Points
 - **Google Chrome** via the macOS `open` command (review).
-- **The four ATS fetchers + `ats/jsonld.py`** (manual capture) — fetchers owned by PRD 01; unauthenticated HTTP via `httpx`.
+- **The four ATS fetchers + `ats/jobposting.py`** (manual capture) — both owned by PRD 01; unauthenticated HTTP via `httpx`.
 - **Turso** (PRD 02) for all reads/writes.
 - **`prompt_toolkit` / `readline` / `$EDITOR`** — line-editing (soft dependencies).
 

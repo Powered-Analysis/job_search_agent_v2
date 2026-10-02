@@ -60,7 +60,7 @@ How the system runs: the **cloud/local split** (only Steps 1–2 run headless in
 6. **Updates:** `jsa deploy` again, after any code change or an accepted refine proposal (PRD 05).
 
 **`jsa deploy` (`deploy.py`) (Priority: P0)** — local only; uses the user's `flyctl` session (no deploy token).
-1. **Validate before building:** assemble the search prompt and parse `search.toml` exactly as the cloud will (`XC-13`); any missing required fragment, invalid schedule, or malformed runner setting aborts before a build. Model and agent IDs are not checked against a list (`XC-14`) — `--smoke` is where a rejected ID surfaces. Warns (does not abort) on a schedule that leaves a gap in the week, on a `run_at` after 22:59 (a slipped wake can cross midnight and miss the day, PRD 01), and on a pending refine proposal (it will not ship).
+1. **Validate before building:** assemble the search prompt and parse `search.toml` exactly as the cloud will (`XC-13`); any missing required fragment, invalid schedule, or malformed runner or verification setting aborts before a build. Model and agent IDs are not checked against a list (`XC-14`) — `--smoke` is where a rejected ID surfaces. Warns (does not abort) on a schedule that leaves a gap in the week, on a `run_at` after 22:59 (a slipped wake can cross midnight and miss the day, PRD 01), and on a pending refine proposal (it will not ship).
 2. **Build and push:** `fly deploy --build-only --push --image-label <UTC stamp> -a <app>`.
 3. **Swap in place:** find the machine carrying the `hourly` schedule. None → create it (`fly machine run <image> --schedule hourly --vm-memory 1024 --region <region>`). One → `fly machine update <id> --image <image> --vm-memory 1024 --schedule hourly`, retrying for registry lag; re-asserting the schedule on every update means an image swap can never drop it. Whatever the update does to Fly's interval anchor is harmless, because the run time comes from the gate, not the anchor (PRD 01). More than one → error (ambiguous; the user resolves it in Fly).
 - **`--dry-run`:** step 1 plus the list of profile files that would ship; no build.
@@ -101,13 +101,14 @@ profile/
   resume.docx             local   the single base resume                    (PRD 04)
   search/                 SHIPS IN THE FLY IMAGE
     search.toml                 timezone; run_at; [schedule] weekday → ordered (agent, window_hours);
-                                [runners.claude] model + effort; [runners.gemini] agent  (PRD 01)
+                                [runners.claude] model + effort; [runners.gemini] agent;
+                                [verification] mode (strict | best_effort)  (PRD 01)
     candidate.md, target_roles.md, filters.md,
     positive_signals.md, negative_signals.md, hard_exclusions.md               (PRD 01 slots)
   refine/                 local   a pending refine proposal: rationale + conflict-marked fragments (PRD 05)
 ```
 
-- **Validated at load:** each TOML file is parsed into a typed config; an unknown key raises (a typo never silently falls back to a default), and a key a command needs but the profile lacks raises naming the file and pointing to `profile.example/`. Requiredness is per command: `tracker_spreadsheet_id` for `track`/`generate`/`refetch`; `resume.docx` for `packet`/`generate`/`refetch`; `[fly]` for `deploy`; each `[agents.*]` for its command; each scheduled runner's `[runners.*]` for `search`/`cron`/`deploy`. Model and effort values are checked for form only, never against a list of allowed models (`XC-14`); `profile.example/` carries the recommended defaults as comments.
+- **Validated at load:** each TOML file is parsed into a typed config; an unknown key raises (a typo never silently falls back to a default), and a key a command needs but the profile lacks raises naming the file and pointing to `profile.example/`. Requiredness is per command: `tracker_spreadsheet_id` for `track`/`generate`/`refetch`; `resume.docx` for `packet`/`generate`/`refetch`; `[fly]` for `deploy`; each `[agents.*]` for its command; each scheduled runner's `[runners.*]` and `[verification] mode` for `search`/`cron`/`deploy`. Model and effort values are checked for form only, never against a list of allowed models (`XC-14`); `profile.example/` carries the recommended defaults as comments.
 - **The profile is only data.** No profile file is executable or imported as code; the app reads it through `config.py` and `prompts.assemble` (`XC-13`).
 
 **Complete user-setup inventory (Priority: P0)** — the consolidated home; other PRDs reference this:

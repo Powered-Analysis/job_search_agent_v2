@@ -77,7 +77,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 
 **Reconciliation (`refetch.py`) (Priority: P1)**
 - **Scope (default):** `Apply` rows that are **absent from the Sheet OR have a blank Date Applied** — the ones where drift could still change the user's next action. The Sheet index read is *fatal* in the default scope (guessing defeats it) and best-effort under `--id`/`--all` (where it only enables Title propagation). `--all` widens to every row; `--id` targets one unconditionally.
-- **Re-apply the insert rule:** re-read the ATS record, ATS-canonical title wins, `title_slug` re-derived (via `db.update_jd_capture`).
+- **Re-apply the insert rule:** re-read the ATS record (off the four, the posting page's `JobPosting` data, PRD 01), ATS-canonical title wins, `title_slug` re-derived (via `db.update_jd_capture`).
 - **Failed fetch leaves the row *completely* untouched** (`XC-6`) — never trade a good capture for a blip; for a pulled posting the stored JD is the only surviving record.
 - **Title propagation:** a corrected title on a tracked-but-unapplied row updates the Sheet Title cell (`update_title`); a failed Sheet write degrades to a flagged hand-fix, never blocks the reconciliation.
 - **Packet refresh on drift, in place:** a title/description change on a row with an existing packet directory renames the directory and the resume copy to their new names when the title changed, then invokes `generate.run_generate` for the row, which rewrites `job_posting.md` and regenerates the checklist against the (possibly revised) resume copy. Refetch never deletes a packet directory or any file in it, and renames only, never rewrites, the resume copy, because it may hold the user's revision work. If a distinct directory or resume file already exists at a new name, refetch renames nothing and flags the row. A location-only change touches nothing; refetch never creates a packet where none existed. A failed generate is flagged for a manual re-run, never rolled back.
@@ -120,7 +120,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **`python-docx`** — reads the packet's resume copy for `render_resume_text`.
 - **Claude Agent SDK** (the profile's checklist model), tool-less; Claude auth inherited from the environment (PRD 06).
 - **Google Sheets** via the local **`gws` CLI** (`JSA_GWS_BIN`), which holds the Google OAuth token locally.
-- **The four ATS fetchers** (PRD 01) — refetch capture.
+- **The four ATS fetchers and the `JobPosting` fallback** (PRD 01) — refetch capture.
 - **Turso** (PRD 02).
 
 **User inputs / manual setup this subsystem requires** (consolidated in PRD 06; all local-only profile content, `XC-11`):
