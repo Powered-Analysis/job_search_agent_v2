@@ -53,8 +53,8 @@ How the system runs: the **cloud/local split** (only Steps 1–2 run headless in
 
 **Deployment sequence (user-run; sets billed secrets — never via an agent) (Priority: P0)**
 1. **Turso:** `turso db create` → `turso db show --url` (→ `TURSO_DATABASE_URL`) → `turso db tokens create` (→ `TURSO_AUTH_TOKEN`); put both in local `.env`; `uv run jsa init-db`.
-2. **Auth:** a `JSA_SEARCH_ANTHROPIC_API_KEY` (an Anthropic Console API key; Claude search runs always use it, PRD 01) if the schedule uses `claude`; a `PERPLEXITY_API_KEY`; a `GEMINI_API_KEY` if the schedule uses `gemini`. For the local Claude commands (checklist, refine), whichever Claude credential the user prefers in local `.env`: `claude setup-token` (→ `CLAUDE_CODE_OAUTH_TOKEN`) *or* an `ANTHROPIC_API_KEY` — **never both** (the CLI prefers the API key and 401s the OAuth flow).
-3. **Fly:** `fly auth login` → `fly apps create <app>` → set `[fly] app` and `region` in `profile/config.toml` → `fly secrets set --stage -a <app> TURSO_DATABASE_URL=… TURSO_AUTH_TOKEN=… [JSA_SEARCH_ANTHROPIC_API_KEY=…] PERPLEXITY_API_KEY=… [GEMINI_API_KEY=…]`. The cloud runs only search, so it needs no other Claude credential.
+2. **Auth:** a `JSA_SEARCH_ANTHROPIC_API_KEY` (an Anthropic Console API key; production Claude search runs use it, PRD 01) if the schedule uses `claude`; a `PERPLEXITY_API_KEY`; a `GEMINI_API_KEY` if the schedule uses `gemini`. For the local Claude commands (checklist, refine), whichever Claude credential the user prefers in local `.env`: `claude setup-token` (→ `CLAUDE_CODE_OAUTH_TOKEN`) *or* an `ANTHROPIC_API_KEY` — **never both** (the CLI prefers the API key and 401s the OAuth flow).
+3. **Fly:** `fly auth login` → `fly apps create <app>` → set `[fly] app` and `region` in `profile/config.toml` → `fly secrets set --stage -a <app> TURSO_DATABASE_URL=… TURSO_AUTH_TOKEN=… [JSA_SEARCH_ANTHROPIC_API_KEY=…] PERPLEXITY_API_KEY=… [GEMINI_API_KEY=…]`. The cloud runs only search, so it holds no other Claude credential, and the search key is required there if the schedule uses `claude`.
 4. **Smoke test:** `jsa deploy --smoke` (runs one ungated `jsa cron` on a throwaway machine, exits).
 5. **Schedule:** `jsa deploy` (creates the `hourly` machine on first run; it self-gates to `search.toml`).
 6. **Updates:** `jsa deploy` again, after any code change or an accepted refine proposal (PRD 05).
@@ -87,7 +87,7 @@ How the system runs: the **cloud/local split** (only Steps 1–2 run headless in
 
 *Environment — secrets and machine-local settings only* (every one listed, commented, in `.env.example`):
 - **Required everywhere:** `TURSO_DATABASE_URL` (raises if unset). `TURSO_AUTH_TOKEN` required for hosted Turso (omit for a `file:` dev URL).
-- **Command-specific:** `PERPLEXITY_API_KEY` / `GEMINI_API_KEY` / `JSA_SEARCH_ANTHROPIC_API_KEY` (their runners' searches; validated lazily so other commands run without them); for the local Claude commands, `CLAUDE_CODE_OAUTH_TOKEN` *or* `ANTHROPIC_API_KEY` (the user's choice; read by the SDK's CLI from the inherited env — not by `config.py`).
+- **Command-specific:** `PERPLEXITY_API_KEY` / `GEMINI_API_KEY` (their runners' searches; validated lazily so other commands run without them); `JSA_SEARCH_ANTHROPIC_API_KEY` (production Claude searches; unset in development, where the runner uses the inherited credential); for the local Claude commands, `CLAUDE_CODE_OAUTH_TOKEN` *or* `ANTHROPIC_API_KEY` (the user's choice; read by the SDK's CLI from the inherited env — not by `config.py`).
 - **Optional overrides (default):** `JSA_PROFILE_DIR` (`./profile`), `JSA_GWS_BIN` (`gws`), `JSA_GENERATE_WORKERS` (3).
 
 *The profile — everything about the user* (gitignored in full; `profile.example/` is committed with the identical shape and a fictional candidate):
@@ -152,7 +152,7 @@ profile/
 - **No `fly deploy` release lifecycle:** machines run images directly; updates are in-place image swaps that preserve the schedule.
 - **Fly's schedule carries no time of day:** intervals are counted from the machine's creation, and whether an update or manual start resets that count is undocumented. Hourly wakes plus the in-app gate make the run time independent of it. The cost is about 24 short wakes a day, each billed per second on the 1 GB machine and exiting before any DB or model call on all but one of them.
 - **One timezone, from the profile:** the cadence gate, the search window, and the tracker's Date Added all use `timezone` from `profile/search/search.toml`, never the image's `TZ` or the host's zone, so cloud and local agree on what "today" is.
-- **Claude auth is inherited, except for search (`XC-1`):** the local Claude commands' spawned CLI reads the user's credential from the inherited environment, which is why it is not on `Config`. The Claude search runner alone overrides it with `JSA_SEARCH_ANTHROPIC_API_KEY` (PRD 01), so every search run, cloud or hand, bills to an API key.
+- **Claude auth is inherited, except for search (`XC-1`):** the local Claude commands' spawned CLI reads the user's credential from the inherited environment, which is why it is not on `Config`. The Claude search runner alone overrides it with `JSA_SEARCH_ANTHROPIC_API_KEY` (PRD 01), when that key is set, so every production search run, cloud or hand, bills to an API key; development leaves it unset and inherits like the rest.
 - **`turso_serverless` over HTTP (`XC-2`, PRD 02)** is what makes the same DB reachable identically from Fly and locally.
 
 -----
