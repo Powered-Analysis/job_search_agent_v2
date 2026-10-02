@@ -74,7 +74,7 @@ The part of the system that **improves with use**. The **search-profile refineme
 - **Markers left unresolved:** `--accept` refuses, naming the file and line.
 - **Live fragment hand-edited after the run:** `--accept` refuses; reject and re-run.
 - **A change kept only in part:** whatever the resolved file says is what ships; a dropped change is not remembered, so later evidence may propose it again (the accepted oscillation).
-- **`ANTHROPIC_API_KEY` set alongside the OAuth token:** the CLI prefers the API key and 401s on the OAuth flow — the env must provide exactly one (PRD 06).
+- **`ANTHROPIC_API_KEY` set alongside the OAuth token in local `.env`:** the CLI prefers the API key and 401s on the OAuth flow — the env must provide exactly one (PRD 06).
 
 -----
 #### Technical Considerations
