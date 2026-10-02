@@ -205,6 +205,7 @@ The first infrastructure issue proves that `turso_serverless` connects to the co
 **Live keys.** Tests never need a live key. `XC-9` requires agentic steps to be verified against real-world checks, and the FSE is the role that runs them, so only the FSE job gets live service keys:
 - `PERPLEXITY_API_KEY` is funded by prepaid credits, so spend is capped at the balance.
 - `GEMINI_API_KEY` is a paid key, because Deep Research isn't available on Gemini's free tier.
+- `JSA_SEARCH_ANTHROPIC_API_KEY` is an Anthropic Console API key. The app's Claude search runner always authenticates with it rather than the job's Claude credential (PRD 01).
 
 **Live checks run at the cheapest setting that exercises the integration.** A live check proves the app talks to a service correctly, not the quality of what comes back. The pipeline, not the model, guarantees that only live postings get through (`XC-5`), and model choice is the user's (`XC-14`). So before the FSE runs, the job copies `profile.example/` with these settings and points `JSA_PROFILE_DIR` at the copy:
 
@@ -218,7 +219,7 @@ Judging output quality is the owner's job after deployment (see [Completion](#co
 
 Live checks run with `JSA_PROFILE_DIR=profile.example`, the fictional candidate PRD 06 requires. CI never has the owner's gitignored `profile/`, and live-check output goes into public PR descriptions ([convention 8](conventions.md#8-nothing-private-in-a-public-repository)).
 
-The app's Claude calls use the job's own Claude credential. `ANTHROPIC_API_KEY` is never set alongside an OAuth token, because the CLI prefers the API key and fails the OAuth flow with a 401. Live ATS fetches need no key.
+The app's checklist and refine calls use the job's own Claude credential; the Claude search runner uses `JSA_SEARCH_ANTHROPIC_API_KEY` instead (PRD 01). `ANTHROPIC_API_KEY` is never set alongside an OAuth token, because the CLI prefers the API key and fails the OAuth flow with a 401. Live ATS fetches need no key.
 
 Live job postings are text anyone can write, so the FSE reads untrusted content during real-world checks. The boundary that contains this is `FSE_TOKEN`'s scope: the FSE can't merge, push to `main`, or change workflows.
 
@@ -274,7 +275,7 @@ Two approvals are what keep the FSE from merging. The FSE needs Contents write t
 |---|---|
 | The Claude credential: one of `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, never both | every agent job, and `report.yml`'s reporter step |
 | `WOZCODE_API_KEY` | the PM, FSE, SA, and SDET jobs |
-| `PERPLEXITY_API_KEY` (prepaid credits), `GEMINI_API_KEY` (paid, with a project spend cap) | the FSE job only (see [CI environment](#ci-environment)) |
+| `PERPLEXITY_API_KEY` (prepaid credits), `GEMINI_API_KEY` (paid, with a project spend cap), `JSA_SEARCH_ANTHROPIC_API_KEY` | the FSE job only (see [CI environment](#ci-environment)) |
 | `RESEND_API_KEY` (Sending Access only), `REPORT_TO` | `report.yml`'s send step only |
 
 `REPORT_TO` is the owner's inbox. It's a secret, not a variable, so that GitHub masks the address in the public Actions logs, and so it never appears in this public document. Without a verified sending domain, Resend delivers only to the address its account was registered with, so the Resend account uses the same address.
