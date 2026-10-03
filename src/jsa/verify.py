@@ -4,12 +4,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
 from jsa import db
-from jsa.ats import AtsRef, resolve_ats
+from jsa.ats import AtsRef, ashby_board_url, resolve_ats, rippling_detail_url
 from jsa.capture import extract_job_posting
 from jsa.http import get_json, get_lever_json
 from jsa.urls import is_aggregator
@@ -49,6 +49,7 @@ class Verdict:
 class Page:
     status: int
     final_url: str
+    redirected: bool
     html: str
 
 
@@ -150,8 +151,9 @@ def _classify_page(
         return Verdict("page_closed")
     if not 200 <= page.status < 300:
         return Verdict("unverifiable")
-    # A closed job typically redirects to the careers home or a search page.
-    if _last_segment(url) not in page.final_url:
+    # A closed job typically redirects to the careers home or a search page. Both sides are
+    # decoded because the client percent-encodes the final URL but not the stored one.
+    if page.redirected and unquote(_last_segment(url)) not in unquote(page.final_url):
         return Verdict("page_closed")
     posting = extract_job_posting(page.html)
     if posting and _valid_through_passed(posting.valid_through, now):
@@ -213,7 +215,7 @@ def _lever_index(client: httpx.Client, board: str) -> Index:
 
 
 def _ashby_index(client: httpx.Client, board: str) -> Index:
-    data = get_json(client, f"https://api.ashbyhq.com/posting-api/job-board/{board}")
+    data = get_json(client, ashby_board_url(board))
     return _listing(_jobs_of(data), "publishedAt")
 
 
@@ -260,10 +262,7 @@ class Verifier:
 
     def _rippling_detail(self, ref: AtsRef) -> Mapping | None:
         try:
-            data = get_json(
-                self._client,
-                f"https://ats.rippling.com/api/v2/board/{ref.board}/jobs/{ref.job_id}",
-            )
+            data = get_json(self._client, rippling_detail_url(ref.board, ref.job_id))
         except httpx.HTTPError, ValueError:
             return None
         return data if isinstance(data, dict) else None
@@ -273,7 +272,12 @@ class Verifier:
             response = self._client.get(url)
         except httpx.HTTPError:
             return None
-        return Page(response.status_code, str(response.url), response.text)
+        return Page(
+            response.status_code,
+            str(response.url),
+            bool(response.history),
+            response.text,
+        )
 
     def check(
         self, url: str, *, mode: Mode, window_start: datetime | None = None

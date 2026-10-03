@@ -8,7 +8,7 @@ import httpx
 from bs4 import BeautifulSoup, Tag
 from markdownify import markdownify
 
-from jsa.ats import AtsRef
+from jsa.ats import AtsRef, ashby_board_url, rippling_detail_url
 from jsa.errors import JsaError
 from jsa.http import get_json, get_lever_json
 
@@ -108,9 +108,7 @@ def _lever(client: httpx.Client, ref: AtsRef) -> Capture:
 
 
 def _ashby(client: httpx.Client, ref: AtsRef) -> Capture:
-    board = _record(
-        get_json(client, f"https://api.ashbyhq.com/posting-api/job-board/{ref.board}")
-    )
+    board = _record(get_json(client, ashby_board_url(ref.board)))
     for job in board.get("jobs") or []:
         if _record(job).get("id") == ref.job_id:
             return _capture(
@@ -120,12 +118,7 @@ def _ashby(client: httpx.Client, ref: AtsRef) -> Capture:
 
 
 def _rippling(client: httpx.Client, ref: AtsRef) -> Capture:
-    record = _record(
-        get_json(
-            client,
-            f"https://ats.rippling.com/api/v2/board/{ref.board}/jobs/{ref.job_id}",
-        )
-    )
+    record = _record(get_json(client, rippling_detail_url(ref.board, ref.job_id)))
     description = record.get("description")
     if isinstance(description, dict):
         # The role comes first, the company blurb after it.
