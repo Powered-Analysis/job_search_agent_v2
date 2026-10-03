@@ -12,9 +12,9 @@ from jsa.http import make_client
 from jsa.urls import is_aggregator
 
 USER_AGENT = f"job-search-agent/{version('jsa')}"
-LEVER_ID = str(uuid.uuid4())
-ASHBY_ID = str(uuid.uuid4())
-RIPPLING_ID = str(uuid.uuid4())
+LEVER_ID = "3f2a9c1e-7b4d-4e8a-9c56-1d0e2f3a4b5c"
+ASHBY_ID = "8d7c6b5a-4f3e-4d2c-b1a0-9e8f7a6b5c4d"
+RIPPLING_ID = "c4b5a697-8f0e-4a1b-8c2d-3e4f5a6b7c8d"
 
 
 def ref_of(url):

@@ -28,6 +28,7 @@ while read -r pr <&3; do
           and ($pm_latest == null or $pm_latest.at < $sa_latest.at)),
        concern: ($pm_latest != null and $pm_latest.state == "CHANGES_REQUESTED"
           and ($sa_approval == null or $pm_latest.at > $sa_approval.at)),
+       sa_changes: ($sa_latest != null and $sa_latest.state == "CHANGES_REQUESTED"),
        changes: [.[] | select(.state == "CHANGES_REQUESTED" and (.login == $sa or .login == $pm)) | .at]}')
 
   # Rule 1: the SA approved the head commit, so the PR goes to the PM.
@@ -71,5 +72,12 @@ while read -r pr <&3; do
       add_label "$issue" needs-human
       echo "PR #$number: applied needs-human to #$issue (revision cap)"
     fi
+  fi
+
+  # Rule 4: the SA requested changes, so the issue is the FSE's. The label is
+  # missing only when an earlier SA approval removed it.
+  if [[ $(jq -r '.sa_changes' <<<"$state") == true ]] && ! has in-progress; then
+    add_label "$issue" in-progress
+    echo "PR #$number: applied in-progress to #$issue (SA requested changes)"
   fi
 done 3< <(jq -c '.[] | select(.issue != null)' <<<"$prs")
