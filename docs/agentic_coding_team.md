@@ -76,6 +76,7 @@ For the open feature PR and its linked issue, reconcile applies these rules:
 1. **SA approval.** If the SA's latest review is `APPROVED`, is on the PR's head commit, and the PM hasn't reviewed since, then remove `in-progress` and `priority-now` from the issue, and request the PM's review if no request is pending.
 2. **PM concern.** If the PM's latest review is `CHANGES_REQUESTED` and is newer than the SA's latest approval, apply `priority-now` to the issue.
 3. **Revision cap.** Count the PR's `CHANGES_REQUESTED` reviews (SA and PM combined) since the later of the PR's creation and the last time `needs-human` was removed from the issue. When the count reaches four, apply `needs-human` to the issue and comment `Needs-human:` with links to the unresolved review threads.
+4. **SA changes.** If the SA's latest review is `CHANGES_REQUESTED` and the issue lacks `in-progress`, apply it. The label is missing only when an earlier SA approval removed it, for example when the branch was then updated with `main` and the SA reviewed the new head.
 
 One more transition is mechanical: the FSE's claim. The FSE guard applies `in-progress` to the issue at the top of the queue before invoking the agent.
 
@@ -520,6 +521,8 @@ The SDET never reads the PR description, review comments, or the reasoning behin
    - **Failure paths the spec promises.**
    - **Cross-cutting invariants that must never silently regress.**
    - **Falsification attempts**, e.g., inputs that plausibly weren't considered.
+
+   **Test IDs are deterministic.** No value generated when the tests are collected, such as a random UUID or a timestamp, appears in a parametrized argument or in `ids=`. The [test gate](#test-gate) matches tests by ID across two separate runs, so an ID that differs between runs reads as a regression on every PR.
 
    Replace the outside world only at the [test seams](#ci-environment). No test reaches the network except the libSQL container.
 3. **Revise disputed tests.** For each `revise-test` issue, change the disputed tests to match the PM's recorded ruling, and close the issue once they're revised. This is the only time the SDET changes an assertion because of something other than the PRDs.
