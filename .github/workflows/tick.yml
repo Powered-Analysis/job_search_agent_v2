@@ -1,0 +1,420 @@
+# The tick: one pass of the four roles (docs/agentic_coding_team.md, Orchestration).
+#
+#   pm -> (fse || sdet) -> sa
+#
+# Each agent job starts with its guard and exits without invoking the agent when
+# the guard finds no work. The checks that follow an agent (reconcile, discharge,
+# invariants) and the test gate run in jobs of their own, on runners no agent has
+# touched, so TICK_TOKEN is never on a machine where an agent or a PR's code ran.
+name: tick
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+# Every write uses a fine-grained PAT chosen for that write.
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  actions: read
+  statuses: read
+
+concurrency:
+  group: tick
+  cancel-in-progress: false
+
+jobs:
+  pm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      work: ${{ steps.guard.outputs.work }}
+      items: ${{ steps.guard.outputs.items }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Reconcile (start of tick)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TICK_TOKEN: ${{ secrets.TICK_TOKEN }}
+        run: bash scripts/reconcile.sh
+      - name: Invariants (start of tick)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/invariants.sh
+      - name: Guard
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/guard.sh pm
+      - name: Product Manager
+        if: steps.guard.outputs.work == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.PM_TOKEN }}
+          bot_name: nickybell
+          bot_id: "107280719"
+          display_report: true
+          plugin_marketplaces: https://github.com/WithWoz/wozcode-plugin.git
+          plugins: woz@wozcode-marketplace
+          settings: |
+            {"env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "WOZCODE_API_KEY": "${{ secrets.WOZCODE_API_KEY }}"}}
+          claude_args: |
+            --model claude-opus-5-5
+            --effort ${{ steps.guard.outputs.effort }}
+            --max-turns 500
+            --permission-mode bypassPermissions
+            --disallowedTools Monitor
+          prompt: |
+            You are the Product Manager (PM) of the agent team that builds this repository.
+
+            Required reading before you act, in docs/agentic_coding_team.md: the Orchestration section and the Product Manager section. They are your instructions.
+
+            Your guard selected these work items from GitHub's current state: ${{ steps.guard.outputs.items }}
+            - `plan`: carry out Planning.
+            - `pr:<n>`: carry out Merge review on pull request <n>.
+            - `discrepancy:<n>`: carry out Discrepancy adjudication on issue <n>.
+
+            `gh` and `git` act as your GitHub account in ${{ github.repository }}. End the run only when every work item is done or escalated; the discharge check fails the tick otherwise.
+
+  pm-check:
+    needs: pm
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        if: needs.pm.outputs.work == 'true'
+      - name: Reconcile, discharge check, invariants
+        if: needs.pm.outputs.work == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TICK_TOKEN: ${{ secrets.TICK_TOKEN }}
+          ITEMS: ${{ needs.pm.outputs.items }}
+        run: bash scripts/after_agent.sh pm "$ITEMS"
+
+  fse:
+    needs: pm-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      work: ${{ steps.guard.outputs.work }}
+      items: ${{ steps.guard.outputs.items }}
+    services:
+      libsql:
+        image: ghcr.io/tursodatabase/libsql-server:latest
+        ports:
+          - 8080:8080
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Guard and claim
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TICK_TOKEN: ${{ secrets.TICK_TOKEN }}
+        run: bash scripts/guard.sh fse --claim
+      - uses: astral-sh/setup-uv@v10.2.0
+        if: steps.guard.outputs.work == 'true'
+      - name: Install dependencies and prepare the live-check profile
+        if: steps.guard.outputs.work == 'true'
+        env:
+          JSA_PROFILE_DIR: ${{ runner.temp }}/profile
+        run: |
+          bash scripts/wait_libsql.sh 8080
+          if [ -f pyproject.toml ]; then uv sync; fi
+          bash scripts/live_profile.sh
+      - name: Full Stack Engineer
+        if: steps.guard.outputs.work == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.FSE_TOKEN }}
+          bot_name: RoBOT-DeNiro
+          bot_id: "336713929"
+          display_report: true
+          plugin_marketplaces: https://github.com/WithWoz/wozcode-plugin.git
+          plugins: woz@wozcode-marketplace
+          # Only this job gets live service keys.
+          settings: |
+            {"env": {
+              "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+              "WOZCODE_API_KEY": "${{ secrets.WOZCODE_API_KEY }}",
+              "TURSO_DATABASE_URL": "http://127.0.0.1:8080",
+              "JSA_PROFILE_DIR": "${{ runner.temp }}/profile",
+              "PERPLEXITY_API_KEY": "${{ secrets.PERPLEXITY_API_KEY }}",
+              "GEMINI_API_KEY": "${{ secrets.GEMINI_API_KEY }}"
+            }}
+          claude_args: |
+            --model claude-sonnet-5-5
+            --effort high
+            --max-turns 500
+            --permission-mode bypassPermissions
+            --disallowedTools Monitor
+          prompt: |
+            You are the Full Stack Engineer (FSE) of the agent team that builds this repository.
+
+            Required reading before you act, in docs/agentic_coding_team.md: the Orchestration section and the Full Stack Engineer section. They are your instructions.
+
+            Your guard claimed this work item from GitHub's current state: ${{ steps.guard.outputs.items }} (`issue:<n>` is issue <n>).
+
+            `gh` and `git` act as your GitHub account in ${{ github.repository }}. The checkout is on `main`. A fresh libSQL database is at `TURSO_DATABASE_URL`. `JSA_PROFILE_DIR` points at a copy of `profile.example/` at the live-check settings of the CI environment section; after you change `profile.example/`, rebuild the copy with `bash scripts/live_profile.sh`.
+
+            End the run by requesting the SA's review, or by escalating; the discharge check fails the tick otherwise.
+
+  fse-check:
+    needs: fse
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        if: needs.fse.outputs.work == 'true'
+      - name: Reconcile, discharge check, invariants
+        if: needs.fse.outputs.work == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TICK_TOKEN: ${{ secrets.TICK_TOKEN }}
+          ITEMS: ${{ needs.fse.outputs.items }}
+        run: bash scripts/after_agent.sh fse "$ITEMS"
+
+  # The test gate runs the PR's code, so it holds no secret. The sa job posts
+  # its result. Together they share the SA's 45 minutes.
+  gate:
+    needs: fse-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      state: ${{ steps.gate.outputs.state }}
+      description: ${{ steps.gate.outputs.description }}
+      sha: ${{ steps.gate.outputs.sha }}
+    services:
+      # One fresh database for each of the two suite runs.
+      libsql-base:
+        image: ghcr.io/tursodatabase/libsql-server:latest
+        ports:
+          - 8081:8080
+      libsql-head:
+        image: ghcr.io/tursodatabase/libsql-server:latest
+        ports:
+          - 8082:8080
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Guard
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/guard.sh sa
+      - uses: astral-sh/setup-uv@v10.2.0
+        if: steps.guard.outputs.work == 'true'
+      - name: Test gate
+        id: gate
+        if: steps.guard.outputs.work == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.guard.outputs.pr }}
+        run: |
+          bash scripts/wait_libsql.sh 8081 8082
+          bash scripts/test_gate.sh "$PR"
+
+  sa:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      work: ${{ steps.guard.outputs.work }}
+      items: ${{ steps.guard.outputs.items }}
+    services:
+      libsql:
+        image: ghcr.io/tursodatabase/libsql-server:latest
+        ports:
+          - 8080:8080
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Guard
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/guard.sh sa
+      - name: Post the test-gate status
+        if: steps.guard.outputs.work == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.TICK_TOKEN }}
+          STATE: ${{ needs.gate.outputs.state }}
+          DESCRIPTION: ${{ needs.gate.outputs.description }}
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$SHA" \
+            -f state="$STATE" -f context=test-gate -f description="$DESCRIPTION" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
+      - uses: astral-sh/setup-uv@v10.2.0
+        if: steps.guard.outputs.work == 'true'
+      - name: Install dependencies
+        if: steps.guard.outputs.work == 'true'
+        run: |
+          bash scripts/wait_libsql.sh 8080
+          if [ -f pyproject.toml ]; then uv sync; fi
+      - name: Software Architect
+        if: steps.guard.outputs.work == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.SA_TOKEN }}
+          bot_name: LeBOT-James
+          bot_id: "336716064"
+          display_report: true
+          plugin_marketplaces: https://github.com/WithWoz/wozcode-plugin.git
+          plugins: woz@wozcode-marketplace
+          settings: |
+            {"env": {
+              "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+              "WOZCODE_API_KEY": "${{ secrets.WOZCODE_API_KEY }}",
+              "TURSO_DATABASE_URL": "http://127.0.0.1:8080"
+            }}
+          claude_args: |
+            --model claude-opus-5-5
+            --effort medium
+            --max-turns 500
+            --permission-mode bypassPermissions
+            --disallowedTools Monitor
+          prompt: |
+            You are the Software Architect (SA) of the agent team that builds this repository.
+
+            Required reading before you act, in docs/agentic_coding_team.md: the Orchestration section and the Software Architect section. They are your instructions.
+
+            Your guard selected this work item from GitHub's current state: ${{ steps.guard.outputs.items }} (`pr:<n>` is pull request <n>).
+
+            The test gate ran on head commit ${{ needs.gate.outputs.sha }}: ${{ needs.gate.outputs.state }}. ${{ needs.gate.outputs.description }} The details are in this workflow run's summary.
+
+            `gh` and `git` act as your GitHub account in ${{ github.repository }}. The checkout is on `main`. A fresh libSQL database is at `TURSO_DATABASE_URL`.
+
+            End the run by submitting a review that approves or requests changes; the discharge check fails the tick otherwise.
+
+  sa-check:
+    needs: sa
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        if: needs.sa.outputs.work == 'true'
+      - name: Reconcile, discharge check, invariants
+        if: needs.sa.outputs.work == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TICK_TOKEN: ${{ secrets.TICK_TOKEN }}
+          ITEMS: ${{ needs.sa.outputs.items }}
+        run: bash scripts/after_agent.sh sa "$ITEMS"
+
+  sdet:
+    needs: pm-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      work: ${{ steps.guard.outputs.work }}
+      items: ${{ steps.guard.outputs.items }}
+      before: ${{ steps.before.outputs.sha }}
+    services:
+      libsql:
+        image: ghcr.io/tursodatabase/libsql-server:latest
+        ports:
+          - 8080:8080
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Record main before the SDET runs
+        id: before
+        run: echo "sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+      - name: Guard
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/guard.sh sdet
+      - uses: astral-sh/setup-uv@v10.2.0
+        if: steps.guard.outputs.work == 'true'
+      - name: Install dependencies
+        if: steps.guard.outputs.work == 'true'
+        run: |
+          bash scripts/wait_libsql.sh 8080
+          if [ -f pyproject.toml ]; then uv sync; fi
+      - name: Software Development Engineer in Test
+        if: steps.guard.outputs.work == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.SDET_TOKEN }}
+          bot_name: Sandro-BOTicelli
+          bot_id: "322869608"
+          display_report: true
+          plugin_marketplaces: https://github.com/WithWoz/wozcode-plugin.git
+          plugins: woz@wozcode-marketplace
+          settings: |
+            {"env": {
+              "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+              "WOZCODE_API_KEY": "${{ secrets.WOZCODE_API_KEY }}",
+              "TURSO_DATABASE_URL": "http://127.0.0.1:8080"
+            }}
+          claude_args: |
+            --model claude-sonnet-5-5
+            --effort high
+            --max-turns 500
+            --permission-mode bypassPermissions
+            --disallowedTools Monitor
+          prompt: |
+            You are the Software Development Engineer in Test (SDET) of the agent team that builds this repository.
+
+            Required reading before you act, in docs/agentic_coding_team.md: the Orchestration section and the Software Development Engineer in Test section. They are your instructions.
+
+            Your guard selected these work items from GitHub's current state: ${{ steps.guard.outputs.items }}
+            - `cover:<n>`: merged pull request <n> has no SDET coverage record yet.
+            - `revise:<n>`: issue <n> is labeled `revise-test`.
+
+            `gh` and `git` act as your GitHub account in ${{ github.repository }}. The checkout is on `main`, and you push to `main` directly. A fresh libSQL database is at `TURSO_DATABASE_URL`.
+
+            End the run only when every covered pull request has its `SDET-Covers:` trailer on `main` and every `revise-test` issue is closed or escalated; the discharge check fails the tick otherwise.
+
+  sdet-check:
+    needs: sdet
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        if: needs.sdet.outputs.work == 'true'
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: SDET commits stay inside tests/
+        if: needs.sdet.outputs.work == 'true'
+        env:
+          BEFORE: ${{ needs.sdet.outputs.before }}
+        run: bash scripts/sdet_scope.sh "$BEFORE"
+      - name: Reconcile, discharge check, invariants
+        if: needs.sdet.outputs.work == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TICK_TOKEN: ${{ secrets.TICK_TOKEN }}
+          ITEMS: ${{ needs.sdet.outputs.items }}
+        run: bash scripts/after_agent.sh sdet "$ITEMS"
+
+  finish:
+    needs: [pm, pm-check, fse, fse-check, gate, sa, sa-check, sdet, sdet-check]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Completion, progress report, next tick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TICK_TOKEN: ${{ secrets.TICK_TOKEN }}
+          TICK_OK: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
+          WORKED: ${{ needs.pm.outputs.work == 'true' || needs.fse.outputs.work == 'true' || needs.sa.outputs.work == 'true' || needs.sdet.outputs.work == 'true' }}
+        run: bash scripts/finish.sh

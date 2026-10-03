@@ -1,0 +1,86 @@
+# Progress reports and alerts (docs/agentic_coding_team.md, Progress reports and
+# Alerts). A dispatched run always sends a progress report; the tick dispatches
+# it. A cron run is the alert check, which works even when the tick is broken.
+#
+# This repository's logs are public. No step prints what the report contains.
+name: report
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: report
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      send: ${{ steps.check.outputs.send }}
+      kind: ${{ steps.check.outputs.kind }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Decide whether to send
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/report_check.sh
+
+  # The alert check finds the last alert by this job's name and conclusion.
+  send:
+    needs: check
+    if: needs.check.outputs.send == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Collect the facts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIND: ${{ needs.check.outputs.kind }}
+        run: bash scripts/report_collect.sh "$KIND"
+      # The reporter reads files and writes nothing: its final message is the
+      # draft. If it fails, the send step falls back to the collected facts.
+      - name: Reporter
+        id: reporter
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          display_report: false
+          settings: |
+            {"env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}}
+          claude_args: |
+            --model claude-sonnet-5-5
+            --effort medium
+            --max-turns 60
+            --permission-mode bypassPermissions
+            --tools Read,Grep,Glob
+            --disallowedTools Monitor
+          prompt: |
+            You are the reporter of the agent team that builds this repository. Write one email for the company's leadership.
+
+            Required reading before you write, in docs/agentic_coding_team.md: the Progress reports section. It is your instructions.
+
+            Your sources are `report/facts.md` (the collected facts, already under the email's headings), `report/issues/` (the full text of every issue and ruling the facts mention), and `prds/`. Every statement must trace to them.
+
+            Keep every `## ` heading of `report/facts.md`, with the same text and in the same order, and add no other `## ` heading. Keep the Status line and every link as they are. Under each heading, rewrite the facts as the Progress reports section describes.
+
+            Your final message is sent as the email, exactly as written: reply with the email body and nothing else.
+      - name: Send
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          REPORT_TO: ${{ secrets.REPORT_TO }}
+          EXECUTION_FILE: ${{ steps.reporter.outputs.execution_file }}
+        run: bash scripts/report_send.sh
