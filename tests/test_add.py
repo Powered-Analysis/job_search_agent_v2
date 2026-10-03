@@ -1,5 +1,6 @@
 import builtins
 import io
+import json
 import random
 import sys
 import uuid
@@ -552,3 +553,186 @@ def test_ctrl_c_at_a_prompt_writes_nothing(db_url, conn, web, monkeypatch, capsy
     code, _ = jsa_add(monkeypatch, capsys, url, stdin="")
     assert code != 0
     assert posting(conn, url) is None
+
+
+# --- capture from the page's schema.org JobPosting data ----------------------
+
+
+def jobposting_page(**overrides):
+    node = {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        "title": "Staff Platform Engineer",
+        "description": "<h2>About the role</h2><p>Build the platform.</p>",
+        "hiringOrganization": {"@type": "Organization", "name": "Example Corp"},
+        "jobLocation": {
+            "@type": "Place",
+            "address": {"@type": "PostalAddress", "addressLocality": "Austin"},
+        },
+        **overrides,
+    }
+    return (
+        '<html><head><script type="application/ld+json">'
+        f"{json.dumps(node)}</script></head><body></body></html>"
+    )
+
+
+def html_response(text):
+    return httpx.Response(200, text=text, headers={"content-type": "text/html"})
+
+
+def off_four_url():
+    return f"https://careers.example.com/openings/{random.randint(10**9, 10**10)}"
+
+
+def page_key(url):
+    parsed = httpx.URL(url)
+    return (parsed.host, parsed.path)
+
+
+def test_no_input_off_four_with_jobposting_data_derives_everything_from_it(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response(jobposting_page())
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert row["company"] == "Example Corp"
+    assert row["title"] == "Staff Platform Engineer"
+    assert "## About the role" in row["jd_markdown"]
+    assert "Build the platform." in row["jd_markdown"]
+    assert "Austin" in row["location"]
+    assert row["decision"] == "Apply"
+    assert row["search_agent"] == "manual"
+    assert "job_posting.md" not in output
+
+
+def test_off_four_stored_capture_never_overwrites_the_confirmed_title(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response(jobposting_page())
+    code, output = jsa_add(
+        monkeypatch, capsys, url, "--title", "My Own Title", "--no-input"
+    )
+    assert code == 0, output
+    row = posting(conn, url)
+    assert row["title"] == "My Own Title"
+    assert row["company"] == "Example Corp"
+    assert row["jd_markdown"] is not None
+
+
+def test_off_four_supplied_company_is_kept_over_the_hiring_organization(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response(jobposting_page())
+    code, output = jsa_add(
+        monkeypatch, capsys, url, "--company", "Chosen Co", "--no-input"
+    )
+    assert code == 0, output
+    row = posting(conn, url)
+    assert row["company"] == "Chosen Co"
+    assert row["title"] == "Staff Platform Engineer"
+
+
+def test_off_four_page_without_jobposting_data_and_no_values_fails_and_writes_nothing(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response("<html><body>Hello</body></html>")
+    before = count(conn, "postings")
+    code, _ = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code != 0
+    assert count(conn, "postings") == before
+    assert posting(conn, url) is None
+
+
+def test_off_four_page_without_jobposting_data_inserts_null_jd_with_supplied_values(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response("<html><body>Hello</body></html>")
+    code, output = jsa_add(
+        monkeypatch,
+        capsys,
+        url,
+        "--company",
+        "Example Co",
+        "--title",
+        "Engineer",
+        "--no-input",
+    )
+    assert code == 0, output
+    row = posting(conn, url)
+    assert row["jd_markdown"] is None
+    assert (row["company"], row["title"]) == ("Example Co", "Engineer")
+    assert "job_posting.md" in output
+
+
+def test_off_four_malformed_jsonld_is_treated_as_no_data(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response(
+        '<html><script type="application/ld+json">{oops</script></html>'
+    )
+    code, _ = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code != 0
+    assert posting(conn, url) is None
+
+
+def test_ashby_with_a_failed_ats_fetch_stores_the_page_jobposting_capture(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = f"https://jobs.ashbyhq.com/acme-widgets/{uuid.uuid4()}"
+    web.routes[page_key(url)] = html_response(jobposting_page())
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert row["title"] == "Staff Platform Engineer"
+    assert "Build the platform." in row["jd_markdown"]
+    assert "job_posting.md" not in output
+
+
+def test_ashby_with_a_failed_ats_fetch_and_no_page_data_stores_null(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = f"https://jobs.ashbyhq.com/acme-widgets/{uuid.uuid4()}"
+    web.routes[page_key(url)] = html_response("<html><body>Hello</body></html>")
+    code, output = jsa_add(
+        monkeypatch, capsys, url, "--title", "Designer", "--no-input"
+    )
+    assert code == 0, output
+    assert posting(conn, url)["jd_markdown"] is None
+    assert "job_posting.md" in output
+
+
+def test_greenhouse_with_a_failed_ats_fetch_stores_null_even_if_the_page_has_data(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = gh_url()
+    web.routes[page_key(url)] = html_response(jobposting_page())
+    code, output = jsa_add(
+        monkeypatch, capsys, url, "--title", "Staff Engineer", "--no-input"
+    )
+    assert code == 0, output
+    assert posting(conn, url)["jd_markdown"] is None
+    assert [r for r in web.requests if r.url.host == "job-boards.greenhouse.io"] == []
+
+
+def test_a_supported_fetcher_capture_is_not_replaced_by_page_data(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    web.routes[page_key(url)] = html_response(
+        jobposting_page(title="Page Title", description="<p>Page body</p>")
+    )
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert row["title"] == "Staff Platform Engineer"
+    assert "Build the platform." in row["jd_markdown"]
+    assert "Page body" not in row["jd_markdown"]
