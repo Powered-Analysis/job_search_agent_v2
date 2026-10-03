@@ -29,3 +29,9 @@ def normalize_company(company: str) -> str:
 
 def title_slug(title: str) -> str:
     return _path_safe(_path_safe(title)[:TITLE_SLUG_MAX_LENGTH])
+
+
+def company_from_board(board: str) -> str:
+    """Derive a company name from an ATS board slug, e.g. "acme-corp" -> "Acme Corp"."""
+    words = re.split(r"[-_.+]+", board)
+    return " ".join(word.capitalize() for word in words if word)

@@ -190,3 +190,27 @@ def capture_jd(
             "UPDATE postings SET jd_markdown = ?, location = ? WHERE id = ?",
             (jd_markdown, location, posting_id),
         )
+
+
+def find_posting(conn: Connection, url: str) -> tuple[int, str | None] | None:
+    """A UX-only read: the posting's (id, decision) for this URL's canonical form."""
+    rows = conn.execute(
+        "SELECT id, decision FROM postings WHERE canonical_url = ?",
+        (canonicalize_url(url),),
+    ).fetchall()
+    return (rows[0][0], rows[0][1]) if rows else None
+
+
+def set_decision(conn: Connection, url: str, decision: str) -> None:
+    """Change a posting's decision, keeping its feedback; telemetry follows (PRD 02)."""
+    canonical = canonicalize_url(url)
+    # The two writes are not atomic over HTTP. Telemetry goes first so a retry
+    # still sees the old decision and repeats both.
+    conn.execute(
+        "UPDATE search_findings SET decision = ? WHERE canonical_url = ?",
+        (decision, canonical),
+    )
+    conn.execute(
+        f"UPDATE postings SET decision = ?, decided_at = {NOW} WHERE canonical_url = ?",
+        (decision, canonical),
+    )
