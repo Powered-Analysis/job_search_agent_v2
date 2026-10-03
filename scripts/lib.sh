@@ -15,6 +15,10 @@ SA_LOGIN="LeBOT-James"
 SDET_LOGIN="Sandro-BOTicelli"
 # Only these accounts' issues, comments, and reviews count as team state.
 TEAM_JSON="[\"$PM_LOGIN\",\"$FSE_LOGIN\",\"$SA_LOGIN\",\"$SDET_LOGIN\"]"
+# Paths only the owner changes: the specification, the team's operating
+# agreement, and the owner's settings.
+# shellcheck disable=SC2034  # read by invariants.sh and test_gate.sh
+OWNER_PATHS=(prds docs team.yml)
 TICK_WORKFLOW="tick.yml"
 REPORT_WORKFLOW="report.yml"
 EPOCH="1970-01-01T00:00:00Z"

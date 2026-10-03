@@ -4,6 +4,9 @@
 # `test-gate` status (Software Architect, Test gate). The base is where the
 # branch left main, so the comparison isolates the PR's own diff.
 #
+# A PR that changes an owner-only path fails the gate whatever its tests do, so
+# it can never merge: only TICK_TOKEN posts this status, and no agent holds it.
+#
 # This runs the PR's code, so it runs in a job that holds no secret.
 source "$(dirname "$0")/lib.sh"
 
@@ -44,15 +47,21 @@ head_ran=true
 run_suite head "$head" 8082 || head_ran=false
 
 decide() {
-  local regressions listed missing
+  local owner_only regressions listed missing
+  owner_only=$(git diff --name-only "$base" "$head" -- "${OWNER_PATHS[@]}")
+  if [[ -n "$owner_only" ]]; then
+    echo "$owner_only" >"$work/details"
+    echo "failure|The PR changes $(wc -l <"$work/details" | tr -d ' ') file(s) that only the owner may change."
+    return
+  fi
   if [[ "$head_ran" == false ]]; then
     echo "failure|The test suite could not run on the head commit."
     return
   fi
   regressions=$(comm -23 "$work/base.passed" "$work/head.passed")
   if [[ -n "$regressions" ]]; then
-    echo "$regressions" >"$work/regressions"
-    echo "failure|$(wc -l <"$work/regressions" | tr -d ' ') test(s) that pass on the base fail on the head."
+    echo "$regressions" >"$work/details"
+    echo "failure|$(wc -l <"$work/details" | tr -d ' ') test(s) that pass on the base fail on the head."
     return
   fi
   if jq -e "$JQ_DEFS"'has_label("discrepancy")' <<<"$issue" >/dev/null; then
@@ -63,8 +72,8 @@ decide() {
     fi
     missing=$(comm -23 <(echo "$listed") "$work/head.passed")
     if [[ -n "$missing" ]]; then
-      echo "$missing" >"$work/regressions"
-      echo "failure|$(wc -l <"$work/regressions" | tr -d ' ') test(s) the discrepancy issue lists still fail on the head."
+      echo "$missing" >"$work/details"
+      echo "failure|$(wc -l <"$work/details" | tr -d ' ') test(s) the discrepancy issue lists still fail on the head."
       return
     fi
   fi
@@ -79,9 +88,9 @@ echo "test-gate: $state - $description"
 {
   echo "### Test gate: $state"
   echo "$description (base \`${base:0:7}\`, head \`${head:0:7}\`)"
-  if [[ -f "$work/regressions" ]]; then
+  if [[ -f "$work/details" ]]; then
     echo
-    sed 's/^/- `/; s/$/`/' "$work/regressions"
+    sed 's/^/- `/; s/$/`/' "$work/details"
   fi
 } >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
 {

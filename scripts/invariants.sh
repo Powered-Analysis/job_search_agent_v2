@@ -26,11 +26,11 @@ for number in $idle; do
   violation "2: feature PR #$number is waiting on no one."
 done
 
-# The owner is the only author allowed in these directories. Judged on each
-# directory's latest commit, so an owner commit that restores it clears the check.
-for path in prds docs; do
+# The owner is the only author allowed on these paths. Judged on each path's
+# latest commit, so an owner commit that restores it clears the check.
+for path in "${OWNER_PATHS[@]}"; do
   author=$(gh api "repos/$REPO/commits?sha=main&path=$path&per_page=1" --jq '.[0] | .author.login // "unknown"')
-  [[ "$author" == "$PM_LOGIN" ]] || violation "3: the latest commit on main touching $path/ is by $author, not the owner."
+  [[ "$author" == "$PM_LOGIN" ]] || violation "3: the latest commit on main touching $path is by $author, not the owner."
 done
 
 exit "$failed"
