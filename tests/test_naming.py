@@ -1,0 +1,87 @@
+import socket
+
+import pytest
+
+from jsa.naming import normalize_company, title_slug
+
+HOSTILE = '/\\:*?"<>|'
+
+
+def test_company_suffix_stripped_and_title_cased():
+    assert normalize_company("Acme Widgets, Inc.") == "Acme Widgets"
+
+
+@pytest.mark.parametrize(
+    "company, expected",
+    [
+        ("acme widgets llc", "Acme Widgets"),
+        ("ACME WIDGETS", "Acme Widgets"),
+        ("Acme Widgets Inc", "Acme Widgets"),
+        ("Acme Widgets Ltd.", "Acme Widgets"),
+    ],
+)
+def test_company_title_case_and_suffixes(company, expected):
+    assert normalize_company(company) == expected
+
+
+@pytest.mark.parametrize(
+    "company",
+    [
+        "Acme/Widgets",
+        "A\\B",
+        "Foo: Bar*",
+        'What? "Co" <x>',
+        "Pipe|Co, Inc.",
+        'a/b\\c:d*e?f"g<h>i|j',
+    ],
+)
+def test_company_has_no_path_hostile_characters(company):
+    out = normalize_company(company)
+    assert out
+    assert not set(out) & set(HOSTILE)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Senior Engineer",
+        "Senior Engineer / Platform: Backend",
+        'Staff "Data" Engineer <Remote> | US?',
+        "C:\\Users\\evil*",
+        "../../etc/passwd",
+    ],
+)
+def test_title_slug_path_safe(title):
+    slug = title_slug(title)
+    assert slug
+    assert not set(slug) & set(HOSTILE)
+    assert len(slug) <= 80
+
+
+@pytest.mark.parametrize("length", [79, 80, 81, 200, 1000])
+def test_title_slug_at_most_80_characters(length):
+    assert len(title_slug("Engineer " * (length // 9 + 1))[:]) <= 80
+    assert len(title_slug("x" * length)) <= 80
+    assert (
+        len(title_slug("Senior Software Engineer, Platform Infrastructure " * 20)) <= 80
+    )
+
+
+def test_title_slug_deterministic():
+    assert title_slug("Senior Engineer / Platform") == title_slug(
+        "Senior Engineer / Platform"
+    )
+
+
+def test_title_slug_distinguishes_different_titles():
+    assert title_slug("Backend Engineer") != title_slug("Frontend Engineer")
+
+
+def test_naming_pure_no_network(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("naming touched the network")
+
+    monkeypatch.setattr(socket, "socket", forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    assert normalize_company("Acme Widgets, Inc.") == "Acme Widgets"
+    assert title_slug("Senior Engineer")
