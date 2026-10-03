@@ -106,6 +106,7 @@ name = "jsa"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "beautifulsoup4" },
     { name = "httpx" },
     { name = "markdownify" },
     { name = "prompt-toolkit" },
@@ -121,6 +122,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "beautifulsoup4", specifier = ">=4.15.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "markdownify", specifier = ">=1.2.3" },
     { name = "prompt-toolkit", specifier = ">=3.0.53" },
