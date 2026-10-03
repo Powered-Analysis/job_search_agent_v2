@@ -13,7 +13,7 @@ These PRDs specify the Job Search Agent that this repository builds in `src/jsa/
 | PRD | Scope |
 |---|---|
 | [00 — System Overview & Cross-Cutting Decisions](00-overview.md) | Doc map, dependency tiers, `XC-*` registry |
-| [01 — Agentic Job Search](01-agentic-job-search.md) | Cadence, search prompt, the two runners, output schema, canonicalization, ATS capture (Steps 1–2) |
+| [01 — Agentic Job Search](01-agentic-job-search.md) | Cadence, search prompt, the three runners, output schema, canonicalization, ATS capture (Steps 1–2) |
 | [02 — Data & Storage](02-data-and-storage.md) | The Turso `postings` table, idempotent insert, query surface, coverage telemetry, schema creation and change |
 | [03 — Fit Review & Decisioning](03-fit-review-and-decisioning.md) | The no-LLM review loop + amend flow; the manual-add side door (Step 3) |
 | [04 — Application Outputs](04-application-outputs.md) | Packets, the single base resume, the resume checklist, the tracker Sheet, refetch (Steps 4–5) |

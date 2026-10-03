@@ -33,19 +33,19 @@ How the system runs: the **cloud/local split** (only Steps 1–2 run headless in
 
 **Developer**
 - As the developer, I want to run the whole pipeline locally against a throwaway SQLite file, so that I can develop without touching the hosted DB.
-- As the developer, I want every external tool path overridable by an env var, so that tests and scratch runs can stub them.
+- As the developer, I want every external CLI the app shells out to (`gws`, `fly`) overridable by an env var, so that tests and scratch runs can stub them.
 
 -----
 #### Functional Requirements
 
 **Cloud/local split (`XC-1`) (Priority: P0)**
 - **Cloud (Fly.io):** Steps 1–2 (`jsa cron` → `jsa search`) only. Headless, automated, no local disk or Google OAuth.
-- **Local:** Steps 3–5 (`review`, `add`, `packet`, `generate`, `track`, `refetch`), the learning loop (`refine`), and `deploy` — they need a terminal, Chrome, the local disk (`profile/`, packet directories), the `gws` OAuth token, and `flyctl`. There is no CI.
+- **Local:** Steps 3–5 (`review`, `add`, `packet`, `generate`, `track`, `refetch`), the learning loop (`refine`), and `deploy` — they need a terminal, Chrome, the local disk (`profile/`, packet directories), the `gws` OAuth token, and `flyctl`. No deployment depends on CI or a git push (`XC-1`).
 - **One shared Turso DB** for both sides (`XC-2`); `jsa init-db` (run once locally) creates it, and every command ensures the schema on connect.
 
-**Deployment image (`Dockerfile`) (Priority: P0)**
-- Base `python:3.14-slim-bookworm`. Installs Node 20 + the `@anthropic-ai/claude-code` CLI (the Claude Agent SDK spawns it), `uv`, `tzdata`. Runs as non-root `appuser` (uid 1001, `HOME=/app`) because the Claude Code CLI refuses to run as root without explicit flags. Entrypoint: `uv run --no-dev jsa cron`.
-- **Copies the app plus `profile/search/` and nothing else of the profile.** `.dockerignore` excludes `profile/` except `profile/search/`, so the rest of the profile is never even in the build context — which matters because Fly's remote builder uploads the context off the machine (`XC-11`).
+**Deployment image (Priority: P0)**
+- Python 3.14, timezone data, and the Claude Code CLI the Claude Agent SDK drives (the SDK bundles it). It runs as a non-root user with a writable home directory, because the Claude Code CLI refuses to run without permission prompts as root. Its only entrypoint is `jsa cron`, without dev dependencies. Base image and install mechanics are the engineers' call, on current, supported releases.
+- **Copies the app plus `profile/search/` and nothing else of the profile.** The build context excludes `profile/` except `profile/search/`, so the rest of the profile is never even in the build context — which matters because Fly's remote builder uploads the context off the machine (`XC-11`).
 - No `TZ` anchor: the cadence and window use the profile's `timezone` explicitly (PRD 01).
 
 **Fly configuration (`fly.toml`) (Priority: P0)**
@@ -53,27 +53,27 @@ How the system runs: the **cloud/local split** (only Steps 1–2 run headless in
 
 **Deployment sequence (user-run; sets billed secrets — never via an agent) (Priority: P0)**
 1. **Turso:** `turso db create` → `turso db show --url` (→ `TURSO_DATABASE_URL`) → `turso db tokens create` (→ `TURSO_AUTH_TOKEN`); put both in local `.env`; `uv run jsa init-db`.
-2. **Auth:** a `JSA_SEARCH_ANTHROPIC_API_KEY` (an Anthropic Console API key; production Claude search runs use it, PRD 01) if the schedule uses `claude`; a `PERPLEXITY_API_KEY`; a `GEMINI_API_KEY` if the schedule uses `gemini`. For the local Claude commands (checklist, refine), whichever Claude credential the user prefers in local `.env`: `claude setup-token` (→ `CLAUDE_CODE_OAUTH_TOKEN`) *or* an `ANTHROPIC_API_KEY` — **never both** (the CLI prefers the API key and 401s the OAuth flow).
-3. **Fly:** `fly auth login` → `fly apps create <app>` → set `[fly] app` and `region` in `profile/config.toml` → `fly secrets set --stage -a <app> TURSO_DATABASE_URL=… TURSO_AUTH_TOKEN=… [JSA_SEARCH_ANTHROPIC_API_KEY=…] PERPLEXITY_API_KEY=… [GEMINI_API_KEY=…]`. The cloud runs only search, so it holds no other Claude credential, and the search key is required there if the schedule uses `claude`.
+2. **Auth:** a `JSA_SEARCH_ANTHROPIC_API_KEY` (an Anthropic Console API key; production Claude search runs use it, PRD 01) if the schedule uses `claude`; a `PERPLEXITY_API_KEY` if it uses `perplexity`; a `GEMINI_API_KEY` if it uses `gemini`. For the local Claude commands (checklist, refine), whichever Claude credential the user prefers in local `.env`: `claude setup-token` (→ `CLAUDE_CODE_OAUTH_TOKEN`) *or* an `ANTHROPIC_API_KEY` — **never both** (the CLI prefers the API key and 401s the OAuth flow).
+3. **Fly:** `fly auth login` → `fly apps create <app>` → set `[fly] app` and `region` in `profile/config.toml` → `fly secrets set --stage -a <app> TURSO_DATABASE_URL=… TURSO_AUTH_TOKEN=… [JSA_SEARCH_ANTHROPIC_API_KEY=…] [PERPLEXITY_API_KEY=…] [GEMINI_API_KEY=…]`. The cloud runs only search, so it holds no other Claude credential, and the search key is required there if the schedule uses `claude`.
 4. **Smoke test:** `jsa deploy --smoke` (runs one ungated `jsa cron` on a throwaway machine, exits).
 5. **Schedule:** `jsa deploy` (creates the `hourly` machine on first run; it self-gates to `search.toml`).
 6. **Updates:** `jsa deploy` again, after any code change or an accepted refine proposal (PRD 05).
 
-**`jsa deploy` (`deploy.py`) (Priority: P0)** — local only; uses the user's `flyctl` session (no deploy token).
-1. **Validate before building:** assemble the search prompt and parse `search.toml` exactly as the cloud will (`XC-13`); any missing required fragment, invalid schedule, or malformed runner or verification setting aborts before a build. Model and agent IDs are not checked against a list (`XC-14`) — `--smoke` is where a rejected ID surfaces. Warns (does not abort) on a schedule that leaves a gap in the week, on a `run_at` after 22:59 (a slipped wake can cross midnight and miss the day, PRD 01), and on a pending refine proposal (it will not ship).
+**`jsa deploy` (Priority: P0)** — local only; uses the user's `flyctl` session (no deploy token).
+1. **Validate before building:** assemble the search prompt and parse `search.toml` exactly as the cloud will (`XC-13`); any missing required fragment, invalid schedule, or malformed runner or verification setting aborts before a build. Model and agent IDs are not checked against a list (`XC-14`) — `--smoke` is where a rejected ID surfaces. Warns (does not abort) on a schedule whose windows leave part of the week unsearched (each search covers the `window_hours` before its day's `run_at`, and hours no window covers are never searched), on a `run_at` after 22:59 (a slipped wake can cross midnight and miss the day, PRD 01), and on a pending refine proposal (it will not ship).
 2. **Build and push:** `fly deploy --build-only --push --image-label <UTC stamp> -a <app>`.
 3. **Swap in place:** find the machine carrying the `hourly` schedule. None → create it (`fly machine run <image> --schedule hourly --vm-memory 1024 --region <region>`). One → `fly machine update <id> --image <image> --vm-memory 1024 --schedule hourly`, retrying for registry lag; re-asserting the schedule on every update means an image swap can never drop it. Whatever the update does to Fly's interval anchor is harmless, because the run time comes from the gate, not the anchor (PRD 01). More than one → error (ambiguous; the user resolves it in Fly).
 - **`--dry-run`:** step 1 plus the list of profile files that would ship; no build.
-- **`--smoke`:** steps 1–2, then one `jsa cron --ungated` on a `--rm` machine: it skips the time-of-day gate and the daily claim (so it never consumes the day's scheduled run) and runs today's scheduled searches, if any; the scheduled machine is untouched.
+- **`--smoke`:** steps 1–2, then one `jsa cron --ungated` on a `--rm` machine: it skips the time-of-day gate and the daily claim (so it never consumes the day's scheduled run) and runs today's scheduled searches or, when nothing is scheduled today, the next scheduled day's, so every smoke exercises real runners. It costs one day's searches, and its postings and findings are real and land in the shared DB. The scheduled machine is untouched.
 - **Never sets secrets** — those stay a user-run step (above).
 
-**CLI surface (`cli.py`) (Priority: P0)** — entry point `jsa = jsa.cli:main`:
+**CLI surface (Priority: P0)** — one console command, `jsa`:
 
 | Command | Step | Where | Cloud? |
 |---|---|---|---|
 | `init-db` | — | local (once) + cloud | via image |
 | `search --agent --window-hours` | 1–2 | either | called by cron |
-| `cron` | 1–2 | Fly | **yes (only entrypoint)** |
+| `cron [--ungated]` | 1–2 | Fly | **yes (only entrypoint)** |
 | `add <URL>` | 3 (skips) | local | no |
 | `review` | 3 | local | no |
 | `refetch [--id/--all/--dry-run]` | recon | local | no |
@@ -83,12 +83,12 @@ How the system runs: the **cloud/local split** (only Steps 1–2 run headless in
 | `refine [--dry-run/--accept/--reject]` | learn | local | no |
 | `deploy [--dry-run/--smoke]` | ops | local | ships the image |
 
-**Configuration surface (`config.py` + env + `profile/`) (Priority: P0)** — three kinds of input, three homes (`XC-11`).
+**Configuration surface (env + `profile/`) (Priority: P0)** — three kinds of input, three homes (`XC-11`).
 
 *Environment — secrets and machine-local settings only* (every one listed, commented, in `.env.example`):
 - **Required everywhere:** `TURSO_DATABASE_URL` (raises if unset). `TURSO_AUTH_TOKEN` required for hosted Turso (omit for a `file:` dev URL).
-- **Command-specific:** `PERPLEXITY_API_KEY` / `GEMINI_API_KEY` (their runners' searches; validated lazily so other commands run without them); `JSA_SEARCH_ANTHROPIC_API_KEY` (production Claude searches; unset in development, where the runner uses the inherited credential); for the local Claude commands, `CLAUDE_CODE_OAUTH_TOKEN` *or* `ANTHROPIC_API_KEY` (the user's choice; read by the SDK's CLI from the inherited env — not by `config.py`).
-- **Optional overrides (default):** `JSA_PROFILE_DIR` (`./profile`), `JSA_GWS_BIN` (`gws`), `JSA_GENERATE_WORKERS` (3).
+- **Command-specific:** `PERPLEXITY_API_KEY` / `GEMINI_API_KEY` (their runners' searches; validated lazily so other commands run without them); `JSA_SEARCH_ANTHROPIC_API_KEY` (production Claude searches; unset in development, where the runner uses the inherited credential); for the local Claude commands, `CLAUDE_CODE_OAUTH_TOKEN` *or* `ANTHROPIC_API_KEY` (the user's choice; read by the SDK's CLI from the inherited env — not by the app's config).
+- **Optional overrides (default):** `JSA_PROFILE_DIR` (`./profile`), `JSA_GWS_BIN` (`gws`), `JSA_FLY_BIN` (`fly`), `JSA_GENERATE_WORKERS` (3).
 
 *The profile — everything about the user* (gitignored in full; `profile.example/` is committed with the identical shape and a fictional candidate):
 
@@ -109,21 +109,21 @@ profile/
 ```
 
 - **Validated at load:** each TOML file is parsed into a typed config; an unknown key raises (a typo never silently falls back to a default), and a key a command needs but the profile lacks raises naming the file and pointing to `profile.example/`. Requiredness is per command: `tracker_spreadsheet_id` for `track`/`generate`/`refetch`; `resume.docx` for `packet`/`generate`/`refetch`; `[fly]` for `deploy`; each `[agents.*]` for its command; each scheduled runner's `[runners.*]` and `[verification] mode` for `search`/`cron`/`deploy`. Model and effort values are checked for form only, never against a list of allowed models (`XC-14`); `profile.example/` carries the recommended defaults as comments.
-- **The profile is only data.** No profile file is executable or imported as code; the app reads it through `config.py` and `prompts.assemble` (`XC-13`).
+- **The profile is only data.** No profile file is executable or imported as code; the app reads it only through its config loading and prompt assembly (`XC-13`).
 
 **Complete user-setup inventory (Priority: P0)** — the consolidated home; other PRDs reference this:
 
 *Accounts & cloud (one-time):* Turso account + DB; Fly.io account + `fly apps create` + the scheduled machine (created by `jsa deploy`); Perplexity account + key; a Google AI Studio key (if using `gemini`); an Anthropic Console API key for search (if using `claude`); Anthropic auth for the local Claude commands (`claude setup-token` for the OAuth token, or an API key).
 
 *Secrets — where each lives:*
-- Local `.env`: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `PERPLEXITY_API_KEY`, `GEMINI_API_KEY` (if used), `JSA_SEARCH_ANTHROPIC_API_KEY` (if used), one of `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`.
-- Fly secrets (`--stage`): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `PERPLEXITY_API_KEY`, `GEMINI_API_KEY` (if used), `JSA_SEARCH_ANTHROPIC_API_KEY` (if used).
+- Local `.env`: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `PERPLEXITY_API_KEY` (if used), `GEMINI_API_KEY` (if used), `JSA_SEARCH_ANTHROPIC_API_KEY` (if used), one of `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`.
+- Fly secrets (`--stage`): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `PERPLEXITY_API_KEY` (if used), `GEMINI_API_KEY` (if used), `JSA_SEARCH_ANTHROPIC_API_KEY` (if used).
 
 *Local tools:* Google Chrome (review); the `gws` CLI + `gws auth login` (Sheets — note the testing-status OAuth 7-day token expiry until the consent screen is published); `flyctl` + `fly auth login` (deploy); `uv`; the Claude Code CLI (for local Claude-driven commands).
 
 *The profile the user seeds (`XC-11`)* — `cp -r profile.example profile`, then replace the fictional candidate: `config.toml`; the six search fragments and `search.toml`; `resume.docx` (the single base resume). No app prompt needs an edit.
 
-*Outside the profile:* the Google Sheet (Applications tab, A:H header, Status dropdown / data-validation).
+*Outside the profile:* the Google Sheet (Applications tab, A:H header, and the Status dropdown / data-validation applied to all of column H, so appended rows can never run past the pre-formatted range).
 
 *One-time commands:* `uv run jsa init-db`; `jsa deploy`.
 
@@ -131,7 +131,7 @@ profile/
 #### User Experience
 
 **Entry Point & First-Time Experience**
-- A fresh clone: `uv sync` → set `.env` → `cp -r profile.example profile` and make it yours → `jsa init-db` → (cloud) the Fly sequence above, ending in `jsa deploy`. `README.md` ("Using this for your own search") carries the full ordered walkthrough.
+- A fresh clone: `uv sync` → set `.env` → `cp -r profile.example profile` and make it yours → `jsa init-db` → (cloud) the Fly sequence above, ending in `jsa deploy`. `README.md` ("Using this for your own search") carries the full ordered walkthrough, and states the portability boundary: the local commands assume macOS (Chrome opened through `open`, the `gws` CLI), an accepted constraint rather than a portability goal.
 - Local-only dev: `TURSO_DATABASE_URL=file:dev.db` for a throwaway SQLite file (`XC-2`).
 
 **Core Experience**
@@ -166,4 +166,4 @@ profile/
 
 -----
 #### Outstanding Questions
-- **Google OAuth consent screen is unpublished.** Until it is published in GCP, the `gws` refresh token expires every ~7 days (exit code 2 → re-run `gws auth login`). This is a known, tracked one-time setup gap, not a code defect.
+- None open.

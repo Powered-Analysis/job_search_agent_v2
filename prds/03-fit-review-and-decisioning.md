@@ -18,8 +18,8 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 - As the job seeker, I want to drop in a URL I found myself and have it treated as Apply immediately, so that I don't review a role I've already chosen.
 
 ##### Non-Goals
-- **Storage of the decision/feedback** — owned by PRD 02 (`record_decision`, `set_decision`, `clear_decision`, `pending_review`).
-- **ATS resolution and full-JD capture mechanics** — owned by PRD 01 (`resolve.py`, `fetch.py`, and the schema.org `JobPosting` fallback `jobposting.py` this path uses) (`XC-5`).
+- **Storage of the decision/feedback** — owned by PRD 02 (the decision writes and the review backlog).
+- **ATS resolution and full-JD capture mechanics** — owned by PRD 01 (resolution, the ATS fetchers, the schema.org `JobPosting` fallback this path uses, and the aggregator list) (`XC-5`).
 - **What happens to an Apply row afterward** (packets, resume checklists, tracker) — PRD 04.
 - **How feedback is consumed** for prompt refinement — PRD 05.
 - **Any LLM in the review loop** — deliberately excluded to keep per-posting cost at zero.
@@ -34,33 +34,34 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 - As the job seeker, I want re-adding a URL I already reviewed to promote it to Apply while keeping the note I wrote, so that nothing is lost.
 
 **Developer**
-- As the developer, I want the review loop to fall back to bare `input()` when there is no TTY, so that it does not crash in a non-interactive environment — while keeping the rich line editing when a terminal is present.
-- As the developer, I want the feedback parser (`parse_feedback_entry`) and `company_from_board` to be pure, so that they are testable in isolation (`XC-9`).
+- As the developer, I want the review loop to fall back to plain line input when there is no TTY, so that it does not crash in a non-interactive environment — while keeping the rich line editing when a terminal is present.
+- As the developer, I want feedback-entry parsing and company-from-board derivation to be pure, so that they are testable in isolation (`XC-9`).
 
 -----
 #### Functional Requirements
 
-**Review loop (`review.py`) (Priority: P0)**
-- **Backlog:** `db.pending_review` returns `decision IS NULL` rows oldest-first; the backlog is captured once at session start so step-back navigation is stable.
-- **Open in browser:** each posting opens via `subprocess.run(["open", "-a", "Google Chrome", url])` (macOS; `check=False`, so a missing Chrome fails silently rather than aborting the loop).
+**Review loop (Priority: P0)**
+- **Backlog:** the review backlog (PRD 02) is undecided rows, oldest first; it is captured once at session start so step-back navigation is stable.
+- **Open in browser:** each posting opens in Google Chrome through macOS `open`. A failure to open (e.g. Chrome not installed) is ignored rather than aborting the loop, since the URL is also printed.
 - **Decision prompt:** single-letter choices — **`a` = Apply, `s` = Skip, `b` = back, `q` = quit**; a bare Enter (keep the existing decision) is offered only when the posting already has a recorded decision. No pre-filled buffer at the decision prompt (a single-letter pre-fill would double the keystroke).
-- **Stored vs displayed:** the keystroke `a`/`s` maps to the stored/displayed decision strings **`Apply`/`Skip`** (`_DECISIONS`).
-- **Feedback + amend (P0):** after a decision, prompt `"Feedback (Enter to skip, :a/:s to change the decision): "` through `parse_feedback_entry`. The buffer is **pre-filled with any prior feedback** (`default=entry.feedback or ""`) so amending edits the existing note rather than retyping it. Inline commands (case-insensitive): `:a`/`:apply` and `:s`/`:skip` flip the decision and keep the remaining text as feedback; `:b`/`:back` discards and returns to the decision prompt for the same posting.
-- **Revisability (P0):** within a session a posting can be revisited and re-decided (shown as " (amending)"); after the backlog, `_offer_final_amend` gives one more pass at the last entry. Each write refreshes `decided_at` (PRD 02), so amended rows re-enter refinement scope.
-- **Persistence:** decisions are written via `db.record_decision` and committed immediately; a Ctrl-C/Ctrl-D is caught as `prompting.Quit` and already-committed decisions survive.
+- **Stored vs displayed:** the keystroke `a`/`s` maps to the stored/displayed decision strings **`Apply`/`Skip`**.
+- **Feedback + amend (P0):** after a decision, prompt `"Feedback (Enter to skip, :a/:s to change the decision): "`. The buffer is **pre-filled with any prior feedback** so amending edits the existing note rather than retyping it. Inline commands (case-insensitive): `:a`/`:apply` and `:s`/`:skip` flip the decision and keep the remaining text as feedback; `:b`/`:back` discards and returns to the decision prompt for the same posting.
+- **Revisability (P0):** within a session a posting can be revisited and re-decided (shown as " (amending)"); after the backlog, the loop offers one more pass at the last entry. Each write refreshes `decided_at` (PRD 02), so amended rows re-enter refinement scope.
+- **Persistence:** a posting's decision and feedback are written together, and committed immediately, when its feedback prompt is submitted. Ctrl-C/Ctrl-D quits cleanly: every committed decision survives, and a posting whose prompts were interrupted keeps whatever it had before (undecided, or its earlier decision).
 - **No LLM:** the loop makes no model calls.
 
-**Prompt infrastructure (`prompting.py`) (Priority: P1)**
-- A `prompt_toolkit` wrapper providing arrow keys, word delete, the pre-filled editable buffer the amend flow depends on, and `Ctrl-X Ctrl-E` → `$EDITOR` for long notes. It **degrades to bare `input()` (with `readline`)** when `prompt_toolkit` is unavailable or stdin/stdout is not a TTY. `ask_choice` re-prompts until the input matches a valid key. Do not regress the review loop back to bare `input()` — the editable buffer is load-bearing.
+**Prompt infrastructure (Priority: P1)**
+- Line editing with arrow keys, word delete, the pre-filled editable buffer the amend flow depends on, and `Ctrl-X Ctrl-E` → `$EDITOR` for long notes (`prompt_toolkit` is approved for this). It **degrades to plain line input (with `readline`)** when stdin/stdout is not a TTY. A choice prompt re-prompts until the input matches a valid key. Do not regress the review loop back to bare `input()` — the editable buffer is load-bearing.
 
-**Manual-add side door (`manual.py`) (Priority: P0)**
-- **Reuses Step 2, does not fork it:** `canonicalize_url` → `db.find_by_canonical_url` (UX read only; the `UNIQUE` constraint is still the real guard) → best-effort capture → `db.insert_posting` → `db.update_jd_capture`.
+**Manual-add side door (Priority: P0)**
+- **Reuses Step 2, does not fork it:** canonicalize → look up by canonical URL (UX read only; the `UNIQUE` constraint is still the real guard) → best-effort capture → idempotent insert → store the capture.
+- **Aggregator URLs are refused (P0, `XC-3`):** a URL on PRD 01's aggregator list (LinkedIn, Indeed, and the like) is refused before anything is written, with a request for the employer's own posting URL. Cross-source dedup depends on every path storing the employer's URL, so an aggregator copy would become a duplicate row as soon as a search found the same req.
 - **Decided Apply on arrival:** the INSERT writes `decision = 'Apply'` (and `decided_at`) directly, so the row skips the Step 3 backlog and lands in the Step 5 tracker queue — supplying the URL *is* the decision.
-- **Re-add promotes to Apply:** an existing row is upgraded via `db.set_decision` while **keeping `fit_feedback` and `search_agent`** (which record what really happened); the CLI reports the `previous_decision → Apply` transition.
+- **Re-add promotes to Apply:** an existing row's decision is changed to Apply while **keeping `fit_feedback` and `search_agent`** (which record what really happened); the CLI reports the `previous_decision → Apply` transition.
 - **Writes no `search_findings` row:** that table is per-agent *search-coverage* telemetry; a supplied posting would inflate an agent's coverage (consistent with PRD 02).
-- **Company/title derivation:** interactive by default — `company_from_board` (pure: split the board slug on `-_.+`, title-case) offers a pre-filled company for correction, and the ATS-canonical title is offered; `--no-input` accepts the derived values or fails if they cannot be derived. `update_jd_capture` is called with `title=None` on this path so a user's title override is never clobbered by the ATS transcription.
+- **Company/title derivation:** interactive by default — a company derived from the board slug (pure: split on `-_.+`, title-case) or, off the four, from the page's `JobPosting` `hiringOrganization` name is offered pre-filled for correction, and the ATS-canonical (or `JobPosting`) title is offered; `--no-input` accepts the derived values or fails if they cannot be derived. The capture stored on this path never overwrites the title the user confirmed, and refetch leaves a `manual` row's title alone too (PRD 04), so a user's title is never clobbered by the ATS's.
 - **Unsupported ATS is not a rejection (P0, `XC-5`):** the pipeline's index check applies only to postings an *agent* found; the user has already vouched for a hand-added one, so it inserts with a `NULL jd_markdown` if capture fails.
-- **Capture order (P0, `XC-5`):** PRD 01's **supported ATS fetcher → schema.org `JobPosting` data (`ats/jobposting.py`) → `NULL`**, never the reverse. A successful capture is never evidence a posting is live; this path needs none, because the user has vouched for the posting.
+- **Capture order (P0, `XC-5`):** PRD 01's **supported ATS fetcher → schema.org `JobPosting` data → `NULL`**, never the reverse. A successful capture is never evidence a posting is live; this path needs none, because the user has vouched for the posting.
 
 -----
 #### User Experience
@@ -76,12 +77,13 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 4. Decision commits; loop advances. After the last posting, one final amend pass is offered.
 
 **Edge Cases**
-- **No TTY / no `prompt_toolkit`:** degrades to `input()` (structured validation like choice-matching still enforced).
-- **Chrome not installed:** the `open` call fails silently (`check=False`); review continues.
+- **No TTY:** degrades to plain line input (structured validation like choice-matching still enforced).
+- **Chrome not installed:** the open fails silently; the printed URL remains, and review continues.
 - **Ctrl-C/Ctrl-D:** caught; committed decisions persist.
 - **`jsa add` on an existing row:** reports the existing id; promotes to Apply if not already, else "already Apply; no change."
 - **`jsa add` capture failure / unsupported ATS:** inserts with `NULL jd_markdown`; the CLI states the Step 4 packet will have no `job_posting.md`.
 - **`jsa add` aborted at a prompt before insert:** nothing is written (the insert happens after both prompts).
+- **`jsa add` with an aggregator URL:** refused before anything is written; the CLI asks for the employer's own posting URL.
 
 -----
 #### Technical Considerations
@@ -92,7 +94,7 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 -----
 #### Integration Points
 - **Google Chrome** via the macOS `open` command (review).
-- **The four ATS fetchers + `ats/jobposting.py`** (manual capture) — both owned by PRD 01; unauthenticated HTTP via `httpx`.
+- **The four ATS fetchers + the `JobPosting` extractor** (manual capture) — both owned by PRD 01; unauthenticated HTTP via `httpx`.
 - **Turso** (PRD 02) for all reads/writes.
 - **`prompt_toolkit` / `readline` / `$EDITOR`** — line-editing (soft dependencies).
 
@@ -103,4 +105,4 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 
 -----
 #### Outstanding Questions
-- *(none surfaced during verification — code and docs align on this subsystem.)*
+- None open.

@@ -21,8 +21,8 @@ Reach for the standard library or an existing dependency first. Add a library on
 Before writing an operation, search for an existing implementation and use it. When an issue's work turns up two approaches to the same operation, consolidate them if that's within the issue's scope. Otherwise, raise it as a `levelup`. For example:
 
 - every HTTP call goes through the shared `httpx` client;
-- every headless agent run goes through `agent.run_agent`;
-- every database access goes through the `db` module;
+- every headless Claude run goes through the shared agent loop (`XC-12`);
+- every database access goes through the one database module (PRD 02);
 - errors are raised and reported the same way everywhere.
 
 ### 4. Comments

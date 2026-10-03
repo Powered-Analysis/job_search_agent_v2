@@ -20,10 +20,10 @@ This is the operating agreement for a **fully autonomous** four-agent team that 
 
 ### How the PRDs apply to this team
 
-The PRDs describe the product. Two cross-cutting decisions in `prds/00-overview.md` could be misread as rules about how this team works:
+The PRDs describe the product. Two cross-cutting decisions in `prds/00-overview.md` bear on how this team works:
 
-- **`XC-1` ("There is no CI")** describes the product's runtime: the shipped app doesn't depend on a git push. It says nothing about this team's GitHub Actions, which are development infrastructure and are expected.
-- **`XC-9` ("no agent-authored tests")** means tests are never written in the same loop as the code they test. The SDET is the sanctioned test author precisely because it works in a separate loop. The FSE and SA never write tests.
+- **`XC-1`** describes the product's runtime: deploying the shipped app never depends on a git push or a CI/CD pipeline. It says nothing about this team's GitHub Actions, which are development infrastructure and are expected.
+- **`XC-9`** says tests are never co-written with the code they test. The SDET is the sanctioned test author precisely because it works in a separate loop. The FSE and SA never write tests.
 
 ---
 
@@ -195,8 +195,9 @@ The first infrastructure issue proves that `turso_serverless` connects to the co
 
 | Outside world | Replaced at |
 |---|---|
-| HTTP (ATS fetches, search runners) | an injected `httpx` transport |
-| Claude | `agent.run_agent` (`XC-12`), and the Claude search runner's SDK query call, since that runner keeps its own message loop |
+| HTTP (ATS fetches, posting pages, the Perplexity runner) | an injected `httpx` transport |
+| Gemini | the Gemini client's replaceable point (`XC-9`) |
+| Claude | the shared agent loop (`XC-12`), the app's only call into the Claude Agent SDK |
 | External tools | the env-var path overrides in PRD 06 (e.g. `JSA_GWS_BIN`) |
 | Database | the libSQL service container |
 
