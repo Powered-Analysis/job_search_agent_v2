@@ -7,6 +7,9 @@ source "$(dirname "$0")/lib.sh"
 
 role="${1:?role}"
 result=$("guard_$role")
+# The role's model, effort, and turn cap ride along for the agent step.
+result=$(jq --argjson role "$(cfg ".roles.$role")" \
+  '($role | {model, effort, max_turns}) + .' <<<"$result")
 work=$(jq -r '.items | length > 0' <<<"$result")
 
 if [[ "$role" == fse && "${2:-}" == --claim && "$work" == true ]]; then

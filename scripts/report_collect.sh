@@ -95,4 +95,7 @@ for number in $(jq -r '.mentioned[].number' <<<"$facts"); do
 done
 echo "[Job Search Agent] $kind — $(jq -r '.word' <<<"$status")" >"$out/subject.txt"
 
+# The reporter's model, effort, and turn cap, for its step.
+cfg '.roles.reporter | to_entries[] | "\(.key)=\(.value)"' >>"${GITHUB_OUTPUT:-/dev/null}"
+
 echo "Collected facts for a $kind email ($(jq '.mentioned | length' <<<"$facts") issues mentioned)."

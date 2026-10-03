@@ -4,7 +4,7 @@
 #   WORKED   true when at least one agent job did work
 source "$(dirname "$0")/lib.sh"
 
-REPORT_EVERY=3
+REPORT_EVERY=$(cfg '.report.every_merged_prs')
 
 dispatch() {
   tick_gh workflow run "$1" -R "$REPO" --ref main

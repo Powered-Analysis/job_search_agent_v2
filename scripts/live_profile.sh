@@ -3,7 +3,7 @@
 # settings (docs/agentic_coding_team.md, CI environment): the cheapest settings
 # that still exercise each integration. Run it again after changing
 # profile.example/.
-set -euo pipefail
+source "$(dirname "$0")/lib.sh"
 
 target="${JSA_PROFILE_DIR:?JSA_PROFILE_DIR must be set}"
 if [[ ! -d profile.example ]]; then
@@ -26,11 +26,13 @@ set_key() {
   mv "$file.tmp" "$file"
 }
 
-set_key search/search.toml runners.claude model claude-sonnet-5-5
-set_key search/search.toml runners.claude effort low
-set_key search/search.toml runners.gemini agent deep-research-preview-04-2026
+model=$(cfg '.live_checks.claude_model')
+effort=$(cfg '.live_checks.claude_effort')
+set_key search/search.toml runners.claude model "$model"
+set_key search/search.toml runners.claude effort "$effort"
+set_key search/search.toml runners.gemini agent "$(cfg '.live_checks.gemini_agent')"
 for agent in checklist refine; do
-  set_key config.toml "agents.$agent" model claude-sonnet-5-5
-  set_key config.toml "agents.$agent" effort low
+  set_key config.toml "agents.$agent" model "$model"
+  set_key config.toml "agents.$agent" effort "$effort"
 done
 echo "Live-check profile written to $target"

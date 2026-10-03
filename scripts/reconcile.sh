@@ -5,7 +5,7 @@
 # that is already right.
 source "$(dirname "$0")/lib.sh"
 
-REVISION_CAP=4
+REVISION_CAP=$(cfg '.orchestration.revision_cap')
 
 add_label() { tick_gh api -X POST "repos/$REPO/issues/$1/labels" -f "labels[]=$2" >/dev/null; }
 remove_label() { tick_gh api -X DELETE "repos/$REPO/issues/$1/labels/$2" >/dev/null; }

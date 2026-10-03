@@ -24,7 +24,7 @@ else
   echo "Sending the collected facts: the reporter produced no draft with the required headings."
 fi
 
-payload=$(jq -n --arg from "$REPORT_FROM" --arg to "${REPORT_TO:?}" \
+payload=$(jq -n --arg from "$(cfg '.report.from')" --arg to "${REPORT_TO:?}" \
   --rawfile subject report/subject.txt --rawfile text "$body" \
   '{from: $from, to: [$to], subject: ($subject | rtrimstr("\n")), text: $text}')
 code=$(curl -sS -o "$RUNNER_TEMP/resend.json" -w '%{http_code}' https://api.resend.com/emails \

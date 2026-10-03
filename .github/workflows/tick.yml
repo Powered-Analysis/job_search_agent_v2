@@ -6,6 +6,8 @@
 # the guard finds no work. The checks that follow an agent (reconcile, discharge,
 # invariants) and the test gate run in jobs of their own, on runners no agent has
 # touched, so TICK_TOKEN is never on a machine where an agent or a PR's code ran.
+#
+# Each role's model, effort, and turn cap come from .github/team.yml, through its guard.
 name: tick
 
 on:
@@ -64,9 +66,9 @@ jobs:
           settings: |
             {"env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1", "WOZCODE_API_KEY": "${{ secrets.WOZCODE_API_KEY }}"}}
           claude_args: |
-            --model claude-opus-5-5
+            --model ${{ steps.guard.outputs.model }}
             --effort ${{ steps.guard.outputs.effort }}
-            --max-turns 500
+            --max-turns ${{ steps.guard.outputs.max_turns }}
             --permission-mode bypassPermissions
             --disallowedTools Monitor
           prompt: |
@@ -150,9 +152,9 @@ jobs:
               "GEMINI_API_KEY": "${{ secrets.GEMINI_API_KEY }}"
             }}
           claude_args: |
-            --model claude-sonnet-5-5
-            --effort high
-            --max-turns 500
+            --model ${{ steps.guard.outputs.model }}
+            --effort ${{ steps.guard.outputs.effort }}
+            --max-turns ${{ steps.guard.outputs.max_turns }}
             --permission-mode bypassPermissions
             --disallowedTools Monitor
           prompt: |
@@ -279,9 +281,9 @@ jobs:
               "TURSO_DATABASE_URL": "http://127.0.0.1:8080"
             }}
           claude_args: |
-            --model claude-opus-5-5
-            --effort medium
-            --max-turns 500
+            --model ${{ steps.guard.outputs.model }}
+            --effort ${{ steps.guard.outputs.effort }}
+            --max-turns ${{ steps.guard.outputs.max_turns }}
             --permission-mode bypassPermissions
             --disallowedTools Monitor
           prompt: |
@@ -363,9 +365,9 @@ jobs:
               "TURSO_DATABASE_URL": "http://127.0.0.1:8080"
             }}
           claude_args: |
-            --model claude-sonnet-5-5
-            --effort high
-            --max-turns 500
+            --model ${{ steps.guard.outputs.model }}
+            --effort ${{ steps.guard.outputs.effort }}
+            --max-turns ${{ steps.guard.outputs.max_turns }}
             --permission-mode bypassPermissions
             --disallowedTools Monitor
           prompt: |

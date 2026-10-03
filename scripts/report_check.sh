@@ -4,7 +4,7 @@
 # check (Orchestration, Alerts).
 source "$(dirname "$0")/lib.sh"
 
-ALERT_REPEAT_SECONDS=$((4 * 3600))
+ALERT_REPEAT_SECONDS=$(($(cfg '.report.alert_repeat_hours') * 3600))
 
 decide() {
   if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then

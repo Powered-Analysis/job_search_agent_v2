@@ -44,6 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Collect the facts
+        id: collect
         env:
           GH_TOKEN: ${{ github.token }}
           KIND: ${{ needs.check.outputs.kind }}
@@ -62,9 +63,9 @@ jobs:
           settings: |
             {"env": {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}}
           claude_args: |
-            --model claude-sonnet-5-5
-            --effort medium
-            --max-turns 60
+            --model ${{ steps.collect.outputs.model }}
+            --effort ${{ steps.collect.outputs.effort }}
+            --max-turns ${{ steps.collect.outputs.max_turns }}
             --permission-mode bypassPermissions
             --tools Read,Grep,Glob
             --disallowedTools Monitor

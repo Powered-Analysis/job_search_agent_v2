@@ -17,8 +17,6 @@ SDET_LOGIN="Sandro-BOTicelli"
 TEAM_JSON="[\"$PM_LOGIN\",\"$FSE_LOGIN\",\"$SA_LOGIN\",\"$SDET_LOGIN\"]"
 TICK_WORKFLOW="tick.yml"
 REPORT_WORKFLOW="report.yml"
-# shellcheck disable=SC2034  # read by report_send.sh
-REPORT_FROM="Job Search Agent <onboarding@resend.dev>"
 EPOCH="1970-01-01T00:00:00Z"
 
 # jq helpers shared by every filter that reads issues.
@@ -43,6 +41,10 @@ def fse_queue:
         and (depends | all(. as $d | ($open_numbers | index($d)) == null)))))
   | map(.number);
 '
+
+# The owner's settings. cfg <jq-path> fails on a missing key, never reads it as empty.
+CONFIG_JSON=$(yq -o=json '.' "$(dirname "${BASH_SOURCE[0]}")/../.github/team.yml")
+cfg() { jq -er "$1" <<<"$CONFIG_JSON"; }
 
 tick_gh() { GH_TOKEN="${TICK_TOKEN:?TICK_TOKEN must be set}" gh "$@"; }
 
@@ -96,10 +98,11 @@ sdet_uncovered() {
 # items list means the role has nothing to do this tick.
 
 guard_pm() {
-  local issues prs
+  local issues prs role
   issues=$(team_issues)
   prs=$(feature_prs open)
-  jq -n --argjson issues "$issues" --argjson prs "$prs" --arg pm "$PM_LOGIN" "$JQ_DEFS"'
+  role=$(cfg '.roles.pm')
+  jq -n --argjson issues "$issues" --argjson prs "$prs" --argjson role "$role" --arg pm "$PM_LOGIN" "$JQ_DEFS"'
     ($prs | map(.issue)) as $linked
     | ((if ($issues | length) == 0 then ["plan"] else [] end)
       + [$prs[] | select(.requested | index($pm)) | "pr:\(.number)"]
@@ -108,8 +111,7 @@ guard_pm() {
           | select((has_label("priority-now") or has_label("revise-test") or has_label("needs-human")) | not)
           | select(.number as $n | ($linked | index($n)) == null)
           | "discrepancy:\(.number)"]) as $items
-    # Planning gets the extra depth: every later review is graded against its issues.
-    | {items: $items, effort: (if ($items | index("plan")) != null then "high" else "medium" end)}'
+    | {items: $items, effort: (if ($items | index("plan")) != null then $role.planning_effort else $role.effort end)}'
 }
 
 guard_fse() {
@@ -171,22 +173,24 @@ last_report_time() {
 
 # The computed Status (Progress reports, Sections): {"word": ..., "line": ...}.
 report_status() {
-  local issues merged runs complete
+  local issues merged runs complete limits
+  limits=$(cfg '.report')
   issues=$(team_issues)
   merged=$(feature_prs merged)
   runs=$(tick_runs)
   complete=$(team_done)
   jq -n --argjson issues "$issues" --argjson merged "$merged" --argjson runs "$runs" \
-    --argjson complete "$complete" "$JQ_DEFS"'
+    --argjson complete "$complete" --argjson limits "$limits" "$JQ_DEFS"'
     ($runs | map(.conclusion == "success")) as $ok
-    | (($runs | length) >= 3 and ($ok[0:3] | any | not)) as $blocked
+    | $limits.blocked_after_failed_ticks as $streak
+    | (($runs | length) >= $streak and ($ok[0:$streak] | any | not)) as $blocked
     | ($ok | index(true)) as $first_ok
     | ((if $first_ok == null then $runs[-1] else $runs[$first_ok - 1] end).startedAt) as $blocked_since
     | ([$issues[] | select(.state == "OPEN" and has_label("needs-human"))] | length > 0) as $needs_input
     # The clock for a stall starts at the last merge, or at planning before any merge.
     | (($merged | map(.mergedAt) | max) // ($issues | map(.createdAt) | min)) as $last_progress
     | ($ok[0] == true and $last_progress != null
-        and ($last_progress | fromdateiso8601) < (now - 3 * 3600)) as $stalled
+        and ($last_progress | fromdateiso8601) < (now - $limits.stalled_after_hours * 3600)) as $stalled
     | ([$issues[] | select(.state == "OPEN" and has_label("discrepancy"))] | length) as $discrepancies
     | (if $complete then {word: "Complete", line: "Complete"}
        elif $blocked then {word: "Blocked", line: "Blocked since \($blocked_since)"}
