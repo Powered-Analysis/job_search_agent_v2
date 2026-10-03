@@ -15,19 +15,19 @@ roles:
     effort: medium
     # The one planning run; every later review is graded against its issues.
     planning_effort: high
-    max_turns: 500
+    max_turns: 200
   fse:
     model: claude-sonnet-5-5
     effort: high
-    max_turns: 500
+    max_turns: 200
   sa:
     model: claude-opus-5-5
     effort: medium
-    max_turns: 500
+    max_turns: 200
   sdet:
     model: claude-sonnet-5-5
     effort: high
-    max_turns: 500
+    max_turns: 200
   reporter:
     model: claude-sonnet-5-5
     effort: medium
