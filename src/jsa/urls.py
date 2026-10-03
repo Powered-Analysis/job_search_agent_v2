@@ -33,6 +33,21 @@ _TRACKING_PARAMS = frozenset(
     }
 )
 
+# Discovery sites, never the employer's own record (XC-3, PRD 01). The list is
+# necessarily incomplete.
+_AGGREGATOR_DOMAINS = (
+    "linkedin.com",
+    "indeed.com",
+    "glassdoor.com",
+    "ziprecruiter.com",
+    "monster.com",
+    "simplyhired.com",
+    "careerbuilder.com",
+    "dice.com",
+    "builtin.com",
+    "wellfound.com",
+)
+
 _GREENHOUSE_BOARD_HOST = "boards.greenhouse.io"
 _GREENHOUSE_CANONICAL_HOST = "job-boards.greenhouse.io"
 
@@ -54,3 +69,10 @@ def canonicalize_url(url: str) -> str:
         sorted(p for p in parts.query.split("&") if p and not _is_tracking(p))
     )
     return urlunsplit((parts.scheme.lower(), host, parts.path.rstrip("/"), query, ""))
+
+
+def is_aggregator(url: str) -> bool:
+    host = (urlsplit(url.strip()).hostname or "").lower()
+    return any(
+        host == domain or host.endswith(f".{domain}") for domain in _AGGREGATOR_DOMAINS
+    )
