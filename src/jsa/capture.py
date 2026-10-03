@@ -9,8 +9,6 @@ from markdownify import markdownify
 from jsa.ats import AtsRef
 from jsa.errors import JsaError
 
-_RIPPLING_BOARD_API = "https://ats.rippling.com/api/v2/board"
-
 
 class CaptureError(JsaError):
     """The posting's detail record could not be fetched or held no job description."""
@@ -104,30 +102,13 @@ def _ashby(client: httpx.Client, ref: AtsRef) -> Capture:
     raise CaptureError(f"job {ref.job_id} is not on the {ref.board} board")
 
 
-def _rippling_from_list(client: httpx.Client, ref: AtsRef) -> dict:
-    page = 0
-    while True:
-        listing = _record(
-            _get_json(client, f"{_RIPPLING_BOARD_API}/{ref.board}/jobs?page={page}")
-        )
-        for item in listing.get("items") or []:
-            if _record(item).get("id") == ref.job_id:
-                return item
-        page += 1
-        if page >= (listing.get("totalPages") or 0):
-            raise CaptureError(f"job {ref.job_id} is not on the {ref.board} board")
-
-
 def _rippling(client: httpx.Client, ref: AtsRef) -> Capture:
-    # PRD 01 says POST; the live endpoint allows only GET (405 otherwise).
-    try:
-        record = _record(
-            _get_json(client, f"{_RIPPLING_BOARD_API}/{ref.board}/jobs/{ref.job_id}")
+    record = _record(
+        _get_json(
+            client,
+            f"https://ats.rippling.com/api/v2/board/{ref.board}/jobs/{ref.job_id}",
         )
-    except httpx.HTTPStatusError as error:
-        if error.response.status_code != 404:
-            raise
-        record = _rippling_from_list(client, ref)
+    )
     description = record.get("description")
     if isinstance(description, dict):
         # The role comes first, the company blurb after it.
