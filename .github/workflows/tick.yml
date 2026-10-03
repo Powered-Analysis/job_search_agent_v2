@@ -7,7 +7,7 @@
 # invariants) and the test gate run in jobs of their own, on runners no agent has
 # touched, so TICK_TOKEN is never on a machine where an agent or a PR's code ran.
 #
-# Each role's model, effort, and turn cap come from .github/team.yml, through its guard.
+# Each role's model, effort, and turn cap come from team.yml, through its guard.
 name: tick
 
 on:

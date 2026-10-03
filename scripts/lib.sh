@@ -43,7 +43,7 @@ def fse_queue:
 '
 
 # The owner's settings. cfg <jq-path> fails on a missing key, never reads it as empty.
-CONFIG_JSON=$(yq -o=json '.' "$(dirname "${BASH_SOURCE[0]}")/../.github/team.yml")
+CONFIG_JSON=$(yq -o=json '.' "$(dirname "${BASH_SOURCE[0]}")/../team.yml")
 cfg() { jq -er "$1" <<<"$CONFIG_JSON"; }
 
 tick_gh() { GH_TOKEN="${TICK_TOKEN:?TICK_TOKEN must be set}" gh "$@"; }
