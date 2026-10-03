@@ -55,6 +55,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - Standalone `jsa packet` **skips a posting whose directory already exists** (never clobbered) and writes no checklist; a `NULL`-JD row still gets its directory and resume copy (no `job_posting.md`). Queue: the packet queue (PRD 02; `--id` waives the tracker condition, never Apply).
 
 **Resume checklist (Step 4) (Priority: P0)**
+- **Re-check before building (P0, `XC-5`):** each queued row gets PRD 01's liveness re-check before anything is built. A closed one is marked closed and gets no packet, checklist, or tracker row; generate reports how many Apply postings closed since they were decided. `--id` builds a closed posting anyway.
 - **Queue:** the packet queue (PRD 02). Unlike `jsa packet`, generate **ensures** (re-enters) a bare directory (`XC-10`), completing the packet head before writing the checklist.
 - **Assesses the packet's resume copy, never the base:** the checklist always reads `{resume_file_stem}.docx` as it currently stands in the packet. On a first run that copy is identical to the base; on a refresh (`--id`, refetch) it is the user's revision in progress.
 - **Agent:** the Claude Agent SDK, headless, **`model` and `effort` from `[agents.checklist]` in `profile/config.toml`** (`XC-14`; example default `claude-fable-5-1` at `medium`), no tools at all, a single turn, run through the shared agent loop (`XC-12`), so an API error result raises with the real HTTP status. Its final text is written to the packet as `resume_checklist.md`; an empty result raises.
@@ -92,7 +93,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - Dry-runs preview the queue/paths/rows, make no model call, and write nothing.
 
 **Core Experience (`jsa generate`)**
-1. For each Apply+untracked row: ensure the packet directory, `job_posting.md`, and the resume copy.
+1. For each Apply+untracked row still open after the re-check: ensure the packet directory, `job_posting.md`, and the resume copy.
 2. Assemble the checklist prompt with the JD and the text of the packet's resume copy.
 3. Run the single-turn agent; write `resume_checklist.md`.
 4. Append the tracker row via `jsa track --id`.
@@ -107,6 +108,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Tracker append ambiguous/failed:** row stays in the backlog; `jsa track` is the recovery path.
 - **Refetch drift on a tracked-but-unapplied row:** DB updated, Title cell refreshed, packet renamed and refreshed in place; a Sheet-write failure becomes a flagged hand-fix.
 - **Refetch rename target already exists:** nothing renamed; flagged.
+- **An Apply posting closed before its packet was built:** marked closed, skipped, and counted in generate's report; it leaves the packet and tracker queues. `--id` builds it anyway.
 - **Two postings with the same company and title:** the later one's packet directory carries ` ({id})`; neither touches the other's files.
 - **A title or company beginning with `=`, `+`, `-`, or `@`:** written to the Sheet as literal text, never as a formula.
 - **Standalone `jsa packet` on an existing directory:** skipped, never clobbered.

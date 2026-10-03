@@ -39,9 +39,9 @@ The part of the system that **improves with use**. The **search-profile refineme
 
 **Search-profile refinement (Priority: P1)**
 - **Incremental scope:** the cutoff is the newest `cutoff` recorded in `prompt_refinement_runs` (PRD 02), and the scope is decided rows with `decided_at` after it. On the **first-ever run** (no cutoff) every decided row is in scope; afterwards `decided_at > cutoff` scopes it, and re-deciding a row (which refreshes `decided_at`) re-enters it.
-- **Size budget:** a run takes in-scope rows oldest-decided first, up to an app-owned size budget that keeps the assembled prompt well inside the refine model's context window; rows sharing a `decided_at` are taken or left together. The rest stay in scope for the next run, and `jsa refine` reports how many wait. The first-ever run, or a run after a long gap, would otherwise send every decided JD at once.
-- **The cutoff is what the run saw, not when it finished:** a run records as its `cutoff` the newest `decided_at` among the rows it took. A decision made while a run is in flight, or left past the budget, is therefore considered next time rather than skipped.
-- **Ground truth assembled by the caller:** the rows the run took are rendered **in full** (id, company, title, decision, `fit_feedback`, `search_agent`, url, location, `date_posted`, **full `jd_markdown`**, `decided_at`) — the implicit-pattern-mining input; the decided history is rendered as a **compact no-JD, no-feedback** one-line-per-row reference (with Apply/Skip counts) for confirming a pattern recurs.
+- **Every in-scope row, every run:** a run sends the whole scope, never a subset, because any rule for choosing which decisions to show the refiner would bias what it learns. The first-ever run therefore sends every decided JD.
+- **The cutoff is what the run saw, not when it finished:** a run records as its `cutoff` the newest `decided_at` among the rows in its scope. A decision made while a run is in flight is therefore considered next time rather than skipped.
+- **Ground truth assembled by the caller:** the rows in scope are rendered **in full** (id, company, title, decision, `fit_feedback`, `search_agent`, url, location, `date_posted`, **full `jd_markdown`**, `decided_at`) — the implicit-pattern-mining input; the decided history is rendered as a **compact no-JD, no-feedback** one-line-per-row reference (with Apply/Skip counts) for confirming a pattern recurs.
 - **Write set is structural (P0):** the refiner may change only `target_roles.md`, `filters.md`, `positive_signals.md`, `negative_signals.md`, and `hard_exclusions.md`. It never touches `candidate.md` (facts about the person are not learnable from decisions), `search.toml`, or any app template — so the output contract, the `{{SEARCH_WINDOW}}` slot, and the liveness gates are out of reach by construction, not by instruction.
 - **Refiner agent:** the Claude Agent SDK over a **scratch directory** — **`model` and `effort` from `[agents.refine]`** (`XC-14`; example default `claude-opus-5-5` at `high`), at most 80 turns, working in a temporary scratch directory that `jsa refine` fills with copies of the five refinable fragments before the run and discards after rendering the proposal. **Its only tools are `Read` and `Edit`, and neither reaches outside the scratch directory; every other tool is unavailable.** The ground truth carries full JDs from employer pages, which is untrusted text on the user's own machine. No DB access. Run through the shared agent loop (`XC-12`), which raises on an error result before anything is recorded. Its **final message becomes the proposal's rationale**: a numbered list of changes, each with its evidence, the fragments it touches, and any other change it depends on (take both or neither). Anything too ambiguous to encode goes into the rationale as an open question — there is no TODO file.
 - **Prompt (`XC-13`):** the app's refine template with slots `{{GROUND_TRUTH}}` and `{{HISTORY}}` (run-time, above) and `{{SEARCH_PROMPT}}` — the *fully assembled* current search prompt (its `{{SEARCH_WINDOW}}` filled with a fixed note that the window varies per run, since refine has none), so the refiner judges fragments in the context of the machinery around them while only being able to edit the fragments.
@@ -62,7 +62,7 @@ The part of the system that **improves with use**. The **search-profile refineme
 - `jsa refine [--dry-run | --accept | --reject]` (local, run by hand). Empty scope prints a quiet "nothing new" and exits.
 
 **Core Experience (`jsa refine`)**
-1. Compute the cutoff; take in-scope decided rows up to the size budget (full, with JDs) + compact history.
+1. Compute the cutoff; gather every in-scope decided row (full, with JDs) + compact history.
 2. Copy the five refinable fragments into a scratch directory and assemble the current search prompt for context.
 3. Run the refiner agent in the scratch directory; it edits the copies, and its final message is the rationale.
 4. Write `profile/refine/`: the rationale and a conflict-marked copy of each changed fragment.
@@ -70,9 +70,9 @@ The part of the system that **improves with use**. The **search-profile refineme
 
 **Edge Cases**
 - **No new ground truth:** quiet exit; no run recorded.
-- **More in scope than one run's budget:** the run takes the oldest rows; `jsa refine` reports how many wait for the next run.
 - **A decision made while a run is in flight:** its `decided_at` is newer than the run's recorded cutoff, so the next run considers it.
 - **Agent error (HTTP/tooling):** raises before recording; the run's inputs are reconsidered next time.
+- **Scope larger than the refine model's context window (accepted risk):** the prompt is rejected as an agent error and nothing is recorded. Scope only grows, so refine stays blocked until `[agents.refine]` names a model with a larger context window; a subset is never sent instead.
 - **Refiner proposes no changes:** the run is still recorded (cutoff advances); nothing is written.
 - **Proposal already pending:** `jsa refine` refuses before any model call; accept or reject first.
 - **Markers left unresolved:** `--accept` refuses, naming the file and line.

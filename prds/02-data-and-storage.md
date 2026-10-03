@@ -1,7 +1,7 @@
 # Data & Storage
 #### tl;dr
 
-One hosted libSQL (Turso) database is the single source of truth for job-posting *data* — search output, the canonical-URL idempotency key, the full job description, and the user's fit feedback — shared by the headless cloud cron and every local session. This spec owns the schema, the idempotent insert, the connection/transaction contract, the query surface every other step reads and writes through, the append-only search-telemetry table, the cron's daily claim table, the learning-loop run-tracking table, and schema creation and change. It deliberately stores **no application state** (that lives in the Google Sheet tracker, PRD 04).
+One hosted libSQL (Turso) database is the single source of truth for job-posting *data* — search output, the canonical-URL idempotency key, the full job description, and the user's fit feedback — shared by the headless cloud cron and every local session. This spec owns the schema, the idempotent insert, the connection/transaction contract, the query surface every other step reads and writes through, the append-only search-telemetry table, the search run log, the cron's daily claim table, the learning-loop run-tracking table, and schema creation and change. It deliberately stores **no application state** (that lives in the Google Sheet tracker, PRD 04).
 
 ------
 #### Goals
@@ -45,25 +45,27 @@ One hosted libSQL (Turso) database is the single source of truth for job-posting
 - **Autocommit via `isolation_level = None` (P0, `XC-8`):** `turso_serverless` mirrors stdlib sqlite3's *legacy* transaction model; only `isolation_level = None` actually enables autocommit. The DB-API `autocommit` attribute it also exposes is stored but never consulted — a silent no-op — so without this every DML opens an implicit `BEGIN DEFERRED` that `close()` rolls back, silently dropping the write. Both the pipeline insert and the review loop depend on this.
 
 **The `postings` table (Priority: P0)**
-- **Single table** holding: `id`; `company`, `title`, `url`, `date_posted`; `canonical_url` (`NOT NULL UNIQUE` — the idempotency key); `normalized_company`, `title_slug`; `jd_markdown`, `location`; `search_agent` (`CHECK IN ('claude','perplexity','gemini','manual')`); `first_seen_at`; `decision` (`CHECK IN ('Apply','Skip')`, nullable until reviewed); `fit_feedback`; `decided_at`; `added_to_tracker` (default 0).
+- **Single table** holding: `id`; `company`, `title`, `url`, `date_posted`; `canonical_url` (`NOT NULL UNIQUE` — the idempotency key); `normalized_company`, `title_slug`; `jd_markdown`, `location`; `search_agent` (`CHECK IN ('claude','perplexity','gemini','manual')`); `first_seen_at`; `decision` (`CHECK IN ('Apply','Skip')`, nullable until reviewed); `fit_feedback`; `decided_at`; `added_to_tracker` (default 0); `closed_at` (NULL unless a re-check found the posting closed, PRD 01).
   - *Stored vs displayed:* `decision` stores the exact strings `Apply`/`Skip` — these double as display labels; downstream logic keys off the stored value. `search_agent` stores the wire value `claude`/`perplexity`/`gemini`/`manual`.
 - **No application state:** the table deliberately omits Date Applied / Status; those are the Sheet's user columns (`XC-4`).
 - **Single-source column list:** each table's columns are defined once, and both the `CREATE` and the migration rebuild use that definition, so the live schema and the migration target cannot drift.
-- **Timestamps and dates:** every stored timestamp (`first_seen_at`, `decided_at`, `found_at`, `ats_date`, `claimed_at`, `run_at`, `cutoff`) is UTC ISO-8601 in one fixed format, because SQLite compares them as text and the refinement scope (PRD 05) depends on those comparisons. `run_date` is a date in the profile's `timezone`; `date_posted` is an ISO date.
+- **Timestamps and dates:** every stored timestamp (`first_seen_at`, `decided_at`, `closed_at`, `found_at`, `ats_date`, `started_at`, `finished_at`, `claimed_at`, `run_at`, `cutoff`) is UTC ISO-8601 in one fixed format, because SQLite compares them as text and the refinement scope (PRD 05) depends on those comparisons. `run_date` is a date in the profile's `timezone`; `date_posted` is an ISO date.
 
 **Idempotent insert & JD capture (Priority: P0)**
 - **The insert** uses `INSERT … ON CONFLICT(canonical_url) DO NOTHING RETURNING id`: it reports the new id, or `None` if the row already existed — the signal the pipeline uses to fetch a JD only for genuinely-new rows. A `manual` add sets `decision = 'Apply'` *in the INSERT itself* (with `decided_at` set in the same statement), so the row is never briefly visible as undecided; searched rows leave `decision`/`decided_at` NULL.
 - **JD capture** stores `jd_markdown` + `location`; when a non-empty ATS-canonical `title` is provided it also overwrites `title` and re-derives `title_slug` (PRD 01's slug rule) so packet naming carries the canonical title. A `None`/empty title leaves title and slug untouched — the rule that keeps a failed refetch from blanking a good capture (PRD 04).
 
 **Query surface (Priority: P0)** — one database module owns every connection and every SQL statement; these are the reads and writes other steps rely on:
-- **Review backlog:** `decision IS NULL`, oldest first (Step 3, PRD 03).
+- **Review backlog:** `decision IS NULL AND closed_at IS NULL`, oldest first (Step 3, PRD 03).
+- **Mark closed:** set `closed_at` on a posting a re-check found closed (PRD 01). It never touches `decision`.
 - **Decision writes:** record a decision with its feedback; change a decision; clear a decision (nulls `decision`, `fit_feedback`, and `decided_at`). Every decision write refreshes `decided_at`, so amendments and promotions re-enter refinement scope; clearing deliberately does **not** touch telemetry (see below).
 - **Lookup by canonical URL:** a UX-only read for the manual-add path (not the idempotency guard).
-- **Tracker queue:** `Apply AND added_to_tracker = 0` — the Step 5 idempotency guard (PRD 04).
-- **Packet queue:** `Apply`, by default also `added_to_tracker = 0`; targeting one posting by id waives the tracker condition, never `Apply` — the Step 4 queue (PRD 04).
+- **Tracker queue:** `Apply AND added_to_tracker = 0 AND closed_at IS NULL` — the Step 5 idempotency guard (PRD 04).
+- **Packet queue:** `Apply`, by default also `added_to_tracker = 0 AND closed_at IS NULL`; targeting one posting by id waives the tracker and closed conditions, never `Apply` — the Step 4 queue (PRD 04).
 - **Refetch scope:** `Apply` by default; every row, or one row by id, when widened (PRD 04).
 - **Mark tracked:** set `added_to_tracker = 1` (Step 5 tail).
 - **Refinement scope:** decided rows after the cutoff, the compact decided history, and the cutoff itself (PRD 05).
+- **Search-run log:** open and close a search's run row; read recent runs for review's health line (below; PRD 01, PRD 03).
 - **Cron claim:** the once-per-day claim (below; PRD 01).
 
 **Search-telemetry table `search_findings` (Priority: P1)**
@@ -74,6 +76,16 @@ One hosted libSQL (Turso) database is the single source of truth for job-posting
 - **Written before the insert** (`ON CONFLICT DO NOTHING`) so a no-op'd req still credits the finding agent (PRD 01). A second find of the same URL by the same agent on the same `run_date` — a second scheduled search, a hand run, a smoke run — is the same fact and no-ops; the first row stands.
 - **Denormalized `decision` (P0 invariant):** kept current on every decision write (matched on `canonical_url`, not a posting id — there is deliberately no FK), **never** on clearing a decision (un-deciding is not a new decision; the last real call stays as the historical record). The column is retained as raw evaluation telemetry — per-agent coverage, overlap, and Apply-precision can be computed straight off `search_findings`, and survive a `postings` row being deleted or reset — but the pipeline deliberately ships **no built-in report** over it; external analyses query it directly, which is why its column names and stored values are a stable contract. **Never** delete or bulk-rewrite `search_findings` outside this sync path.
 
+**Search-run log `search_runs` (Priority: P1)**
+- One row per search attempt, whether scheduled, hand, or smoke:
+  - an AUTOINCREMENT `id`, `run_date`, and `trigger` (`CHECK IN ('scheduled','hand','smoke')`);
+  - what ran: `agent`, `window_hours`, `mode`, `model`, `effort`;
+  - `started_at`, `finished_at`;
+  - `outcome` (`CHECK IN ('ok','failed')`, NULL until the search ends) and `error` (one line, on failure);
+  - `summary` (the run summary's counts and cost as JSON, PRD 01) and `warnings` (its closing warnings, NULL when none).
+- **Opened before the runner starts and closed when the search ends.** A row left with no `outcome` therefore means the process died mid-search, the one failure a run cannot report itself. The surrogate `id` is what lets the closing update target its row over HTTP.
+- **Append-only** apart from that one closing update. It is what `jsa review`'s health line reads (PRD 03); `cron_runs` stays the claim, and `search_findings` stays the per-posting record.
+
 **Cron claim table `cron_runs` (Priority: P0)**
 - One row per day the scheduled search ran: `run_date` (the date in the profile's `timezone`, `PRIMARY KEY`) and `claimed_at` (default now). The claim is `INSERT … ON CONFLICT(run_date) DO NOTHING RETURNING run_date`, which reports whether this call won the day — the same single-mechanism idempotency as the `postings` insert (`XC-3`), so however many hourly wakes reach the gate, exactly one runs the day's searches (PRD 01).
 - Written before the searches run and never updated, so a row means "attempted", not "succeeded"; the run summary in `fly logs` is where outcome lives. Deleting a day's row by hand lets the next wake rerun it.
@@ -83,7 +95,7 @@ One hosted libSQL (Turso) database is the single source of truth for job-posting
   - *Rationale for the `id`:* libSQL over Hrana/HTTP refuses a DELETE against a table with no stable row identity, so the surrogate key is what lets a run be rolled back by hand.
 
 **Schema creation and change (Priority: P0)**
-- **Schema creation** — `postings`, `search_findings`, `cron_runs`, `prompt_refinement_runs` — uses `CREATE TABLE IF NOT EXISTS` from the single-source column lists. It is idempotent and every command runs it on connect, so there is no separate setup step to forget. The schema holds only tables the application reads or writes.
+- **Schema creation** — `postings`, `search_findings`, `search_runs`, `cron_runs`, `prompt_refinement_runs` — uses `CREATE TABLE IF NOT EXISTS` from the single-source column lists. It is idempotent and every command runs it on connect, so there is no separate setup step to forget. The schema holds only tables the application reads or writes.
 - **How a future schema change ships:** as a migration that runs on open, *before* the creates (a rebuild briefly parks data under another table name, and a create run first would fill that window with an empty table, orphaning the real rows). An additive column uses plain `ALTER TABLE ADD COLUMN`; a CHECK change uses the rebuild (create → copy by name → rename → rename → drop), because SQLite cannot ALTER a CHECK constraint.
 - **Ordered and self-healing, because hosted Turso is not atomic across statements** (each is its own round-trip): every migration is ordered so no step leaves the data absent from its named table, ships with a recovery routine that finishes a half-done swap on the next open, and is a no-op once applied (one `sqlite_master` read).
 
@@ -113,7 +125,7 @@ One hosted libSQL (Turso) database is the single source of truth for job-posting
 #### Integration Points
 - **Turso (hosted libSQL)** via `turso_serverless` (DB-API 2.0 / Hrana over HTTP). Auth: `TURSO_DATABASE_URL` (+ `TURSO_AUTH_TOKEN`). Same database from cloud and local (`XC-2`).
 - **stdlib `sqlite3`** for `file:` dev URLs.
-- Consumers: PRD 01 (insert, JD capture, findings, cron claim), PRD 03 (review reads/writes), PRD 04 (tracker/packet queues, refetch, `mark_tracked`), PRD 05 (refinement scope + run recording).
+- Consumers: PRD 01 (insert, JD capture, findings, the search-run log, cron claim, marking closed), PRD 03 (review reads/writes, marking closed, the health line's reads), PRD 04 (tracker/packet queues, refetch, `mark_tracked`), PRD 05 (refinement scope + run recording).
 
 **User inputs / manual setup this subsystem requires** (consolidated in PRD 06):
 - A **Turso** account and database; `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` set locally (`.env`) and as Fly secrets.

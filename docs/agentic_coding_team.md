@@ -213,7 +213,7 @@ The first infrastructure issue proves that `turso_serverless` connects to the co
 - **Gemini:** `deep-research-preview-04-2026`, the cheaper of the two agents.
 - **Perplexity:** no settings to lower, because PRD 01 fixes the `xhigh` preset. The prepaid balance is its only limit, so it's checked once per issue that changes the Perplexity runner.
 
-Search live checks use a 24-hour window. If a live check fails because of what the model returned, rather than because of the integration, the FSE reruns it once at `profile.example/`'s own settings before treating it as a bug. A weaker model's messier output is never a reason to loosen validation: PRD 01 requires a malformed response to raise an error.
+Search live checks use a 24-hour window. If a live check fails because of what the model returned, rather than because of the integration, the FSE reruns it once at `profile.example/`'s own settings before treating it as a bug. A weaker model's messier output is never a reason to loosen validation: PRD 01 requires an unparseable response to raise an error and every invalid posting to be dropped and counted.
 
 Judging output quality is the owner's job after deployment (see [Completion](#completion)). That includes whether searches find good postings and whether the prompt templates the FSE writes produce good checklists and refine proposals.
 

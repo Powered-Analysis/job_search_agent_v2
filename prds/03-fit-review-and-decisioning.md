@@ -32,6 +32,8 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 - As the job seeker, I want to step back to a previous posting and amend my call, so that a too-quick decision is recoverable.
 - As the job seeker, I want `jsa add` to derive the company and title for me (and let me correct them) rather than making me type them, so that adding a role is quick.
 - As the job seeker, I want re-adding a URL I already reviewed to promote it to Apply while keeping the note I wrote, so that nothing is lost.
+- As the job seeker, I want postings that closed while they waited to be dropped before I see them, so that I never spend review time on a dead link.
+- As the job seeker, I want review to open by telling me if the scheduled search failed, died, or never ran, so that I find out where I already look.
 
 **Developer**
 - As the developer, I want the review loop to fall back to plain line input when there is no TTY, so that it does not crash in a non-interactive environment — while keeping the rich line editing when a terminal is present.
@@ -41,7 +43,16 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 #### Functional Requirements
 
 **Review loop (Priority: P0)**
-- **Backlog:** the review backlog (PRD 02) is undecided rows, oldest first; it is captured once at session start so step-back navigation is stable.
+- **Search health line (P1):** before the backlog, review prints what the unattended search did, read from `search_runs`, `cron_runs` (PRD 02), and the schedule in `search.toml`. Failures surface where the user already looks rather than only in `fly logs`. It reports:
+  - for each agent the schedule uses, its latest search: date, outcome, postings inserted, and cost;
+  - every failed search in the last 7 days, with its one-line error;
+  - every warning those runs logged (a platform returning no dates, `reachable_no_date` and `malformed` counts);
+  - every search still without an outcome 90 minutes after it started, reported as dead (the runner ceiling is an hour, PRD 01);
+  - every scheduled day in the last 7 days, before today, with no `cron_runs` row, reported as missed.
+
+  With nothing to flag, it is one line: the latest run per agent. It makes no model call. A missing or invalid `search.toml` is reported in the line rather than stopping review.
+- **Liveness re-check (P0, `XC-5`):** the backlog is captured, then re-checked with PRD 01's re-check before the first posting is shown. A posting found closed is marked closed (PRD 02) and leaves the backlog with no decision; the session opens by saying how many closed. A posting the re-check couldn't reach (`unverifiable`) is shown as usual, marked as not re-checked.
+- **Backlog:** the review backlog (PRD 02) is undecided, unclosed rows, oldest first; it is captured once at session start so step-back navigation is stable.
 - **Open in browser:** each posting opens in Google Chrome through macOS `open`. A failure to open (e.g. Chrome not installed) is ignored rather than aborting the loop, since the URL is also printed.
 - **Decision prompt:** single-letter choices — **`a` = Apply, `s` = Skip, `b` = back, `q` = quit**; a bare Enter (keep the existing decision) is offered only when the posting already has a recorded decision. No pre-filled buffer at the decision prompt (a single-letter pre-fill would double the keystroke).
 - **Stored vs displayed:** the keystroke `a`/`s` maps to the stored/displayed decision strings **`Apply`/`Skip`**.
@@ -71,7 +82,7 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 - `jsa add <URL> [--company] [--title] [--date-posted] [--no-input]` (local).
 
 **Core Experience (review)**
-1. Session opens the oldest undecided posting in Chrome and shows company/title/location/url.
+1. Session prints the search health line, re-checks the backlog, says how many postings closed, then opens the oldest undecided posting in Chrome and shows company/title/location/url.
 2. User presses `a`/`s` (or `b`/`q`).
 3. User optionally types a note, or `:a`/`:s` to flip, or `:b` to redo.
 4. Decision commits; loop advances. After the last posting, one final amend pass is offered.
@@ -79,6 +90,9 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 **Edge Cases**
 - **No TTY:** degrades to plain line input (structured validation like choice-matching still enforced).
 - **Chrome not installed:** the open fails silently; the printed URL remains, and review continues.
+- **Offline or an ATS outage at session start:** the affected postings re-check as `unverifiable` and are shown as usual, marked as not re-checked.
+- **Every backlog posting closed:** the session reports how many closed, then the empty-backlog message.
+- **A scheduled search failed, died, or never ran:** the health line names it; review proceeds.
 - **Ctrl-C/Ctrl-D:** caught; committed decisions persist.
 - **`jsa add` on an existing row:** reports the existing id; promotes to Apply if not already, else "already Apply; no change."
 - **`jsa add` capture failure / unsupported ATS:** inserts with `NULL jd_markdown`; the CLI states the Step 4 packet will have no `job_posting.md`.
@@ -87,7 +101,7 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 
 -----
 #### Technical Considerations
-- **Local-only (`XC-1`):** review needs a terminal and Chrome; manual-add needs the shared DB and outbound HTTP for capture.
+- **Local-only (`XC-1`):** review needs a terminal, Chrome, and outbound HTTP for the re-check; manual-add needs the shared DB and outbound HTTP for capture.
 - **Immediate commit (`XC-8`):** every decision persists on write.
 - **Browser is hard-coded to Google Chrome on macOS** — a one-line change for another browser/OS (noted as an accepted constraint, not a portability requirement).
 
