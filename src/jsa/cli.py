@@ -7,6 +7,7 @@ from jsa.add import add_posting
 from jsa.config import load_environment
 from jsa.errors import JsaError
 from jsa.http import make_client
+from jsa.review import review
 
 
 def _init_db(args: argparse.Namespace) -> None:
@@ -23,6 +24,10 @@ def _add(args: argparse.Namespace) -> None:
             date_posted=args.date_posted,
             no_input=args.no_input,
         )
+
+
+def _review(args: argparse.Namespace) -> None:
+    review()
 
 
 def _iso_date(text: str) -> str:
@@ -52,6 +57,9 @@ def main() -> None:
         help="accept derived values without prompting",
     )
     add.set_defaults(run=_add)
+    commands.add_parser(
+        "review", help="decide Apply or Skip on each undecided posting"
+    ).set_defaults(run=_review)
     args = parser.parse_args()
 
     load_environment()

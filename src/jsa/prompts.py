@@ -25,8 +25,11 @@ def ask(label: str, default: str = "") -> str:
         raise PromptAborted("aborted") from error
 
 
-def choose(label: str, keys: Sequence[str]) -> str:
+def choose(label: str, keys: Sequence[str], *, allow_enter: bool = False) -> str:
+    """Re-prompt until a valid key; with `allow_enter`, a bare Enter returns ''."""
     valid = {key.lower() for key in keys}
+    if allow_enter:
+        valid.add("")
     while True:
         answer = ask(f"{label} [{'/'.join(keys)}]").strip().lower()
         if answer in valid:

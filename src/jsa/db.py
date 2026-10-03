@@ -201,8 +201,20 @@ def find_posting(conn: Connection, url: str) -> tuple[int, str | None] | None:
     return (rows[0][0], rows[0][1]) if rows else None
 
 
-def set_decision(conn: Connection, url: str, decision: str) -> None:
-    """Change a posting's decision, keeping its feedback; telemetry follows (PRD 02)."""
+def review_backlog(conn: Connection) -> list[tuple]:
+    """Undecided, unclosed postings, oldest first: (id, company, title, location, url)."""
+    return conn.execute(
+        """
+        SELECT id, company, title, location, url FROM postings
+        WHERE decision IS NULL AND closed_at IS NULL
+        ORDER BY first_seen_at, id
+        """
+    ).fetchall()
+
+
+def _write_decision(
+    conn: Connection, url: str, decision: str, feedback_assignment: str, params: tuple
+) -> None:
     canonical = canonicalize_url(url)
     # The two writes are not atomic over HTTP. Telemetry goes first so a retry
     # still sees the old decision and repeats both.
@@ -211,6 +223,26 @@ def set_decision(conn: Connection, url: str, decision: str) -> None:
         (decision, canonical),
     )
     conn.execute(
-        f"UPDATE postings SET decision = ?, decided_at = {NOW} WHERE canonical_url = ?",
-        (decision, canonical),
+        f"UPDATE postings SET decision = ?, {feedback_assignment}decided_at = {NOW} WHERE canonical_url = ?",
+        (decision, *params, canonical),
+    )
+
+
+def set_decision(conn: Connection, url: str, decision: str) -> None:
+    """Change a posting's decision, keeping its feedback; telemetry follows (PRD 02)."""
+    _write_decision(conn, url, decision, "", ())
+
+
+def record_decision(
+    conn: Connection, url: str, decision: str, feedback: str | None
+) -> None:
+    """Store a decision with its feedback together; telemetry follows (PRD 02)."""
+    _write_decision(conn, url, decision, "fit_feedback = ?, ", (feedback,))
+
+
+def clear_decision(conn: Connection, url: str) -> None:
+    """Un-decide a posting. Telemetry keeps the last real decision (PRD 02)."""
+    conn.execute(
+        "UPDATE postings SET decision = NULL, fit_feedback = NULL, decided_at = NULL WHERE canonical_url = ?",
+        (canonicalize_url(url),),
     )
