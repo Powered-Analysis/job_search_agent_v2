@@ -46,3 +46,12 @@ def resolve_ats(url: str) -> AtsRef | None:
         if host in hosts and (match := pattern.fullmatch(path)):
             return AtsRef(platform, match["board"], match["id"])
     return None
+
+
+# One definition per endpoint fetched both to verify a posting and to capture it (convention 1).
+def ashby_board_url(board: str) -> str:
+    return f"https://api.ashbyhq.com/posting-api/job-board/{board}"
+
+
+def rippling_detail_url(board: str, job_id: str) -> str:
+    return f"https://ats.rippling.com/api/v2/board/{board}/jobs/{job_id}"

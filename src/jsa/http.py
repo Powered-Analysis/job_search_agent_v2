@@ -1,4 +1,4 @@
-"""The one HTTP client factory (convention 3, XC-9): every outside HTTP call uses a client from here."""
+"""The one HTTP client factory and JSON GETs (convention 3, XC-9): every outside HTTP call goes through here."""
 
 from importlib.metadata import version
 
@@ -13,3 +13,17 @@ def make_client(transport: httpx.BaseTransport | None = None) -> httpx.Client:
         timeout=30,
         transport=transport,
     )
+
+
+def get_json(client: httpx.Client, url: str) -> object:
+    response = client.get(url)
+    response.raise_for_status()
+    return response.json()
+
+
+def get_lever_json(client: httpx.Client, path: str) -> object:
+    try:
+        return get_json(client, f"https://api.lever.co{path}")
+    except httpx.HTTPError:
+        # EU-hosted boards answer only on their own host.
+        return get_json(client, f"https://api.eu.lever.co{path}")

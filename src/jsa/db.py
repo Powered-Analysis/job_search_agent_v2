@@ -212,6 +212,14 @@ def review_backlog(conn: Connection) -> list[tuple]:
     ).fetchall()
 
 
+def mark_closed(conn: Connection, posting_id: int) -> None:
+    """Record that a re-check found the posting closed; the decision is never touched (PRD 02)."""
+    conn.execute(
+        f"UPDATE postings SET closed_at = {NOW} WHERE id = ? AND closed_at IS NULL",
+        (posting_id,),
+    )
+
+
 def _write_decision(
     conn: Connection, url: str, decision: str, feedback_assignment: str, params: tuple
 ) -> None:
