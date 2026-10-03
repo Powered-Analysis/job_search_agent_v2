@@ -90,8 +90,10 @@ pr_reviews() {
 # Merged feature PRs with no SDET-Covers trailer on main naming them.
 sdet_uncovered() {
   local covered
-  covered=$(gh api --paginate "repos/$REPO/commits?sha=main&author=$SDET_LOGIN&per_page=100" \
-    --jq '.[].commit.message' |
+  # The API's own author filter misses a commit pushed moments ago, and the
+  # discharge check runs right after the SDET's push, so the login is matched here.
+  covered=$(gh api --paginate "repos/$REPO/commits?sha=main&per_page=100" \
+    --jq ".[] | select(.author.login == \"$SDET_LOGIN\") | .commit.message" |
     { grep -E '^SDET-Covers:' || true; } | { grep -oE '#[0-9]+' || true; } | tr -d '#' |
     jq -Rs '[split("\n")[] | select(. != "") | tonumber]')
   feature_prs merged | jq --argjson covered "$covered" \
