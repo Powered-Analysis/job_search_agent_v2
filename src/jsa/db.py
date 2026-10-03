@@ -124,7 +124,7 @@ def connect() -> Connection:
     conn: Connection
     if url.startswith("file:"):
         # XC-8: autocommit, or every write is silently rolled back on close.
-        conn = sqlite3.connect(url, uri=True, isolation_level=None)
+        conn = sqlite3.connect(url, uri=True, autocommit=True)
     else:
         # XC-8: isolation_level=None is the only real autocommit here; the
         # client's `autocommit` attribute is a silent no-op.
