@@ -54,7 +54,8 @@ facts=$(jq -n --arg repo "$REPO" --arg since "$since" --arg pm "$PM_LOGIN" \
   def issue($n): [$issues[] | select(.number == $n)][0];
   def outcome: field("Outcome") as $o | if $o == "" then .title else $o end;
   def link: "[#\(.number)](https://github.com/\($repo)/issues/\(.number))";
-  def section($title; $lines): ["## " + $title, ""] + (if ($lines | length) == 0 then ["Nothing since the last report."] else $lines end) + [""];
+  def section($title; $lines; $empty): ["## " + $title, ""] + (if ($lines | length) == 0 then [$empty] else $lines end) + [""];
+  def section($title; $lines): section($title; $lines; "Nothing since the last report.");
 
   [$comments[] | select(.login == $pm and (.body | startswith("Ruling:"))) | select(issue(.issue) != null)] as $rulings
   | [$issues[] | select(.state == "CLOSED" and .closedAt > $since and field("Outcome") != "")] as $delivered
@@ -77,9 +78,10 @@ facts=$(jq -n --arg repo "$REPO" --arg since "$since" --arg pm "$PM_LOGIN" \
         + section("Decided";
             [$rulings[] | "- \(.body | first_line) Concerning: \(issue(.issue) | outcome) (\(issue(.issue) | link))"])
         + section("Roadmap";
-            [$planned | group_by(field("Roadmap"))[] | "- \(.[0] | field("Roadmap")): \(map(select(.state == "CLOSED")) | length) of \(length) done"])
-        + section("Next up"; [$next[] | "- \(outcome) (\(link))"])
-        + section("Links"; [$mentioned[] | "- #\(.number) \(.title): https://github.com/\($repo)/issues/\(.number)"])
+            [$planned | group_by(field("Roadmap"))[] | "- \(.[0] | field("Roadmap")): \(map(select(.state == "CLOSED")) | length) of \(length) done"];
+            "The work is not planned yet.")
+        + section("Next up"; [$next[] | "- \(outcome) (\(link))"]; "Nothing is queued.")
+        + section("Links"; [$mentioned[] | "- #\(.number) \(.title): https://github.com/\($repo)/issues/\(.number)"]; "None.")
         | join("\n"))
     }')
 
