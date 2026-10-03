@@ -49,12 +49,16 @@ def _record(data: object) -> dict:
     return data
 
 
-def _capture(jd_html: str | None, title: str | None, location: object) -> Capture:
-    if not jd_html or not (jd_markdown := html_to_markdown(jd_html)):
+def _build(jd_markdown: str, title: str | None, location: object) -> Capture:
+    if not jd_markdown:
         raise CaptureError("the ATS record has no job description")
     return Capture(
         jd_markdown, (title or "").strip() or None, normalize_location(location)
     )
+
+
+def _capture(jd_html: str | None, title: str | None, location: object) -> Capture:
+    return _build(html_to_markdown(jd_html or ""), title, location)
 
 
 def _greenhouse(client: httpx.Client, ref: AtsRef) -> Capture:
@@ -85,9 +89,7 @@ def _lever(client: httpx.Client, ref: AtsRef) -> Capture:
         return _capture(record["description"], record.get("text"), location)
     # Plain text is already valid Markdown; converting it as HTML would mangle it.
     plain = (record.get("descriptionPlain") or "").strip()
-    if not plain:
-        raise CaptureError("the ATS record has no job description")
-    return Capture(plain, record.get("text") or None, normalize_location(location))
+    return _build(plain, record.get("text"), location)
 
 
 def _ashby(client: httpx.Client, ref: AtsRef) -> Capture:
@@ -135,5 +137,6 @@ def capture(client: httpx.Client, ref: AtsRef) -> Capture:
         return _FETCHERS[ref.platform](client, ref)
     except (httpx.HTTPError, ValueError) as error:
         raise CaptureError(
-            f"{ref.platform} capture failed: {str(error).splitlines()[0]}"
+            f"{ref.platform} capture failed: "
+            f"{(str(error).splitlines() or [type(error).__name__])[0]}"
         ) from error
