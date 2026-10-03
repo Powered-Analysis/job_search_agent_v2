@@ -4,7 +4,7 @@ This is the operating agreement for a **fully autonomous** four-agent team that 
 
 **The team builds from an empty repository.** The PRDs are the only specification. No agent reads, copies, or is given an earlier implementation of the product.
 
-**Agents never edit `prds/` or `docs/`.** `docs/` holds this document and the owner's [code conventions](conventions.md). Both directories belong to the owner. When the PRDs contradict each other, or can't be met without changing them, the PM escalates (see [Escalation](#escalation)).
+**Agents never edit `prds/`, `docs/`, or `team.yml`.** `docs/` holds this document and the owner's [code conventions](conventions.md), and `team.yml` holds the owner's settings for the team. All three belong to the owner. When the PRDs contradict each other, or can't be met without changing them, the PM escalates (see [Escalation](#escalation)).
 
 ### Team members
 
@@ -44,7 +44,7 @@ pm → (fse ∥ sdet) → sa        # fse and sdet need pm; sa needs fse
 ```
 
 - **Guards.** Each job starts with a deterministic guard that reads GitHub state and decides whether the agent has anything to do. If not, the job exits without invoking the agent. The guard conditions are listed under each role below.
-- **Reconcile, then check.** At the start of every tick, the [reconcile](#reconcile) step runs, followed by the [invariant](#invariants) check. After every agent job, reconcile runs, then the [discharge check](#discharge-check), then the invariant check.
+- **Reconcile, then check.** At the start of every tick, the [reconcile](#reconcile) step runs, followed by the [invariant](#invariants) check. After every agent job, reconcile runs, then the [discharge check](#discharge-check), then the invariant check. These three run in a job of their own, on a fresh runner, so `TICK_TOKEN` is never on a machine where an agent ran.
 - **Failure.** A failed job skips every job that depends on it. Nothing is retried within a tick; the next tick resumes from state. A job whose guard finds no work still succeeds, so the jobs after it still run. The guard is a step inside the job, not a job-level `if:`.
 - **Triggers.** The tick runs on a cron schedule (every 15 minutes) and on `workflow_dispatch`. The cron is the retry delay after a failure, and it's how the team picks up the owner's actions, such as a removed `needs-human` label. An idle tick costs little, because every guard exits before invoking an agent. When a tick succeeds and at least one agent job did work, the tick's final step dispatches the next tick, so work flows back-to-back. A failed tick does not re-dispatch, so the cron interval acts as the retry delay. The dispatch uses `TICK_TOKEN` (see [Credentials](#credentials)).
 - **Concurrency.** A single concurrency group with `cancel-in-progress: false` means ticks never overlap.
@@ -88,7 +88,7 @@ A deterministic check runs at the start of every tick and after every agent job,
    - a pending review request to the SA or PM;
    - a linked issue that carries `in-progress` or `priority-now` (waiting on the FSE);
    - a linked issue labeled `needs-human` (waiting on the owner).
-3. **No bot commit on `main` touches `prds/` or `docs/`.**
+3. **No bot commit on `main` touches `prds/`, `docs/`, or `team.yml`.** The check reads the latest commit on each path, so an owner commit that restores the path clears it.
 
 Invariants 1 and 2 together make the FSE's queue order produce one PR at a time, with no separate brake.
 
@@ -103,7 +103,7 @@ This matters because the tick re-dispatches itself whenever an agent did work. W
 An agent that can't proceed without the owner applies `needs-human` to the issue it's working on. It also comments `Needs-human:` followed by one line on what the owner needs to decide or do. The issue then leaves every queue until the owner answers in a comment and removes the label. Escalate only for what no role can resolve:
 
 - the PRDs contradict each other, or can't be met without changing them, including when they name a deprecated or superseded library or function ([convention 9](conventions.md#9-use-whats-current-not-just-what-still-works));
-- the work needs a change under `.github/workflows/` (no token has the Workflows permission), a new secret, or a new account;
+- the work needs a change under `.github/workflows/` (no token has the Workflows permission), a change to `team.yml`, a new secret, or a new account;
 - a revision loop that doesn't converge (reconcile handles this one; see rule 3).
 
 The SA never escalates directly. A standoff with the FSE reaches the owner through the revision cap.
@@ -132,6 +132,13 @@ The FSE notes in each PR description which checks it couldn't run. The final rep
 #### Repository files
 
 - **This document stays a single file.** Each agent's prompt names two sections as required reading: Orchestration and the agent's own role section.
+- **`team.yml`** sits at the repository root and holds the owner's settings:
+  - each role's model, effort, and turn cap;
+  - the settings live checks run at;
+  - the revision cap;
+  - the report and alert thresholds, and the sender address.
+
+  The workflows and scripts read it on every run. The numbers this document gives for those settings are the values the file starts with. Job time limits and cron schedules live in the workflow files, because GitHub Actions reads them there.
 - **`CLAUDE.md`** sits at the repository root, and every agent loads it. It holds:
   - an `@docs/conventions.md` import line, so the owner's conventions load on every run;
   - the commands to install, run, and test the app;
@@ -165,12 +172,12 @@ Every agent job invokes `claude-code-action` with these settings. Each one close
 - **`timeout-minutes` on every agent job is the primary runaway guard; `--max-turns` is a loose secondary limit.** A turn cap can't detect a hang inside a single turn. The limits are:
   - PM: 60 minutes;
   - FSE: 60 minutes;
-  - SA: 45 minutes, including the test gate;
+  - SA: 45 minutes, of which 15 are the test gate's job and 30 the agent's;
   - SDET: 45 minutes;
   - reporter: 10 minutes.
 
   A healthy run finishes well inside its limit, so a timeout means something went wrong, not that the work was large.
-- **A pinned model and an explicit effort for each role:**
+- **A pinned model and an explicit effort for each role, set in `team.yml`.** It starts with:
 
   | Role | `--model` | `--effort` |
   |---|---|---|
@@ -311,7 +318,7 @@ So every email keeps the same headings in the same order, and puts those items w
 
     The line also counts places where testing found the build doesn't yet match the spec (open `discrepancy` issues), when there are any.
   - **Needs your input:** each `Needs-human:` line, with the `Outcome:` line of its issue. The section is omitted when there are none.
-  - **Security:** each SA finding marked `needs-change (security):` since the last report, in plain language, and whether the fix has merged. The section is omitted when there are none.
+  - **Security:** each feature PR on which the SA marked a finding `needs-change (security):` since the last report: the capability it concerns, whether the fix has merged, and a link to the review. The finding's own text stays on the PR, because the collected facts never include PR comments. The section is omitted when there are none.
   - **Delivered:** the `Outcome:` line of each issue closed since the last report, grouped by roadmap area.
   - **Decided:** each `Ruling:` line since the last report, with the outcome it concerns.
   - **Roadmap:** for each roadmap area (PRDs 01–06), issues done out of total.
@@ -463,8 +470,9 @@ When the SA and FSE each think their own approach is correct, resolve it as a di
 
 #### Test gate
 
-Before the SA agent runs, a deterministic step in the SA job runs the test suite twice: on the PR's base commit and on its head commit. It posts the result to the head commit as the `test-gate` commit status, which `main`'s merge gate requires. The PR passes the gate when both of these hold:
+Before the SA agent runs, a deterministic job runs the test suite (`pytest`) twice: on the commit where the PR's branch left `main`, and on its head commit. That job runs the PR's code, so it holds no secret. The SA job then posts the result to the head commit as the `test-gate` commit status, which `main`'s merge gate requires. The PR passes the gate when all of these hold:
 
+- **The PR changes nothing under `prds/`, `docs/`, or `team.yml`.** Only `TICK_TOKEN` posts the status and no agent holds it, so a PR that touches the owner's files can't merge.
 - **No test that passes on the base fails on the head.** Tests that already fail on `main` are open `discrepancy` findings that other issues own. They don't block unrelated PRs.
 - **For a `discrepancy` issue, every failing test the issue lists passes on the head.**
 
