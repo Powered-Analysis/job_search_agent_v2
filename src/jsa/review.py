@@ -4,7 +4,10 @@ import subprocess
 from dataclasses import dataclass
 from typing import Literal
 
+import httpx
+
 from jsa import db, prompts
+from jsa.verify import CLOSED_OUTCOMES, Verifier, recheck
 
 FEEDBACK_LABEL = "Feedback (Enter to skip, :a/:s to change the decision)"
 DECISION_KEYS = {"a": "Apply", "s": "Skip"}
@@ -27,6 +30,7 @@ class Entry:
     url: str
     decision: str | None = None
     feedback: str | None = None
+    rechecked: bool = True
 
 
 @dataclass(frozen=True)
@@ -62,7 +66,8 @@ def _open_in_chrome(url: str) -> None:
 
 def _show(entry: Entry) -> None:
     amending = " (amending)" if entry.decision else ""
-    print(f"\n{entry.company} — {entry.title}{amending}")
+    unchecked = "" if entry.rechecked else " (not re-checked)"
+    print(f"\n{entry.company} — {entry.title}{amending}{unchecked}")
     print(f"Location: {entry.location or 'unknown'}")
     print(entry.url)
 
@@ -125,10 +130,24 @@ def _work(conn: db.Connection, entries: list[Entry]) -> None:
             index -= 1
 
 
-def review() -> None:
+def _recheck_backlog(
+    conn: db.Connection, client: httpx.Client, backlog: list[tuple]
+) -> list[Entry]:
+    """Mark closed postings and drop them from the backlog; the rest are shown (PRD 03)."""
+    outcomes = recheck(conn, Verifier(client), [(row[0], row[4]) for row in backlog])
+    open_rows = [row for row in backlog if outcomes[row[0]] not in CLOSED_OUTCOMES]
+    closed = len(backlog) - len(open_rows)
+    print(f"{closed} {'posting' if closed == 1 else 'postings'} closed while waiting.")
+    return [
+        Entry(*row, rechecked=outcomes[row[0]] != "unverifiable") for row in open_rows
+    ]
+
+
+def review(client: httpx.Client) -> None:
     conn = db.connect()
     # Captured once so stepping back is stable (PRD 03).
-    entries = [Entry(*row) for row in db.review_backlog(conn)]
+    backlog = db.review_backlog(conn)
+    entries = _recheck_backlog(conn, client, backlog) if backlog else []
     if not entries:
         print("No postings awaiting review. 🎉")
         return

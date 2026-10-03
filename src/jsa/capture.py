@@ -10,6 +10,7 @@ from markdownify import markdownify
 
 from jsa.ats import AtsRef
 from jsa.errors import JsaError
+from jsa.http import get_json, get_lever_json
 
 
 class CaptureError(JsaError):
@@ -53,12 +54,6 @@ def normalize_location(value: object) -> str | None:
     return None
 
 
-def _get_json(client: httpx.Client, url: str) -> object:
-    response = client.get(url)
-    response.raise_for_status()
-    return response.json()
-
-
 def _record(data: object) -> dict:
     if not isinstance(data, dict):
         raise CaptureError("the ATS returned an unexpected response shape")
@@ -87,7 +82,7 @@ def _capture(jd_html: str | None, title: str | None, location: object) -> Captur
 
 def _greenhouse(client: httpx.Client, ref: AtsRef) -> Capture:
     record = _record(
-        _get_json(
+        get_json(
             client,
             f"https://boards-api.greenhouse.io/v1/boards/{ref.board}/jobs/{ref.job_id}",
         )
@@ -101,13 +96,9 @@ def _greenhouse(client: httpx.Client, ref: AtsRef) -> Capture:
 
 
 def _lever(client: httpx.Client, ref: AtsRef) -> Capture:
-    path = f"/v0/postings/{ref.board}/{ref.job_id}?mode=json"
-    try:
-        data = _get_json(client, f"https://api.lever.co{path}")
-    except httpx.HTTPError:
-        # EU-hosted boards answer only on their own host.
-        data = _get_json(client, f"https://api.eu.lever.co{path}")
-    record = _record(data)
+    record = _record(
+        get_lever_json(client, f"/v0/postings/{ref.board}/{ref.job_id}?mode=json")
+    )
     location = (record.get("categories") or {}).get("location")
     if record.get("description"):
         return _capture(record["description"], record.get("text"), location)
@@ -118,7 +109,7 @@ def _lever(client: httpx.Client, ref: AtsRef) -> Capture:
 
 def _ashby(client: httpx.Client, ref: AtsRef) -> Capture:
     board = _record(
-        _get_json(client, f"https://api.ashbyhq.com/posting-api/job-board/{ref.board}")
+        get_json(client, f"https://api.ashbyhq.com/posting-api/job-board/{ref.board}")
     )
     for job in board.get("jobs") or []:
         if _record(job).get("id") == ref.job_id:
@@ -130,7 +121,7 @@ def _ashby(client: httpx.Client, ref: AtsRef) -> Capture:
 
 def _rippling(client: httpx.Client, ref: AtsRef) -> Capture:
     record = _record(
-        _get_json(
+        get_json(
             client,
             f"https://ats.rippling.com/api/v2/board/{ref.board}/jobs/{ref.job_id}",
         )

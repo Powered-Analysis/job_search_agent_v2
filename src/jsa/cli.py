@@ -27,7 +27,8 @@ def _add(args: argparse.Namespace) -> None:
 
 
 def _review(args: argparse.Namespace) -> None:
-    review()
+    with make_client() as client:
+        review(client)
 
 
 def _iso_date(text: str) -> str:
