@@ -4,7 +4,7 @@ import httpx
 
 from jsa import db, prompts
 from jsa.ats import resolve_ats
-from jsa.capture import Capture, CaptureError, capture
+from jsa.capture import Capture, CaptureError, capture_posting
 from jsa.errors import JsaError
 from jsa.naming import company_from_board
 from jsa.urls import is_aggregator
@@ -48,13 +48,15 @@ def add_posting(
 
     ref = resolve_ats(url)
     captured: Capture | None = None
-    if ref:
-        try:
-            captured = capture(client, ref)
-        except CaptureError as error:
-            print(f"Capture failed: {error}")
+    try:
+        captured = capture_posting(client, url, ref)
+    except CaptureError as error:
+        print(f"Capture failed: {error}")
 
-    derived_company = company_from_board(ref.board) if ref else None
+    if ref:
+        derived_company = company_from_board(ref.board)
+    else:
+        derived_company = captured.company if captured else None
     derived_title = captured.title if captured else None
     if no_input:
         company = company or derived_company
