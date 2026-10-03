@@ -35,9 +35,12 @@ jobs:
       work: ${{ steps.guard.outputs.work }}
       items: ${{ steps.guard.outputs.items }}
     steps:
+      # The agent's git must carry only its own PAT. A persisted ambient token
+      # is sent ahead of it, so a push would go out as github-actions[bot].
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Reconcile (start of tick)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -114,6 +117,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Guard and claim
         id: guard
         env:
@@ -240,6 +244,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Guard
         id: guard
         env:
@@ -332,6 +337,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
       - name: Record main before the SDET runs
         id: before
         run: echo "sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
