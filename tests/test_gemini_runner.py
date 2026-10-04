@@ -96,12 +96,12 @@ def finished(text=ANSWER, usage=USAGE):
     return fields
 
 
-def drops(events):
+def drops(events, error=None):
     """A stream that yields `events`, then the connection fails mid-run."""
 
     def stream():
         yield from (Wire(event) for event in events)
-        raise httpx.ReadError("connection reset")
+        raise error or httpx.ReadError("connection reset")
 
     return stream()
 
@@ -219,6 +219,12 @@ def test_the_client_is_built_from_the_gemini_api_key(monkeypatch):
     assert keys == [KEY]
 
 
+def test_the_real_client_gives_a_stalled_read_an_1800_second_timeout():
+    # PRD 01 "Timeouts/limits": without it a half-open connection blocks past the 3600s ceiling.
+    client = gemini.make_client(KEY)
+    assert client._api_client._http_options.timeout == 1800 * 1000
+
+
 # --- what the runner reports ----------------------------------------------------------------
 
 
@@ -329,6 +335,29 @@ def test_a_dropped_stream_reconnects_from_the_last_event_id_and_finishes(fake, d
     assert call["stream"] is True
     assert call["last_event_id"] == "e3"
     assert len(fake.create_calls) == 1
+
+
+def test_a_read_timeout_on_a_stalled_stream_reconnects_instead_of_failing(fake):
+    first = [created("e1"), thought("e2")]
+    fake.created = drops(first, httpx.ReadTimeout("no data for 1800 seconds"))
+    fake.reconnects = [[completed("e3")]]
+    fake.reads = [finished("done")]
+    assert runner().run("p").text == "done"
+    (call,) = fake.reconnect_calls
+    assert call["last_event_id"] == "e2"
+
+
+def test_a_stalled_stream_that_keeps_timing_out_still_hits_the_ceiling(
+    fake, monkeypatch
+):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Tick(1000)))
+    fake.created = drops([created("e1")], httpx.ReadTimeout("stalled"))
+    fake.reconnects = [
+        drops([thought(f"e{n}")], httpx.ReadTimeout("stalled")) for n in range(2, 40)
+    ]
+    fake.reads = [{"id": INTERACTION, "status": "in_progress"}]
+    with pytest.raises(WallClockExceeded):
+        runner().run("p")
 
 
 def test_a_second_drop_reconnects_from_the_event_the_first_reconnect_reached(fake):
