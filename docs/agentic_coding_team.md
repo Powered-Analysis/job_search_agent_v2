@@ -62,7 +62,7 @@ pm → (fse ∥ sdet) → sa        # fse and sdet need pm; sa needs fse
 | `needs-human` | Work on this issue has stopped until the owner acts. A `Needs-human:` comment says what's needed. | PM, FSE, or SDET; reconcile (revision cap) | The owner |
 | `follow-up` | An improvement the SA raised as `levelup`. It is never worked unless the owner removes the label. | PM, at merge | The owner |
 
-Review requests are the handoff tokens between roles:
+Review requests are the handoff tokens between roles, and only the SA and the PM are ever asked to review:
 - the FSE requests the SA's review when its work is ready;
 - reconcile requests the PM's review when the SA approves.
 
@@ -78,6 +78,7 @@ For the open feature PR and its linked issue, reconcile applies these rules:
 2. **PM concern.** If the PM's latest review is `CHANGES_REQUESTED` and is newer than the SA's latest approval, apply `priority-now` to the issue.
 3. **Revision cap.** Count the PR's `CHANGES_REQUESTED` reviews (SA and PM combined) since the later of the PR's creation and the last time `needs-human` was removed from the issue. When the count reaches four, apply `needs-human` to the issue and comment `Needs-human:` with links to the unresolved review threads.
 4. **SA changes.** If the SA's latest review is `CHANGES_REQUESTED` and the issue lacks `in-progress`, apply it. The label is missing only when an earlier SA approval removed it, for example when the branch was then updated with `main` and the SA reviewed the new head.
+5. **Stray review request.** Remove any pending review request that names neither the SA nor the PM, because no guard selects a PR waiting on anyone else. If the SA has not approved the head, the issue carries `in-progress` or `priority-now`, and neither the SA nor the PM is asked, request the SA's review: the FSE's request was meant for the SA.
 
 One more transition is mechanical: the FSE's claim. The FSE guard applies `in-progress` to the issue at the top of the queue before invoking the agent.
 
