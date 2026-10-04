@@ -16,7 +16,6 @@ from jsa.runners import Deadline, RunnerError, RunnerResult
 log = logging.getLogger(__name__)
 
 KEY_NAME = "GEMINI_API_KEY"
-HEARTBEAT_SECONDS = 5
 POLL_SECONDS = 10
 AGENT_CONFIG = {
     "type": "deep-research",
@@ -155,11 +154,9 @@ class GeminiAgentRunner:
         self._client = make_client(api_key(KEY_NAME))
         self._agent = settings.agent
         self._sleep = sleep
-        self._last_heartbeat = 0.0
 
     def run(self, prompt: str) -> RunnerResult:
         deadline = Deadline()
-        self._last_heartbeat = 0.0
         state = self._consume(StreamState(), partial(self._create, prompt), deadline)
         while not state.completed:
             deadline.check()
@@ -224,8 +221,7 @@ class GeminiAgentRunner:
                 state = fold(state, raw.model_dump(mode="json", exclude_none=True))
                 if state.failure:
                     raise RunnerError(f"Gemini reported a failure: {state.failure}")
-                if deadline.elapsed - self._last_heartbeat >= HEARTBEAT_SECONDS:
-                    self._last_heartbeat = deadline.elapsed
+                if deadline.heartbeat_due():
                     log.info(
                         "still researching: %d thought steps, %.0fs",
                         state.thought_steps,

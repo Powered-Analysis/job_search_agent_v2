@@ -8,6 +8,8 @@ from jsa.errors import JsaError
 
 # A hard stop, so a hung run can neither bill indefinitely nor block the day's later searches.
 WALL_CLOCK_CEILING_SECONDS = 3600
+# How often a streamed runner logs that it is still working.
+HEARTBEAT_SECONDS = 5
 
 
 class RunnerError(JsaError):
@@ -38,6 +40,7 @@ class Deadline:
         self._clock = clock
         self._start = clock()
         self._seconds = seconds
+        self._last_heartbeat = 0.0
 
     @property
     def elapsed(self) -> float:
@@ -48,3 +51,10 @@ class Deadline:
             raise WallClockExceeded(
                 f"the search ran past its {self._seconds:.0f}-second ceiling"
             )
+
+    def heartbeat_due(self) -> bool:
+        """True at most once per heartbeat interval, so the caller logs when it returns True."""
+        if self.elapsed - self._last_heartbeat < HEARTBEAT_SECONDS:
+            return False
+        self._last_heartbeat = self.elapsed
+        return True

@@ -16,7 +16,6 @@ log = logging.getLogger(__name__)
 URL = "https://api.perplexity.ai/v1/agent"
 KEY_NAME = "PERPLEXITY_API_KEY"
 READ_TIMEOUT_SECONDS = 1800
-HEARTBEAT_SECONDS = 5
 _FAILURE_EVENTS = frozenset({"response.failed", "error"})
 
 
@@ -81,7 +80,6 @@ class PerplexityRunner:
     def run(self, prompt: str) -> RunnerResult:
         deadline = Deadline()
         state = StreamState()
-        last_heartbeat = 0.0
         events = post_sse(
             self._client,
             URL,
@@ -99,8 +97,7 @@ class PerplexityRunner:
                 log.info(
                     "sandbox step %d (%.0fs)", state.sandbox_steps, deadline.elapsed
                 )
-            if deadline.elapsed - last_heartbeat >= HEARTBEAT_SECONDS:
-                last_heartbeat = deadline.elapsed
+            if deadline.heartbeat_due():
                 log.info(
                     "still searching: %d sandbox steps, %.0fs",
                     state.sandbox_steps,
