@@ -46,7 +46,8 @@ def _build(
 ) -> bool:
     """Complete the packet and its checklist; False when it must stay untracked for lack of a JD."""
     directory, copy = packet_paths(config, job)
-    ensure_head(directory, copy, job, resume)
+    # PRD 04: `--id` (rewrite) refreshes `job_posting.md` from the row, as refetch relies on.
+    ensure_head(directory, copy, job, resume, refresh_posting=rewrite)
     checklist = directory / CHECKLIST
     # XC-10: an interrupted run resumes after a checklist it already wrote.
     if checklist.exists() and not rewrite:

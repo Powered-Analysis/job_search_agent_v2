@@ -23,11 +23,22 @@ def packet_paths(config: Config, job: db.PacketJob) -> tuple[Path, Path]:
     return directory, copy
 
 
-def ensure_head(directory: Path, copy: Path, job: db.PacketJob, resume: Path) -> None:
-    """Complete the folder, the job description, and the resume copy; an existing file is never replaced."""
+def ensure_head(
+    directory: Path,
+    copy: Path,
+    job: db.PacketJob,
+    resume: Path,
+    *,
+    refresh_posting: bool = False,
+) -> None:
+    """Complete the folder, the job description, and the resume copy.
+
+    The resume copy and a hand-filled job description are never replaced. The row's description
+    replaces an existing `job_posting.md` only when `refresh_posting` is set.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     posting = directory / JOB_POSTING
-    if job.jd_markdown is not None and not posting.exists():
+    if job.jd_markdown is not None and (refresh_posting or not posting.exists()):
         posting.write_text(job.jd_markdown, encoding="utf-8")
     # The copy is the user's working file, so an existing one is never replaced.
     if not copy.exists():
