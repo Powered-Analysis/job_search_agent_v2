@@ -650,6 +650,13 @@ def test_the_shared_loop_is_called_with_the_checklist_settings_no_tools_and_one_
     assert call.options.max_turns == 1
 
 
+def test_the_checklist_run_loads_no_settings_files(gdb, agent, monkeypatch, capsys):
+    seed(gdb)
+    jsa_generate(monkeypatch, capsys)
+    (call,) = agent.calls
+    assert call.options.setting_sources == []
+
+
 def test_the_agent_is_given_the_edited_copy_on_an_id_not_the_base(
     gdb, env, agent, monkeypatch, capsys
 ):

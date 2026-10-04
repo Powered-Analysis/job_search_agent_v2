@@ -274,6 +274,22 @@ def test_run_agent_passes_each_callers_own_tools_limits_and_mode(sdk):
     assert (sdk.options.model, sdk.options.effort) == ("claude-fable-5-1", "medium")
 
 
+def test_run_agent_loads_no_settings_files_whatever_the_sdk_default_is(sdk):
+    agent_loop.run_agent(
+        "p",
+        SETTINGS,
+        tools=["Read"],
+        max_turns=1,
+        permission_mode="acceptEdits",
+    )
+    assert sdk.options.setting_sources == []
+
+
+def test_the_search_runner_loads_no_settings_files(sdk):
+    ClaudeRunner(SETTINGS).run("p")
+    assert sdk.options.setting_sources == []
+
+
 def test_run_agent_lets_a_caller_observe_every_message(sdk):
     sdk.messages = [assistant(TextBlock("hello")), result_message()]
     seen = []

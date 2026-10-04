@@ -518,6 +518,14 @@ def test_the_shared_loop_gets_the_refine_settings_turn_limit_and_only_read_and_e
     assert sorted(options.tools) == ["Edit", "Read"]
 
 
+def test_the_refiner_loads_no_settings_files_that_could_widen_its_containment(
+    seed, refiner, monkeypatch, capsys
+):
+    seed("Apply")
+    refine(monkeypatch, capsys)
+    assert refiner.options.setting_sources == []
+
+
 def test_the_agent_is_given_no_mcp_servers_and_no_further_tool_permissions(
     seed, refiner, monkeypatch, capsys
 ):
