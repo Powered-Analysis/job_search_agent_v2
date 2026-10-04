@@ -248,12 +248,7 @@ def _check_resolved(resolved: Mapping[str, str], directory: Path) -> None:
             "The proposal still has conflict markers to resolve: " + "; ".join(left)
         )
     try:
-        assemble_search_prompt_for(
-            load_search_config(),
-            WINDOW_NOTE,
-            resolved,
-            directory,
-        )
+        assemble_search_prompt_for(load_search_config(), WINDOW_NOTE, directory)
     except JsaError as error:
         raise JsaError(
             f"The resolved proposal would break the search prompt. {error}"
