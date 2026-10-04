@@ -242,6 +242,14 @@ def test_off_four_page_without_jobposting_data_is_a_capture_error():
         run_capture(pages, OFF_FOUR_URL)
 
 
+def test_off_four_jobposting_without_a_description_is_still_a_capture_error():
+    page = json_ld_page(
+        {"@context": "https://schema.org", "@type": "JobPosting", "title": "Engineer"}
+    )
+    with pytest.raises(CaptureError):
+        run_capture(Pages({page_route(OFF_FOUR_URL): page}), OFF_FOUR_URL)
+
+
 def test_off_four_page_that_errors_is_a_capture_error():
     with pytest.raises(CaptureError):
         run_capture(Pages({}), OFF_FOUR_URL)

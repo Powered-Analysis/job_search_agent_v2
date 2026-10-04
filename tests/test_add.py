@@ -671,6 +671,135 @@ def test_off_four_page_without_jobposting_data_inserts_null_jd_with_supplied_val
     assert "job_posting.md" in output
 
 
+def descriptionless_page(**overrides):
+    node = {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        "title": "Staff Platform Engineer",
+        "hiringOrganization": {"@type": "Organization", "name": "Example Corp"},
+        "jobLocation": {
+            "@type": "Place",
+            "address": {"@type": "PostalAddress", "addressLocality": "Austin"},
+        },
+        **overrides,
+    }
+    return (
+        '<html><head><script type="application/ld+json">'
+        f"{json.dumps(node)}</script></head><body></body></html>"
+    )
+
+
+def test_no_input_off_four_jobposting_without_description_derives_company_and_title(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response(descriptionless_page())
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert row["company"] == "Example Corp"
+    assert row["title"] == "Staff Platform Engineer"
+    assert row["decision"] == "Apply"
+    assert row["search_agent"] == "manual"
+
+
+def test_off_four_jobposting_without_description_stores_null_jd_and_says_so(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response(descriptionless_page())
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert posting(conn, url)["jd_markdown"] is None
+    assert "job_posting.md" in output
+
+
+def test_off_four_jobposting_without_description_keeps_its_location(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response(descriptionless_page())
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert "Austin" in posting(conn, url)["location"]
+
+
+@pytest.mark.parametrize("description", ["", "   "])
+def test_off_four_jobposting_with_a_blank_description_is_treated_as_having_none(
+    db_url, conn, web, monkeypatch, capsys, description
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response(
+        descriptionless_page(description=description)
+    )
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert (row["company"], row["title"]) == ("Example Corp", "Staff Platform Engineer")
+    assert not row["jd_markdown"]
+    assert "job_posting.md" in output
+
+
+def test_off_four_jobposting_without_description_keeps_supplied_values(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response(descriptionless_page())
+    code, output = jsa_add(
+        monkeypatch,
+        capsys,
+        url,
+        "--company",
+        "Chosen Co",
+        "--title",
+        "My Own Title",
+        "--no-input",
+    )
+    assert code == 0, output
+    row = posting(conn, url)
+    assert (row["company"], row["title"]) == ("Chosen Co", "My Own Title")
+    assert row["jd_markdown"] is None
+    assert "Austin" in row["location"]
+
+
+def test_off_four_jobposting_without_description_title_only_still_needs_a_company(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response(
+        descriptionless_page(hiringOrganization=None)
+    )
+    code, _ = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code != 0
+    assert posting(conn, url) is None
+
+
+def test_without_a_tty_empty_lines_accept_the_derived_values_of_a_descriptionless_jobposting(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = off_four_url()
+    web.routes[page_key(url)] = html_response(descriptionless_page())
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert (row["company"], row["title"]) == ("Example Corp", "Staff Platform Engineer")
+    assert row["jd_markdown"] is None
+    assert "job_posting.md" in output
+
+
+def test_ashby_with_a_failed_ats_fetch_and_a_descriptionless_page_derives_from_it(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = f"https://jobs.ashbyhq.com/acme-widgets/{uuid.uuid4()}"
+    web.routes[page_key(url)] = html_response(descriptionless_page())
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert row["title"] == "Staff Platform Engineer"
+    assert row["jd_markdown"] is None
+    assert "job_posting.md" in output
+
+
 def test_off_four_malformed_jsonld_is_treated_as_no_data(
     db_url, conn, web, monkeypatch, capsys
 ):
