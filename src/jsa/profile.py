@@ -144,7 +144,7 @@ class Config(BaseModel):
     model_config = _STRICT
     candidate_name: str | None = None
     tracker_spreadsheet_id: NonEmptyStr | None = None
-    # The default is validated too, so its `~` is expanded like a configured value.
+    # validate_default: pydantic skips validators on defaults, and the default needs its `~` expanded too.
     packets_dir: Path = Field(
         Path("~/Documents/Job Applications"), validate_default=True
     )
@@ -226,13 +226,3 @@ def base_resume() -> Path:
     if not path.is_file() or path.stat().st_size == 0:
         raise JsaError(f"{path} is missing or empty. {_pointer('resume.docx')}")
     return path
-
-
-def checklist_settings(config: Config) -> AgentSettings:
-    """The checklist agent's model and effort (XC-14); a missing table raises before any row is processed."""
-    if config.agents.checklist is None:
-        raise JsaError(
-            f"{profile_dir() / 'config.toml'} has no [agents.checklist] table. "
-            f"{_pointer('config.toml')}"
-        )
-    return config.agents.checklist
