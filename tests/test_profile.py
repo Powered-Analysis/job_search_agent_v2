@@ -2,7 +2,9 @@
 configuration" (XC-11, XC-14): the profile's two TOML files load into typed config."""
 
 import re
+import zipfile
 from datetime import time
+from xml.etree import ElementTree
 
 import pytest
 from profile_helpers import (
@@ -98,12 +100,35 @@ def test_the_example_config_toml_names_the_recommended_checklist_and_refine_mode
     assert "claude-opus-5-5" in text
 
 
+WORD_NAMESPACE = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def docx_text(path) -> str:
+    """Everything a reader of the .docx could see: body, headers, footers, and link targets."""
+    lines = []
+    with zipfile.ZipFile(path) as archive:
+        for name in archive.namelist():
+            data = archive.read(name)
+            if name.startswith("word/_rels/"):
+                lines.append(data.decode("utf-8"))
+            elif name.startswith("word/") and name.endswith(".xml"):
+                for paragraph in ElementTree.fromstring(data).iter(
+                    WORD_NAMESPACE + "p"
+                ):
+                    runs = paragraph.iter(WORD_NAMESPACE + "t")
+                    lines.append("".join(t.text or "" for t in runs))
+    return "\n".join(lines)
+
+
 def test_the_example_profile_describes_no_real_person():
     email = re.compile(r"[\w.+-]+@(?!example\.(com|org|net)\b)[\w-]+\.[\w.-]+")
     phone = re.compile(r"\(?\b\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b")
     for path in EXAMPLE_DIR.rglob("*"):
         if path.is_file():
-            text = path.read_text(encoding="utf-8")
+            if path.suffix == ".docx":
+                text = docx_text(path)
+            else:
+                text = path.read_text(encoding="utf-8")
             assert not email.search(text), path
             assert not phone.search(text), path
             assert "linkedin.com/in/" not in text, path
