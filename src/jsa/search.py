@@ -14,9 +14,8 @@ from jsa import db
 from jsa.ats import resolve_ats
 from jsa.capture import CaptureError, capture_posting
 from jsa.claude import ClaudeRunner
-from jsa.errors import JsaError
 from jsa.perplexity import PerplexityRunner
-from jsa.profile import SearchConfig, load_search_config, profile_dir
+from jsa.profile import SearchConfig, claude_settings, load_search_config
 from jsa.runners import RunnerResult
 from jsa.search_output import parse_search_output
 from jsa.search_prompt import assemble_search_prompt
@@ -31,12 +30,7 @@ class Runner(Protocol):
 
 
 def _claude_runner(client: httpx.Client, config: SearchConfig) -> Runner:
-    if config.runners.claude is None:
-        raise JsaError(
-            f"{profile_dir() / 'search/search.toml'} has no [runners.claude] table. "
-            "Copy the shape from profile.example/search/search.toml."
-        )
-    return ClaudeRunner(config.runners.claude)
+    return ClaudeRunner(claude_settings(config))
 
 
 # The agents whose runner exists; the CLI offers exactly these.

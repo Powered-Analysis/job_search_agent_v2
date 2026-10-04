@@ -150,9 +150,16 @@ class Config(BaseModel):
         return path.expanduser()
 
 
+SEARCH_TOML = "search/search.toml"
+
+
+def _pointer(relative_path: str) -> str:
+    return f"Copy the shape from profile.example/{relative_path}."
+
+
 def _load[Model: BaseModel](relative_path: str, model: type[Model]) -> Model:
     path = profile_dir() / relative_path
-    pointer = f"Copy the shape from profile.example/{relative_path}."
+    pointer = _pointer(relative_path)
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -175,4 +182,13 @@ def load_config() -> Config:
 
 
 def load_search_config() -> SearchConfig:
-    return _load("search/search.toml", SearchConfig)
+    return _load(SEARCH_TOML, SearchConfig)
+
+
+def claude_settings(config: SearchConfig) -> AgentSettings:
+    if config.runners.claude is None:
+        raise JsaError(
+            f"{profile_dir() / SEARCH_TOML} has no [runners.claude] table. "
+            f"{_pointer(SEARCH_TOML)}"
+        )
+    return config.runners.claude

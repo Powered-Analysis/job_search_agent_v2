@@ -34,13 +34,13 @@ class AgentResult:
 
 
 def _failure(
-    subtype: str,
+    subtype: str | None,
     api_error_status: int | None,
     errors: list[str] | None,
     result: str | None,
 ) -> AgentError:
     # An API failure after a completed loop reports subtype "success", which says nothing.
-    details = [] if subtype == "success" else [subtype]
+    details = [subtype] if subtype not in (None, "success") else []
     if api_error_status is not None:
         details.append(f"HTTP {api_error_status}")
     details.extend(errors or [])
