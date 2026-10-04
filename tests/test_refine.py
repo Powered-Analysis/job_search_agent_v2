@@ -1227,6 +1227,51 @@ def test_an_optional_fragment_resolved_to_empty_is_accepted(
     assert not proposal_dir(profile).exists()
 
 
+@pytest.mark.parametrize(
+    "stray", ["", "\n\n", "- Not a fragment the refiner may change.\n"]
+)
+def test_a_stray_candidate_file_in_the_proposal_folder_never_blocks_an_accept(
+    stray, seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    resolve_all(profile, "proposed")
+    (proposal_dir(profile) / "candidate.md").write_text(stray, encoding="utf-8")
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code == 0, out
+    assert "candidate.md" not in out
+    assert live(profile, "filters.md").count("$150,000") == 1
+
+
+@pytest.mark.parametrize("stray", ["", "- Not a fragment the refiner may change.\n"])
+def test_accept_never_writes_a_stray_candidate_file_into_the_live_fragments(
+    stray, seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    resolve_all(profile, "proposed")
+    (proposal_dir(profile) / "candidate.md").write_text(stray, encoding="utf-8")
+    candidate = live(profile, "candidate.md")
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code == 0, out
+    assert live(profile, "candidate.md") == candidate
+    assert not proposal_dir(profile).exists()
+
+
+def test_a_stray_empty_candidate_file_does_not_hide_an_empty_required_fragment(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    resolve_all(profile, "proposed")
+    (proposal_dir(profile) / "candidate.md").write_text("", encoding="utf-8")
+    proposal_file = proposal_dir(profile) / "filters.md"
+    proposal_file.write_text("", encoding="utf-8")
+    before = live_snapshot(profile)
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code != 0
+    assert str(proposal_file) in out, out
+    assert "candidate.md" not in out, out
+    assert live_snapshot(profile) == before
+
+
 def test_reject_removes_the_proposal_and_leaves_the_live_fragments_unchanged(
     seed, refiner, profile, monkeypatch, capsys
 ):
