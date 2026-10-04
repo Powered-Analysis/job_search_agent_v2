@@ -1,0 +1,3 @@
+- Postings that read as heavy on machine-learning research or require a PhD.
+- Companies with a recent public round of layoffs.
+- Roles that list on-call rotations for the analytics team.

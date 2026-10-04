@@ -1,0 +1,4 @@
+- Mentions dbt, Snowflake, BigQuery, Looker, or Tableau.
+- The analytics team reports into product or engineering rather than finance.
+- Experimentation or A/B testing is part of the role.
+- Companies in e-commerce, logistics, or marketplaces.

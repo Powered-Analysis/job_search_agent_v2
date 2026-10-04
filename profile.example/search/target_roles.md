@@ -1,0 +1,6 @@
+- Senior Data Analyst
+- Analytics Engineer
+- Senior Analytics Engineer
+- Product Analyst (senior or staff level)
+- Business Intelligence Engineer
+- Data Analyst, Growth or Marketplace

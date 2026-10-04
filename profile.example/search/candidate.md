@@ -1,0 +1,3 @@
+Jordan Example is a data analyst with six years of experience in e-commerce and logistics. Jordan writes SQL daily, builds dashboards in Looker and Tableau, and has moved from reporting into analytics engineering, owning dbt models and the metrics layer for a mid-sized retailer. Jordan has run A/B test analyses with product teams and is comfortable presenting findings to non-technical stakeholders.
+
+Jordan is looking for a step up to a senior individual-contributor role at a company where data work shapes product decisions. Jordan lives in Chicago and prefers remote work, with occasional travel.

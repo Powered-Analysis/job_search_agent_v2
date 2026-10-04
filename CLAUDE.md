@@ -15,6 +15,8 @@ pytest and ruff are dev-only dependencies of the project.
 
 The app and its tests need `TURSO_DATABASE_URL`. In CI it is `http://127.0.0.1:8080`, a libSQL server container that starts empty for each job and takes no auth token.
 
+The user's profile lives in `profile/` (gitignored; `JSA_PROFILE_DIR` overrides the location). `profile.example/` is the committed copy with a fictional candidate; the app's profile loading is `src/jsa/profile.py`, and its prompt templates are in `src/jsa/templates/`.
+
 ## Conventions
 
 The team records the conventions it establishes here, through a PR. None are recorded yet.
