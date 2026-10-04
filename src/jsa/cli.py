@@ -13,7 +13,7 @@ from jsa.generate import generate
 from jsa.http import make_client
 from jsa.packet import build_packets
 from jsa.refetch import refetch
-from jsa.refine import refine
+from jsa.refine import accept, refine, reject
 from jsa.review import review
 from jsa.search import RUNNERS, Summary, search
 from jsa.tracker import track
@@ -54,7 +54,12 @@ def _track(args: argparse.Namespace) -> None:
 
 
 def _refine(args: argparse.Namespace) -> None:
-    refine(dry_run=args.dry_run)
+    if args.accept:
+        accept()
+    elif args.reject:
+        reject()
+    else:
+        refine(dry_run=args.dry_run)
 
 
 def _refetch(args: argparse.Namespace) -> None:
@@ -167,10 +172,21 @@ def main() -> None:
     refine_command = commands.add_parser(
         "refine", help="propose search-profile edits learned from your decisions"
     )
-    refine_command.add_argument(
+    refine_modes = refine_command.add_mutually_exclusive_group()
+    refine_modes.add_argument(
         "--dry-run",
         action="store_true",
         help="show the decisions in scope without calling the model or recording a run",
+    )
+    refine_modes.add_argument(
+        "--accept",
+        action="store_true",
+        help="replace your search fragments with the resolved proposal",
+    )
+    refine_modes.add_argument(
+        "--reject",
+        action="store_true",
+        help="discard the pending proposal and keep your search fragments",
     )
     refine_command.set_defaults(run=_refine)
     refetch_command = commands.add_parser(
