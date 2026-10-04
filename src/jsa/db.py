@@ -402,6 +402,16 @@ class PacketJob(NamedTuple):
     shares_name: bool
 
 
+_PACKET_JOB_COLUMNS = """
+    p.id, p.company, p.normalized_company, p.title, p.title_slug, p.url, p.jd_markdown,
+    EXISTS (
+        SELECT 1 FROM postings other
+        WHERE other.normalized_company = p.normalized_company
+            AND other.title_slug = p.title_slug AND other.id < p.id
+    )
+"""
+
+
 def packet_queue(conn: Connection, posting_id: int | None = None) -> list[PacketJob]:
     """Apply postings needing a packet, lowest id first (PRD 02).
 
@@ -414,12 +424,7 @@ def packet_queue(conn: Connection, posting_id: int | None = None) -> list[Packet
     )
     rows = conn.execute(
         f"""
-        SELECT p.id, p.company, p.normalized_company, p.title, p.title_slug, p.url, p.jd_markdown,
-            EXISTS (
-                SELECT 1 FROM postings other
-                WHERE other.normalized_company = p.normalized_company
-                    AND other.title_slug = p.title_slug AND other.id < p.id
-            )
+        SELECT {_PACKET_JOB_COLUMNS}
         FROM postings p
         WHERE p.decision = 'Apply' AND {scope}
         ORDER BY p.id
@@ -427,6 +432,35 @@ def packet_queue(conn: Connection, posting_id: int | None = None) -> list[Packet
         params,
     ).fetchall()
     return [PacketJob(*row) for row in rows]
+
+
+class RefetchTarget(NamedTuple):
+    job: PacketJob
+    location: str | None
+    search_agent: str
+
+
+def refetch_targets(
+    conn: Connection, *, posting_id: int | None = None, every_row: bool = False
+) -> list[RefetchTarget]:
+    """The postings refetch reconciles, lowest id first: Apply rows, every row, or one row by id (PRD 02)."""
+    scope, params = (
+        ("p.id = ?", (posting_id,))
+        if posting_id is not None
+        else ("1", ())
+        if every_row
+        else ("p.decision = 'Apply'", ())
+    )
+    rows = conn.execute(
+        f"""
+        SELECT {_PACKET_JOB_COLUMNS}, p.location, p.search_agent
+        FROM postings p
+        WHERE {scope}
+        ORDER BY p.id
+        """,
+        params,
+    ).fetchall()
+    return [RefetchTarget(PacketJob(*row[:8]), row[8], row[9]) for row in rows]
 
 
 def tracker_queue(conn: Connection, posting_id: int | None = None) -> list[tuple]:
