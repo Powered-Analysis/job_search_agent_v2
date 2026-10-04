@@ -1,9 +1,12 @@
 """`jsa deploy` (PRD 06): validate the search profile as the cloud will, then build the image and swap it onto the scheduled machine."""
 
 import json
+import shutil
+import tempfile
 from collections.abc import Sequence
 from datetime import UTC, datetime, time
 from itertools import pairwise
+from pathlib import Path
 from time import sleep
 
 from jsa.config import fly_bin
@@ -28,6 +31,15 @@ UPDATE_ATTEMPTS = 5
 UPDATE_RETRY_SECONDS = 5
 # A wake that slips past 23:59 lands on the next day and misses the day (PRD 01).
 LATEST_SAFE_RUN_AT = time(22, 59)
+# What the Dockerfile copies from the build context, apart from the profile.
+BUILD_INPUTS = (
+    "Dockerfile",
+    ".dockerignore",
+    "fly.toml",
+    "pyproject.toml",
+    "uv.lock",
+    "src",
+)
 _WEEK_MINUTES = 7 * 24 * 60
 _DAY_MINUTES = 24 * 60
 
@@ -125,9 +137,22 @@ def _fly(args: Sequence[str], app: str, *, capture: bool = False) -> str:
     return result.stdout or ""
 
 
+def _stage_build_context(stage: Path) -> None:
+    """Lay out the project with the validated search profile at ./profile/search, wherever it lives (XC-13)."""
+    for name in BUILD_INPUTS:
+        source = Path(name)
+        if source.is_dir():
+            shutil.copytree(source, stage / name)
+        else:
+            shutil.copy2(source, stage / name)
+    shutil.copytree(profile_dir() / SEARCH_DIR, stage / "profile" / SEARCH_DIR)
+
+
 def _build_and_push(app: str) -> str:
     label = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    _fly(["deploy", "--build-only", "--push", "--image-label", label], app)
+    with tempfile.TemporaryDirectory() as stage:
+        _stage_build_context(Path(stage))
+        _fly(["deploy", "--build-only", "--push", "--image-label", label, stage], app)
     return f"registry.fly.io/{app}:{label}"
 
 

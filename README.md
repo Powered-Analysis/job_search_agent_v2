@@ -105,7 +105,8 @@ in your database. The scheduled machine wakes hourly, and `jsa cron` runs the da
 at or after `run_at` on a scheduled day. Run `jsa deploy` again after any code change and after you
 accept a refine proposal.
 
-`jsa deploy` checks the search profile exactly as the cloud will before building anything. It warns,
+`jsa deploy` checks the search profile exactly as the cloud will before building anything, and ships
+that same directory into the image, wherever `JSA_PROFILE_DIR` points. It warns,
 without stopping, when the schedule leaves hours of the week unsearched, when `run_at` is after
 22:59, and when a refine proposal is pending (it will not ship).
 
