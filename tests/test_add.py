@@ -800,6 +800,92 @@ def test_ashby_with_a_failed_ats_fetch_and_a_descriptionless_page_derives_from_i
     assert "job_posting.md" in output
 
 
+ATS_PAGE_URLS = {
+    "ashby": lambda: f"https://jobs.ashbyhq.com/acme-widgets/{uuid.uuid4()}",
+    "rippling": lambda: f"https://ats.rippling.com/acme-widgets/jobs/{uuid.uuid4()}",
+}
+
+
+@pytest.mark.parametrize("platform", ATS_PAGE_URLS)
+def test_a_failed_ats_fetch_and_a_descriptionless_page_takes_company_from_the_board_slug(
+    platform, db_url, conn, web, monkeypatch, capsys
+):
+    url = ATS_PAGE_URLS[platform]()
+    web.routes[page_key(url)] = html_response(descriptionless_page())
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert (row["company"], row["title"]) == ("Acme Widgets", "Staff Platform Engineer")
+    assert row["jd_markdown"] is None
+    assert "job_posting.md" in output
+
+
+@pytest.mark.parametrize("platform", ATS_PAGE_URLS)
+def test_a_failed_ats_fetch_and_a_descriptionless_page_keeps_supplied_values(
+    platform, db_url, conn, web, monkeypatch, capsys
+):
+    url = ATS_PAGE_URLS[platform]()
+    web.routes[page_key(url)] = html_response(descriptionless_page())
+    code, output = jsa_add(
+        monkeypatch,
+        capsys,
+        url,
+        "--company",
+        "Chosen Co",
+        "--title",
+        "My Own Title",
+        "--no-input",
+    )
+    assert code == 0, output
+    row = posting(conn, url)
+    assert (row["company"], row["title"]) == ("Chosen Co", "My Own Title")
+    assert row["jd_markdown"] is None
+
+
+def test_without_a_tty_empty_lines_accept_what_a_descriptionless_page_offers_after_a_failed_ats_fetch(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = ATS_PAGE_URLS["ashby"]()
+    web.routes[page_key(url)] = html_response(descriptionless_page())
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert (row["company"], row["title"]) == ("Acme Widgets", "Staff Platform Engineer")
+    assert row["jd_markdown"] is None
+
+
+def test_a_failed_ats_fetch_and_a_descriptionless_page_without_a_title_cannot_derive_one(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = ATS_PAGE_URLS["ashby"]()
+    web.routes[page_key(url)] = html_response(descriptionless_page(title=None))
+    code, _ = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code != 0
+    assert posting(conn, url) is None
+
+
+def test_a_failed_ats_fetch_and_a_blank_description_page_is_treated_as_having_none(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = ATS_PAGE_URLS["ashby"]()
+    web.routes[page_key(url)] = html_response(descriptionless_page(description="  "))
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert row["title"] == "Staff Platform Engineer"
+    assert row["jd_markdown"] is None
+
+
+def test_greenhouse_with_a_failed_ats_fetch_ignores_a_descriptionless_page_title(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = gh_url()
+    web.routes[page_key(url)] = html_response(descriptionless_page())
+    code, _ = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code != 0
+    assert posting(conn, url) is None
+
+
 def test_off_four_malformed_jsonld_is_treated_as_no_data(
     db_url, conn, web, monkeypatch, capsys
 ):

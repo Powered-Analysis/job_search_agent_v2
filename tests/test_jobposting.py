@@ -300,6 +300,20 @@ def test_rippling_with_a_failed_ats_fetch_falls_back_to_the_page_jobposting():
     assert [r.url.path for r in pages.requests][-1] == httpx.URL(url).path
 
 
+RIPPLING_URL = (
+    "https://ats.rippling.com/acme-widgets/jobs/c4b5a697-8f0e-4a1b-8c2d-3e4f5a6b7c8d"
+)
+
+
+@pytest.mark.parametrize("url", [ASHBY_URL, RIPPLING_URL], ids=["ashby", "rippling"])
+def test_a_failed_ats_fetch_and_a_descriptionless_page_is_still_a_capture_error(url):
+    page = json_ld_page(
+        {"@context": "https://schema.org", "@type": "JobPosting", "title": "Engineer"}
+    )
+    with pytest.raises(CaptureError):
+        run_capture(Pages({page_route(url): page}), url)
+
+
 @pytest.mark.parametrize("url", [GH_URL, LEVER_URL], ids=["greenhouse", "lever"])
 def test_greenhouse_and_lever_never_fall_back_to_the_page(url):
     pages = Pages({page_route(url): json_ld_page(job_posting())})
