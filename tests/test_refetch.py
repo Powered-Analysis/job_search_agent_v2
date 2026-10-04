@@ -701,6 +701,166 @@ def test_a_taken_resume_file_name_blocks_the_rename_and_flags_the_row(
     assert (folder / "notes.txt").exists()
 
 
+def test_a_retitle_that_frees_a_shared_name_renames_the_other_postings_packet(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    first, second = seed(rdb), seed(rdb)
+    make_packet(rdb, packets, first)
+    second_folder = make_packet(rdb, packets, second, directory=f"{OLD_DIR} ({second})")
+    second_files = tree(second_folder)
+    employer(web, rdb, first)
+    set_sheet(gws, (first, ""))
+    code, _ = refetch(monkeypatch, capsys, "--id", first)
+    assert code == 0
+    assert {path.name for path in packets.iterdir()} == {NEW_DIR, OLD_DIR}
+    assert (packets / NEW_DIR / NEW_COPY).exists()
+    assert tree(packets / OLD_DIR) == second_files
+
+
+def test_a_retitle_onto_another_postings_name_gives_that_posting_the_suffix(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    first = seed(rdb, title=NEW_TITLE)
+    second = seed(rdb)
+    make_packet(rdb, packets, first, directory=NEW_DIR, copy=NEW_COPY)
+    second_folder = make_packet(rdb, packets, second)
+    second_files = tree(second_folder)
+    employer(web, rdb, first, title=OLD_TITLE)
+    set_sheet(gws, (first, ""))
+    refetch(monkeypatch, capsys, "--id", first)
+    suffixed = packets / f"{OLD_DIR} ({second})"
+    assert tree(suffixed) == second_files
+
+
+def test_no_packet_file_is_lost_when_other_postings_packets_are_reconciled(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    first, second = seed(rdb), seed(rdb)
+    make_packet(rdb, packets, first)
+    make_packet(rdb, packets, second, directory=f"{OLD_DIR} ({second})")
+    notes = sorted(path.read_text() for path in packets.rglob("notes.txt"))
+    revised = {path.read_bytes() for path in packets.rglob("*.docx")}
+    employer(web, rdb, first)
+    set_sheet(gws, (first, ""))
+    refetch(monkeypatch, capsys, "--id", first)
+    assert sorted(path.read_text() for path in packets.rglob("notes.txt")) == notes
+    assert revised <= {path.read_bytes() for path in packets.rglob("*.docx")}
+
+
+def test_the_other_postings_resume_copy_keeps_its_name_and_the_user_revision(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    first, second = seed(rdb), seed(rdb)
+    make_packet(rdb, packets, first)
+    second_folder = make_packet(rdb, packets, second, directory=f"{OLD_DIR} ({second})")
+    revised = (second_folder / OLD_COPY).read_bytes()
+    employer(web, rdb, first)
+    set_sheet(gws, (first, ""))
+    refetch(monkeypatch, capsys, "--id", first)
+    assert (packets / OLD_DIR / OLD_COPY).read_bytes() == revised
+
+
+def test_a_taken_name_leaves_the_other_postings_packet_in_place_and_flags_the_run(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    first, second = seed(rdb), seed(rdb)
+    first_folder = make_packet(rdb, packets, first)
+    suffixed = f"{OLD_DIR} ({second})"
+    second_folder = make_packet(rdb, packets, second, directory=suffixed)
+    squatter = packets / NEW_DIR
+    squatter.mkdir()
+    (squatter / "theirs.txt").write_text("someone else's packet", encoding="utf-8")
+    before = {path: tree(path) for path in (first_folder, second_folder, squatter)}
+    employer(web, rdb, first)
+    set_sheet(gws, (first, ""))
+    code, _ = refetch(monkeypatch, capsys, "--id", first)
+    assert code != 0
+    assert {path.name for path in packets.iterdir()} == {OLD_DIR, suffixed, NEW_DIR}
+    for path, files in before.items():
+        assert tree(path) == files
+
+
+def test_a_posting_without_a_packet_gets_none_when_another_is_retitled(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    first = seed(rdb)
+    seed(rdb)
+    make_packet(rdb, packets, first)
+    employer(web, rdb, first)
+    set_sheet(gws, (first, ""))
+    code, _ = refetch(monkeypatch, capsys, "--id", first)
+    assert code == 0
+    assert {path.name for path in packets.iterdir()} == {NEW_DIR}
+
+
+def test_a_retitle_leaves_packets_of_other_names_and_companies_alone(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    first = seed(rdb)
+    other_title = seed(rdb, title="Data Engineer")
+    other_company = seed(rdb, company="Globex Corporation")
+    make_packet(rdb, packets, first)
+    make_packet(
+        rdb,
+        packets,
+        other_title,
+        directory="Acme Widgets - Data Engineer",
+        copy="x.docx",
+    )
+    make_packet(
+        rdb, packets, other_company, directory="Globex - Staff Engineer", copy="y.docx"
+    )
+    untouched = {
+        name: tree(packets / name)
+        for name in ("Acme Widgets - Data Engineer", "Globex - Staff Engineer")
+    }
+    employer(web, rdb, first)
+    set_sheet(gws, (first, ""))
+    code, _ = refetch(monkeypatch, capsys, "--id", first)
+    assert code == 0
+    for name, files in untouched.items():
+        assert tree(packets / name) == files
+    assert {path.name for path in packets.iterdir()} == {NEW_DIR, *untouched}
+
+
+def test_a_dry_run_renames_no_other_postings_packet(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    first, second = seed(rdb), seed(rdb)
+    make_packet(rdb, packets, first)
+    make_packet(rdb, packets, second, directory=f"{OLD_DIR} ({second})")
+    employer(web, rdb, first)
+    set_sheet(gws, (first, ""))
+    files, times = tree(packets), stamps(packets)
+    code, _ = refetch(monkeypatch, capsys, "--dry-run", "--id", first)
+    assert code == 0
+    assert tree(packets) == files and stamps(packets) == times
+
+
+def test_a_second_refetch_after_reconciling_other_packets_changes_nothing(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    first, second = seed(rdb), seed(rdb)
+    make_packet(rdb, packets, first)
+    make_packet(rdb, packets, second, directory=f"{OLD_DIR} ({second})")
+    employer(web, rdb, first)
+    set_sheet(gws, (first, ""))
+    refetch(monkeypatch, capsys, "--id", first)
+    files = tree(packets)
+    code, _ = refetch(monkeypatch, capsys, "--id", first)
+    assert code == 0
+    assert tree(packets) == files
+
+
 def test_a_failed_regenerate_is_flagged_and_nothing_is_rolled_back(
     rdb, web, gws, env, agent, monkeypatch, capsys
 ):
