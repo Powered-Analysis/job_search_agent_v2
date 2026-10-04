@@ -8,6 +8,7 @@ No test reaches the network, and none needs the database.
 
 import json
 import re
+import shutil
 import stat
 import sys
 import tomllib
@@ -30,15 +31,20 @@ from jsa import cli
 
 # Logs argv to $STUB_LOG, answers a machine listing from $STUB_MACHINES, and fails any call whose
 # subcommand is named in $STUB_FAIL (exit 1). `machine update` fails its first $STUB_UPDATE_FAILS
-# attempts, as a registry that hasn't caught up with the push would.
+# attempts, as a registry that hasn't caught up with the push would. When $STUB_SNAPSHOT is set, a
+# `deploy` call copies its build context (the directory named in its arguments, else its working
+# directory) there, since the app may delete the context once the build returns.
 STUB = """\
 #!{python}
-import json, os, sys
+import json, os, shutil, sys
 
 argv = sys.argv[1:]
 with open(os.environ["STUB_LOG"], "a") as log:
     log.write(json.dumps(argv) + "\\n")
 words = [a for a in argv if not a.startswith("-")]
+if "STUB_SNAPSHOT" in os.environ and words[:1] == ["deploy"]:
+    context = ([a for a in argv if os.path.isdir(a)] or [os.getcwd()])[-1]
+    shutil.copytree(context, os.environ["STUB_SNAPSHOT"], dirs_exist_ok=True)
 if words[:1] and words[0] in os.environ.get("STUB_FAIL", "").split(","):
     print("boom", file=sys.stderr)
     sys.exit(1)
@@ -71,7 +77,7 @@ def fly(tmp_path, monkeypatch):
     log = tmp_path / "fly.log"
     monkeypatch.setenv("JSA_FLY_BIN", str(stub))
     monkeypatch.setenv("STUB_LOG", str(log))
-    for name in ("STUB_FAIL", "STUB_MACHINES", "STUB_UPDATE_FAILS"):
+    for name in ("STUB_FAIL", "STUB_MACHINES", "STUB_UPDATE_FAILS", "STUB_SNAPSHOT"):
         monkeypatch.delenv(name, raising=False)
     # A retry for registry lag must not slow the suite, whichever way the app sleeps.
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
@@ -818,6 +824,168 @@ def test_build_context_keeps_the_app_and_drops_secrets():
     assert in_build_context("uv.lock")
     assert not in_build_context(".env")
     assert not in_build_context(".git/config")
+
+
+# --- the build context ships exactly the validated search profile (issue #52; XC-11, XC-13) ----------
+
+DECOY = "DECOY: a profile that was never validated\n"
+SHIPPED_FRAGMENT = "The validated candidate.\n"
+
+
+def dockerfile_copy_sources() -> list[str]:
+    """The project paths the Dockerfile copies into the image, apart from the profile."""
+    sources = []
+    for keyword, args in dockerfile_instructions():
+        if keyword == "COPY" and "--from" not in args:
+            words = [w for w in args.split() if not w.startswith("--")]
+            sources += [w.removeprefix("./") for w in words[:-1]]
+    return [source for source in sources if not source.startswith("profile")]
+
+
+@pytest.fixture
+def project(fly, tmp_path, monkeypatch):
+    """A project folder (the Dockerfile's inputs plus a decoy ./profile) as the working directory.
+
+    The validated profile lives elsewhere, as when JSA_PROFILE_DIR points outside the project.
+    Returns the validated profile, the decoy ./profile, and the directory the build context is copied to.
+    """
+    root = tmp_path / "project"
+    root.mkdir()
+    for name in (*dockerfile_copy_sources(), "Dockerfile", ".dockerignore", "fly.toml"):
+        source = REPO_ROOT / name
+        if source.is_dir():
+            shutil.copytree(
+                source, root / name, ignore=shutil.ignore_patterns("__pycache__")
+            )
+        else:
+            shutil.copy2(source, root / name)
+    decoy = root / "profile"
+    (decoy / "search").mkdir(parents=True)
+    (decoy / "search" / "candidate.md").write_text(DECOY)
+    (decoy / "search" / "decoy_only.md").write_text(DECOY)
+    (decoy / "search" / "search.toml").write_text(DECOY)
+    (decoy / "refine").mkdir()
+    (decoy / "refine" / "rationale.md").write_text(DECOY)
+    (decoy / "config.toml").write_text(DECOY)
+    validated, _ = fly
+    (validated / "search" / "candidate.md").write_text(SHIPPED_FRAGMENT)
+    (validated / "refine").mkdir()
+    (validated / "refine" / "rationale.md").write_text("never ships\n")
+    snapshot = tmp_path / "context"
+    monkeypatch.setenv("STUB_SNAPSHOT", str(snapshot))
+    monkeypatch.chdir(root)
+    return validated, decoy, snapshot
+
+
+def tree(directory: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(directory).as_posix(): path.read_bytes()
+        for path in sorted(directory.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_build_context_carries_the_validated_search_profile_not_the_project_profile(
+    project, monkeypatch, capsys
+):
+    validated, _, snapshot = project
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    assert tree(snapshot / "profile" / "search") == tree(validated / "search")
+
+
+def test_build_context_holds_nothing_from_the_project_profile(
+    project, monkeypatch, capsys
+):
+    _, _, snapshot = project
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    for path, content in tree(snapshot).items():
+        assert content != DECOY.encode(), path
+    assert not (snapshot / "profile" / "search" / "decoy_only.md").exists()
+
+
+def test_build_context_profile_holds_only_search(project, monkeypatch, capsys):
+    validated, _, snapshot = project
+    (validated / "notes.txt").write_text("private\n")
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    shipped = {
+        path.split("/")[1] for path in tree(snapshot) if path.startswith("profile/")
+    }
+    assert shipped == {"search"}
+
+
+def test_build_context_ships_nested_search_files(project, monkeypatch, capsys):
+    validated, _, snapshot = project
+    (validated / "search" / "extra").mkdir()
+    (validated / "search" / "extra" / "more.md").write_text("nested\n")
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    assert (snapshot / "profile" / "search" / "extra" / "more.md").read_text() == (
+        "nested\n"
+    )
+
+
+def test_dry_run_lists_the_files_the_build_context_ships(project, monkeypatch, capsys):
+    validated, _, snapshot = project
+    (validated / "search" / "extra").mkdir()
+    (validated / "search" / "extra" / "more.md").write_text("nested\n")
+    _, listing = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    for path in tree(snapshot / "profile" / "search"):
+        assert Path(path).name in listing
+    assert "decoy_only.md" not in listing
+
+
+def test_smoke_build_context_carries_the_validated_search_profile(
+    project, monkeypatch, capsys
+):
+    validated, _, snapshot = project
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    assert jsa_deploy(monkeypatch, capsys, "--smoke")[0] == 0
+    assert tree(snapshot / "profile" / "search") == tree(validated / "search")
+
+
+def test_build_context_carries_what_the_dockerfile_copies(project, monkeypatch, capsys):
+    _, _, snapshot = project
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    assert (snapshot / "Dockerfile").read_bytes() == (
+        REPO_ROOT / "Dockerfile"
+    ).read_bytes()
+    for source in dockerfile_copy_sources():
+        assert (snapshot / source).exists(), source
+    assert (snapshot / "src" / "jsa" / "cli.py").is_file()
+
+
+def test_build_context_leaves_out_secrets_and_dev_files(project, monkeypatch, capsys):
+    _, _, snapshot = project
+    root = Path.cwd()
+    (root / ".env").write_text("SECRET=1\n")
+    (root / "tests").mkdir()
+    (root / "tests" / "test_x.py").write_text("x\n")
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    for path in tree(snapshot):
+        assert in_build_context(path), path
+
+
+def test_default_profile_dir_ships_its_own_search_profile(project, monkeypatch, capsys):
+    _, decoy, snapshot = project
+    monkeypatch.delenv("JSA_PROFILE_DIR")
+    shutil.rmtree(decoy)
+    copy_example(decoy)
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    assert tree(snapshot / "profile" / "search") == tree(decoy / "search")
+    assert not (snapshot / "profile" / "config.toml").exists()
+
+
+def test_an_invalid_validated_profile_builds_nothing_even_with_a_valid_project_profile(
+    project, monkeypatch, capsys
+):
+    validated, decoy, snapshot = project
+    shutil.rmtree(decoy)
+    copy_example(decoy)
+    (validated / "search" / "filters.md").unlink()
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code != 0
+    assert not snapshot.exists()
 
 
 # --- fly.toml -------------------------------------------------------------------------
