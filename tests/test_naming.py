@@ -85,3 +85,42 @@ def test_naming_pure_no_network(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", forbidden)
     assert normalize_company("Acme Widgets, Inc.") == "Acme Widgets"
     assert title_slug("Senior Engineer")
+
+
+@pytest.mark.parametrize(
+    "company",
+    [
+        "Acme & Co",
+        "Acme and Co.",
+        "Acme AND CO",
+        "acme & co.",
+        "Acme, and Co",
+        "Acme & Co, Inc.",
+        "Acme and Co Ltd",
+        "Acme & Inc",
+        "  Acme & Co  ",
+    ],
+)
+def test_company_connector_trimmed_with_suffix(company):
+    assert normalize_company(company) == "Acme"
+
+
+@pytest.mark.parametrize(
+    "company, expected",
+    [
+        ("Black & Decker", "Black & Decker"),
+        ("Johnson and Johnson", "Johnson And Johnson"),
+        ("Procter & Gamble", "Procter & Gamble"),
+        ("Fish and Chips Inc", "Fish And Chips"),
+        ("Acme Widgets, Inc.", "Acme Widgets"),
+        ("Brand Co", "Brand"),
+        ("Sand Inc", "Sand"),
+        ("Acme Widgets & Gadgets LLC", "Acme Widgets & Gadgets"),
+    ],
+)
+def test_company_connector_kept_when_no_suffix_follows(company, expected):
+    assert normalize_company(company) == expected
+
+
+def test_company_connector_without_suffix_is_left_alone():
+    assert normalize_company("Acme &") == "Acme &"
