@@ -41,15 +41,20 @@ def _unapplied(index: dict[int, tracker.SheetRow], posting_id: int) -> bool:
     return row is None or not row.date_applied
 
 
+def _taken(name: Path, source: Path) -> bool:
+    # A case-insensitive disk (macOS) finds the source itself under a case-only new name; that is no clash.
+    return name.exists() and not (source.exists() and name.samefile(source))
+
+
 def _rename_packet(
     old_directory: Path, old_copy: Path, new_directory: Path, new_copy: Path
 ) -> str | None:
     """Move the packet to its new names; returns why nothing was renamed when a name is taken."""
-    if new_directory != old_directory and new_directory.exists():
+    if _taken(new_directory, old_directory):
         return f"{new_directory} already exists"
     renamed_copy = old_directory / new_copy.name
     copy_moves = new_copy.name != old_copy.name
-    if copy_moves and renamed_copy.exists():
+    if copy_moves and _taken(renamed_copy, old_copy):
         return f"{renamed_copy} already exists"
     # The copy moves first: if the folder rename then fails, the user's edits still sit under the name
     # the regenerated packet would look for, and nothing is ever copied over them.
