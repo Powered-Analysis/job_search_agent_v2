@@ -38,6 +38,14 @@ class JobPosting:
     valid_through: str | None
 
 
+class NoDescriptionError(CaptureError):
+    """A page's `JobPosting` has no description; `posting` still holds its other fields."""
+
+    def __init__(self, posting: JobPosting):
+        super().__init__("the page's JobPosting has no job description")
+        self.posting = posting
+
+
 def html_to_markdown(markup: str) -> str:
     return markdownify(markup, heading_style="ATX").strip()
 
@@ -287,9 +295,9 @@ def _page_capture(markup: str) -> Capture:
     posting = extract_job_posting(markup)
     if posting is None:
         raise CaptureError("the page carries no schema.org JobPosting data")
-    return _build(
-        posting.jd_markdown or "", posting.title, posting.location, posting.company
-    )
+    if not posting.jd_markdown:
+        raise NoDescriptionError(posting)
+    return _build(posting.jd_markdown, posting.title, posting.location, posting.company)
 
 
 def capture_page(
