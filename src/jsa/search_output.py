@@ -6,16 +6,15 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Annotated
 
-from pydantic import BaseModel, StringConstraints, ValidationError, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 
 from jsa.errors import JsaError
+from jsa.profile import NonEmptyStr
 
 log = logging.getLogger(__name__)
 
 _OPENER = re.compile(r"[{\[]")
-_Required = Annotated[str, StringConstraints(strict=True, min_length=1)]
 
 
 class SearchOutputError(JsaError):
@@ -25,9 +24,9 @@ class SearchOutputError(JsaError):
 class Posting(BaseModel):
     """One posting of the wire contract; the only definition of its shape."""
 
-    company: _Required
-    title: _Required
-    url: _Required
+    company: NonEmptyStr
+    title: NonEmptyStr
+    url: NonEmptyStr
     date_posted: str | None = None
 
     @field_validator("date_posted", mode="before")

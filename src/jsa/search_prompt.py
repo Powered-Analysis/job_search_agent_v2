@@ -1,6 +1,6 @@
 """The one search prompt every runner sends (PRD 01, XC-13)."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from jsa.assemble import Slot, app_template, assemble
 from jsa.profile import SearchConfig, profile_dir
@@ -25,7 +25,7 @@ def search_window(hours: int, now: datetime, config: SearchConfig) -> str:
     def render(moment: datetime) -> str:
         return f"{moment.astimezone(config.tz):%a %Y-%m-%d %H:%M %Z}"
 
-    start = now - timedelta(hours=hours)
+    start = now.astimezone(UTC) - timedelta(hours=hours)
     return f"the last {hours} hours (from {render(start)} through {render(now)})"
 
 

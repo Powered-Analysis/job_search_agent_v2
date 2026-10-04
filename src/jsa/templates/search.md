@@ -48,13 +48,19 @@ Hard, company-level or posting-level tests. They are subordinate to the liveness
 
 ## Positive signals
 
+Query seeds and in-scope confirmation. The absence of a positive signal never excludes a posting.
+
 {{POSITIVE_SIGNALS}}
 
 ## Negative signals
 
+Steer verification effort only. Never exclude a posting because of one.
+
 {{NEGATIVE_SIGNALS}}
 
 ## Hard exclusions
+
+The only content-based drops. Judged on the job title alone.
 
 {{HARD_EXCLUSIONS}}
 

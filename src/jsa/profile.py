@@ -23,9 +23,9 @@ from jsa.errors import JsaError
 
 # An unknown key raises, so a typo never silently falls back to a default.
 _STRICT = ConfigDict(extra="forbid", frozen=True)
-_NonEmpty = Annotated[str, StringConstraints(strict=True, min_length=1)]
+# XC-14: model and agent are checked only for being non-empty, never against a list of allowed values.
+NonEmptyStr = Annotated[str, StringConstraints(strict=True, min_length=1)]
 _RUN_AT = re.compile(r"([01]\d|2[0-3]):([0-5]\d)")
-# XC-14: only the form of model, effort, and agent is checked, never a list of allowed values.
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
@@ -35,7 +35,7 @@ def profile_dir() -> Path:
 
 class AgentSettings(BaseModel):
     model_config = _STRICT
-    model: _NonEmpty
+    model: NonEmptyStr
     effort: Effort
 
 
@@ -65,7 +65,7 @@ class Schedule(BaseModel):
 
 class GeminiRunner(BaseModel):
     model_config = _STRICT
-    agent: _NonEmpty
+    agent: NonEmptyStr
 
 
 class Runners(BaseModel):
@@ -84,7 +84,7 @@ class SearchConfig(BaseModel):
     """`profile/search/search.toml`."""
 
     model_config = _STRICT
-    timezone: _NonEmpty
+    timezone: NonEmptyStr
     run_at: time
     schedule: Schedule = Schedule()
     runners: Runners = Runners()
@@ -124,8 +124,8 @@ class SearchConfig(BaseModel):
 
 class FlyConfig(BaseModel):
     model_config = _STRICT
-    app: _NonEmpty
-    region: _NonEmpty
+    app: NonEmptyStr
+    region: NonEmptyStr
 
 
 class AgentsConfig(BaseModel):
@@ -139,7 +139,7 @@ class Config(BaseModel):
 
     model_config = _STRICT
     candidate_name: str | None = None
-    tracker_spreadsheet_id: _NonEmpty | None = None
+    tracker_spreadsheet_id: NonEmptyStr | None = None
     packets_dir: Path = Path("~/Documents/Job Applications")
     fly: FlyConfig | None = None
     agents: AgentsConfig = AgentsConfig()
