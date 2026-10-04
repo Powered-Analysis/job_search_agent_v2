@@ -184,12 +184,11 @@ def _reconcile(
         return []
     title_changed = title is not None and title != job.title
     drift = title_changed or captured.jd_markdown != job.jd_markdown
-    old_directory, old_copy = packet_paths(config, job)
-    has_packet = old_directory.is_dir()
     if dry_run:
+        directory = packet_paths(config, job)[0]
         print(f"would update: posting {job.id}: {', '.join(changes)}")
-        if has_packet and drift:
-            print(f"would refresh the packet: {old_directory}")
+        if directory.is_dir() and drift:
+            print(f"would refresh the packet: {directory}")
         return []
     # A fresh connection: the server drops one left idle through the previous row's checklist run.
     with closing(db.connect()) as conn:
@@ -204,6 +203,10 @@ def _reconcile(
         fresh = db.refetch_targets(conn, posting_id=job.id)[0].job
         after = db.company_packet_jobs(conn, job.normalized_company)
     print(f"updated: posting {job.id}: {', '.join(changes)}")
+    # The packet is looked up as the posting stands now: an earlier row's retitle may have renamed its folder.
+    current = next(row for row in before if row.id == job.id)
+    old_directory, old_copy = packet_paths(config, current)
+    has_packet = old_directory.is_dir()
     fixes = []
     sheet_row = index.get(job.id) if index is not None else None
     if title_changed and sheet_row and not sheet_row.date_applied:
