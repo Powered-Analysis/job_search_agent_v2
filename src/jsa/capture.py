@@ -41,8 +41,8 @@ class JobPosting:
 class NoDescriptionError(CaptureError):
     """A page's `JobPosting` has no description; `posting` still holds its other fields."""
 
-    def __init__(self, posting: JobPosting):
-        super().__init__("the page's JobPosting has no job description")
+    def __init__(self, posting: JobPosting, message: str | None = None):
+        super().__init__(message or "the page's JobPosting has no job description")
         self.posting = posting
 
 
@@ -332,5 +332,10 @@ def capture_posting(
             raise
         try:
             return capture_page(client, url, page_html)
+        except NoDescriptionError as page_error:
+            # Keep the page's title and company for the caller.
+            raise NoDescriptionError(
+                page_error.posting, f"{ats_error}; {page_error}"
+            ) from page_error
         except CaptureError as page_error:
             raise CaptureError(f"{ats_error}; {page_error}") from page_error
