@@ -94,6 +94,14 @@ def test_the_example_search_toml_carries_the_prd_blocks_and_comments():
         assert required in text, required
 
 
+def test_the_example_search_toml_describes_the_perplexity_runner_as_high_on_flex():
+    text = (EXAMPLE_DIR / "search" / "search.toml").read_text(encoding="utf-8")
+    assert '"high"' in text
+    assert '"flex"' in text
+    assert "30-step" in text
+    assert "xhigh" not in text
+
+
 def test_the_example_config_toml_names_the_recommended_checklist_and_refine_models():
     text = (EXAMPLE_DIR / "config.toml").read_text(encoding="utf-8")
     assert "claude-fable-5-1" in text

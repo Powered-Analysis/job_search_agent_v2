@@ -424,6 +424,17 @@ def test_request_body_pins_the_high_preset_on_flex_with_only_a_step_override():
         assert forbidden not in body
 
 
+def test_request_body_carries_nothing_beyond_the_preset_tier_step_cap_and_io():
+    assert set(request_body("p")) == {
+        "preset",
+        "service_tier",
+        "max_steps",
+        "input",
+        "stream",
+        "response_format",
+    }
+
+
 def test_request_body_enforces_the_output_contract_as_a_json_schema():
     response_format = request_body("p")["response_format"]
     assert response_format["type"] == "json_schema"
@@ -554,6 +565,59 @@ def test_the_closing_line_reports_the_tier_and_the_research_steps(web, profile, 
     closing = [r.getMessage() for r in caplog.records if r.name.startswith("jsa")][-1]
     assert "default" in closing
     assert "3" in closing
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        "response.reasoning.started",
+        "response.reasoning.search_queries",
+        "response.fetch_url.started",
+        "response.created",
+    ],
+)
+def test_events_other_than_search_and_fetch_results_are_not_research_steps(event):
+    assert changed_values(StreamState(), fold_events([(event, {})])) == []
+
+
+def test_a_completed_event_without_a_service_tier_still_closes_the_run(
+    web, profile, caplog
+):
+    web.routes[PERPLEXITY] = event_stream(
+        [
+            ("response.output_text.done", {"text": answer_with([])}),
+            ("response.completed", {"response": {"model": MODEL}}),
+        ]
+    )
+    caplog.set_level(logging.INFO, logger="jsa")
+    with make_client() as client:
+        result = PerplexityRunner(client).run("a prompt")
+    assert json.loads(result.text) == {"postings": []}
+    assert result.model == MODEL
+
+
+def test_the_closing_line_counts_every_research_step(web, profile, caplog):
+    web.perplexity(answer_with([]), steps=41)
+    caplog.set_level(logging.INFO, logger="jsa")
+    with make_client() as client:
+        PerplexityRunner(client).run("a prompt")
+    closing = [r.getMessage() for r in caplog.records if r.name.startswith("jsa")][-1]
+    assert "41" in closing
+    assert "flex" in closing
+    assert MODEL in closing
+
+
+def test_the_trace_never_mentions_the_retired_sandbox(
+    web, profile, monkeypatch, caplog
+):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Tick(1)))
+    web.perplexity(answer_with([]), steps=20, deltas=["x"] * 20)
+    caplog.set_level(logging.INFO, logger="jsa")
+    with make_client() as client:
+        PerplexityRunner(client).run("a prompt")
+    traced = [r.getMessage() for r in caplog.records if r.name.startswith("jsa")]
+    assert len(traced) > 1
+    assert not any("sandbox" in line.lower() for line in traced)
 
 
 def test_fold_ignores_events_it_does_not_know():
