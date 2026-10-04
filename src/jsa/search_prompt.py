@@ -1,5 +1,6 @@
 """The one search prompt every runner sends (PRD 01, XC-13)."""
 
+from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -42,10 +43,9 @@ def read_fragment(filename: str) -> str | None:
         return None
 
 
-def _read_fragment(name: str, filename: str, replacements_dir: Path | None) -> Slot:
+def _read_fragment(name: str, filename: str, replacement: Path | None) -> Slot:
     required = FRAGMENTS[name][1]
-    if replacements_dir is not None and (replacements_dir / filename).is_file():
-        replacement = replacements_dir / filename
+    if replacement is not None and replacement.is_file():
         return Slot(replacement.read_text(encoding="utf-8"), str(replacement), required)
     return Slot(
         read_fragment(filename),
@@ -62,11 +62,13 @@ def assemble_search_prompt_for(
     config: SearchConfig,
     window: str,
     replacements_dir: Path | None = None,
+    replaceable: Collection[str] | None = None,
 ) -> str:
     """The search prompt with `window` in the window slot, for a caller with no run of its own.
 
     A fragment file in `replacements_dir` is used in place of the live one, so a proposed change
-    can be checked before it is accepted; an error about it names the file the user must fix."""
+    can be checked before it is accepted; an error about it names the file the user must fix.
+    Only the fragments in `replaceable` (default: all) are looked for there."""
     slots = {
         "SEARCH_WINDOW": Slot(window, "the search window"),
         "LIVENESS_RULES": Slot(
@@ -75,5 +77,11 @@ def assemble_search_prompt_for(
         ),
     }
     for name, (filename, _) in FRAGMENTS.items():
-        slots[name] = _read_fragment(name, filename, replacements_dir)
+        replacement = (
+            replacements_dir / filename
+            if replacements_dir is not None
+            and (replaceable is None or filename in replaceable)
+            else None
+        )
+        slots[name] = _read_fragment(name, filename, replacement)
     return assemble(app_template("search.md"), slots)
