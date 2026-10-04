@@ -4,8 +4,9 @@ import re
 import string
 
 _PATH_HOSTILE = re.compile(r'[/\\:*?"<>|\x00-\x1f]')
+# The optional leading connector keeps "Acme & Co" from becoming "Acme &".
 _CORPORATE_SUFFIX = re.compile(
-    r"[,\s]+(inc|incorporated|llc|l\.l\.c|ltd|limited|corp|corporation|co|gmbh|plc|"
+    r"(?:[,\s]+(?:&|and))?[,\s]+(inc|incorporated|llc|l\.l\.c|ltd|limited|corp|corporation|co|gmbh|plc|"
     r"ag|lp|llp|pty|pbc)\.?$",
     re.IGNORECASE,
 )
