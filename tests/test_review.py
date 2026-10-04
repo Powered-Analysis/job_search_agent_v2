@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import subprocess
 import sys
 from itertools import count
@@ -68,6 +69,72 @@ def chrome(tmp_path, monkeypatch):
     return calls
 
 
+class Web:
+    """The outside world as review's re-check sees it: every page is live unless a test says otherwise.
+
+    `routes` maps a full URL to an `httpx.Response` or a callable raising or answering.
+    """
+
+    def __init__(self):
+        self.routes = {}
+        self.requests = []
+
+    def handle(self, request):
+        self.requests.append(request)
+        answer = self.routes.get(str(request.url))
+        if callable(answer):
+            return answer(request)
+        if answer is not None:
+            answer.request = request
+            return answer
+        return httpx.Response(
+            200, html="<html><body>Open</body></html>", request=request
+        )
+
+    def gone(self, url):
+        self.routes[url] = httpx.Response(404)
+
+    def blocked(self, url):
+        self.routes[url] = httpx.Response(403)
+
+    def index(self, board, job_ids):
+        url = f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs"
+        jobs = [
+            {"id": job_id, "updated_at": "2026-10-01T00:00:00Z"} for job_id in job_ids
+        ]
+        self.routes[url] = httpx.Response(200, json={"jobs": jobs})
+
+    def offline(self):
+        def refuse(request):
+            raise httpx.ConnectError("offline", request=request)
+
+        self.routes = _Everything(refuse)
+
+    def count(self, host):
+        return sum(1 for request in self.requests if request.url.host == host)
+
+
+class _Everything(dict):
+    def get(self, _key, _default=None):
+        return self.answer
+
+    def __init__(self, answer):
+        super().__init__()
+        self.answer = answer
+
+
+@pytest.fixture(autouse=True)
+def web(monkeypatch):
+    """No test here reaches the network: review's re-check talks to this stand-in."""
+    stand_in = Web()
+
+    def handle(_transport, request):
+        return stand_in.handle(request)
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", handle)
+    return stand_in
+
+
 @pytest.fixture
 def rdb(db_url):
     """A connection to a database holding no postings but the test's own."""
@@ -86,9 +153,10 @@ def seed(
     location="Remote, US",
     decision=None,
     closed=False,
+    url=None,
 ):
     """Insert an undecided posting first seen on day `order`; returns its URL."""
-    url = unique_url()
+    url = url or unique_url()
     posting_id = db.insert_posting(
         conn, company=company, title=title, url=url, search_agent="claude"
     )
@@ -664,7 +732,8 @@ def test_review_runs_end_to_end_on_piped_input_and_reprompts_on_invalid_choices(
 ):
     drop_all_tables(db_url)
     conn = db.connect()
-    url = seed(conn, name(), order=1)
+    # A refused loopback connection: the re-check can't reach it, so it is shown (PRD 03).
+    url = seed(conn, name(), order=1, url="http://127.0.0.1:1/jobs/1")
     env = {**os.environ, "TURSO_DATABASE_URL": db_url}
     result = subprocess.run(
         [venv_script("jsa"), "review"],
@@ -737,3 +806,205 @@ def test_the_review_module_does_not_load_the_claude_sdk():
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+# --- liveness re-check at the start of a session (PRD 03, PRD 01 re-check) -------------
+
+
+def gh_url(job_id):
+    return f"https://job-boards.greenhouse.io/acme/jobs/{job_id}"
+
+
+def closed_at(conn, url):
+    return conn.execute(
+        "SELECT closed_at FROM postings WHERE canonical_url = ?",
+        (canonicalize_url(url),),
+    ).fetchone()[0]
+
+
+def test_a_posting_that_closed_while_waiting_is_marked_closed_and_never_shown(
+    rdb, web, monkeypatch, capsys
+):
+    dead, alive = name(), name()
+    dead_url = seed(rdb, dead, order=1, url=gh_url(101))
+    alive_url = seed(rdb, alive, order=2, url=gh_url(102))
+    web.index("acme", [102])
+    code, output = jsa_review(monkeypatch, capsys, ["s", "", "q"])
+    assert code == 0
+    assert dead not in output
+    assert alive in output
+    assert closed_at(rdb, dead_url) is not None
+    assert closed_at(rdb, alive_url) is None
+    assert row(rdb, dead_url)["decision"] is None
+    assert row(rdb, alive_url)["decision"] == "Skip"
+
+
+def test_the_session_opens_by_saying_how_many_postings_closed(
+    rdb, web, monkeypatch, capsys
+):
+    first = name()
+    seed(rdb, name(), order=1, url=gh_url(201))
+    seed(rdb, name(), order=2, url=gh_url(202))
+    seed(rdb, first, order=3, url=gh_url(203))
+    web.index("acme", [203])
+    _, output = jsa_review(monkeypatch, capsys, ["q"])
+    report = re.search(r"2\b[^\n]*clos", output)
+    assert report is not None, output
+    assert report.start() < output.index(first)
+
+
+def test_the_closed_count_is_reported_even_when_it_is_zero(
+    rdb, web, monkeypatch, capsys
+):
+    seed(rdb, name(), order=1, url=gh_url(301))
+    web.index("acme", [301])
+    _, output = jsa_review(monkeypatch, capsys, ["q"])
+    assert re.search(r"\b0\b[^\n]*clos", output), output
+
+
+def test_the_re_check_happens_before_the_first_posting_is_prompted_for(
+    rdb, web, monkeypatch, capsys
+):
+    dead_url = seed(rdb, name(), order=1, url=gh_url(401))
+    seed(rdb, name(), order=2, url=gh_url(402))
+    web.index("acme", [402])
+    seen = []
+    hooks = {0: lambda: seen.append(closed_at(rdb, dead_url))}
+    jsa_review(monkeypatch, capsys, ["q"], hooks)
+    assert seen and seen[0] is not None
+
+
+def test_when_every_posting_closed_it_reports_the_count_then_the_empty_message(
+    rdb, web, monkeypatch, capsys
+):
+    seed(rdb, name(), order=1, url=gh_url(501))
+    seed(rdb, name(), order=2, url=gh_url(502))
+    web.index("acme", [])
+    code, output = jsa_review(monkeypatch, capsys, [])
+    assert code == 0
+    report = re.search(r"2\b[^\n]*clos", output)
+    assert report is not None, output
+    assert report.start() < output.index(EMPTY_MESSAGE)
+
+
+def test_a_posting_the_re_check_could_not_reach_is_shown_marked_not_re_checked(
+    rdb, web, monkeypatch, capsys
+):
+    unreachable, reachable = name(), name()
+    blocked_url = seed(rdb, unreachable, order=1, url=gh_url(601))
+    seed(rdb, reachable, order=2, url="https://careers.example.com/jobs/601")
+    web.routes["https://boards-api.greenhouse.io/v1/boards/acme/jobs"] = httpx.Response(
+        429
+    )
+    _, output = jsa_review(monkeypatch, capsys, ["q"])
+    shown = output[output.index(unreachable) :]
+    assert "not re-checked" in shown.splitlines()[0].lower()
+    assert closed_at(rdb, blocked_url) is None
+
+
+def test_only_the_unreachable_posting_is_marked_not_re_checked(
+    rdb, web, monkeypatch, capsys
+):
+    unreachable, reachable = name(), name()
+    seed(rdb, unreachable, order=1, url=gh_url(701))
+    seed(rdb, reachable, order=2, url="https://careers.example.com/jobs/701")
+    web.blocked("https://boards-api.greenhouse.io/v1/boards/acme/jobs")
+    web.routes["https://boards-api.greenhouse.io/v1/boards/acme/jobs"] = httpx.Response(
+        503
+    )
+    _, output = jsa_review(monkeypatch, capsys, ["s", "", "q"])
+    second = output[output.index(reachable) :]
+    assert "not re-checked" not in second.splitlines()[0].lower()
+
+
+def test_a_403_or_429_from_the_page_is_a_block_not_a_closure(
+    rdb, web, monkeypatch, capsys
+):
+    names = [name(), name()]
+    urls = [
+        seed(rdb, names[0], order=1, url="https://careers.example.com/jobs/801"),
+        seed(rdb, names[1], order=2, url="https://careers.example.com/jobs/802"),
+    ]
+    web.blocked(urls[0])
+    web.routes[urls[1]] = httpx.Response(429)
+    _, output = jsa_review(monkeypatch, capsys, ["q"])
+    assert names[0] in output
+    assert all(closed_at(rdb, url) is None for url in urls)
+
+
+def test_offline_every_posting_is_shown_and_none_is_closed(
+    rdb, web, monkeypatch, capsys
+):
+    names = [name(), name(), name()]
+    urls = [
+        seed(rdb, names[0], order=1, url=gh_url(901)),
+        seed(rdb, names[1], order=2, url="https://careers.example.com/jobs/902"),
+        seed(rdb, names[2], order=3, url=gh_url(903)),
+    ]
+    web.offline()
+    code, output = jsa_review(monkeypatch, capsys, ["s", "", "s", "", "s", "", "q"])
+    assert code == 0
+    assert all(n in output for n in names)
+    assert all(closed_at(rdb, url) is None for url in urls)
+    assert output.lower().count("not re-checked") >= 3
+
+
+def test_a_page_that_redirects_away_from_the_job_closes_it(
+    rdb, web, monkeypatch, capsys
+):
+    url = "https://careers.example.com/jobs/senior-engineer-1001"
+    dead = name()
+    seed(rdb, dead, order=1, url=url)
+    web.routes[url] = httpx.Response(
+        302, headers={"location": "https://careers.example.com/"}
+    )
+    web.routes["https://careers.example.com/"] = httpx.Response(200, html="<html/>")
+    _, output = jsa_review(monkeypatch, capsys, [])
+    assert dead not in output
+    assert closed_at(rdb, url) is not None
+
+
+def test_each_board_index_is_fetched_once_for_the_whole_session(
+    rdb, web, monkeypatch, capsys
+):
+    for number in range(1, 5):
+        seed(rdb, name(), order=number, url=gh_url(1100 + number))
+    web.index("acme", [1101, 1102])
+    jsa_review(monkeypatch, capsys, ["q"])
+    assert web.count("boards-api.greenhouse.io") == 1
+
+
+def test_the_re_check_leaves_decided_postings_and_their_decisions_alone(
+    rdb, web, monkeypatch, capsys
+):
+    decided_url = seed(rdb, name(), order=1, decision="Apply", url=gh_url(1201))
+    seed(rdb, name(), order=2, url=gh_url(1202))
+    web.index("acme", [1202])
+    jsa_review(monkeypatch, capsys, ["q"])
+    assert row(rdb, decided_url)["decision"] == "Apply"
+    assert closed_at(rdb, decided_url) is None
+
+
+def test_the_re_check_writes_no_search_findings_row(rdb, web, monkeypatch, capsys):
+    dead_url = seed(rdb, name(), order=1, url=gh_url(1301))
+    seed(rdb, name(), order=2, url=gh_url(1302))
+    add_finding(rdb, dead_url)
+    web.index("acme", [1302])
+    before = rdb.execute("SELECT COUNT(*) FROM search_findings").fetchone()[0]
+    jsa_review(monkeypatch, capsys, ["q"])
+    after = rdb.execute("SELECT COUNT(*) FROM search_findings").fetchone()[0]
+    assert after == before
+    assert finding_decisions(rdb, dead_url) == [None]
+
+
+def test_a_closed_posting_stays_closed_for_the_next_session(
+    rdb, web, monkeypatch, capsys
+):
+    dead = name()
+    dead_url = seed(rdb, dead, order=1, url=gh_url(1401))
+    web.index("acme", [])
+    jsa_review(monkeypatch, capsys, [])
+    web.index("acme", [1401])
+    _, output = jsa_review(monkeypatch, capsys, [])
+    assert dead not in output
+    assert closed_at(rdb, dead_url) is not None
