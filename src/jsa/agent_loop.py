@@ -112,6 +112,8 @@ def run_agent(
         tools=tools,
         # Settings or project files must not bring in MCP servers: they would be more tools.
         strict_mcp_config=True,
+        # A user or project settings file could widen permissions past `tools` and the cwd.
+        setting_sources=[],
         max_turns=max_turns,
         permission_mode=permission_mode,
         cwd=cwd,
