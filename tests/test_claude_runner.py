@@ -4,12 +4,10 @@ The Claude Agent SDK is replaced at its one entry point, `agent_loop.query`, so 
 """
 
 import ast
-import itertools
 import logging
 import os
 import re
 import sys
-from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -24,8 +22,9 @@ from claude_agent_sdk import (
     ToolUseBlock,
     UserMessage,
 )
-from conftest import REPO_ROOT, drop_all_tables, raw_connect
+from conftest import REPO_ROOT, drop_all_tables
 from profile_helpers import SEARCH_TOML, copy_example, write_search_toml
+from search_helpers import Boards, rows
 
 from jsa import agent_loop, cli, db
 from jsa.agent_loop import AgentError
@@ -36,8 +35,6 @@ from jsa.runners import RunnerResult
 SETTINGS = AgentSettings(model="claude-sonnet-5-5", effort="low")
 SEARCH_KEY = "sk-ant-search-key"
 OAUTH_TOKEN = "oauth-token-from-the-environment"
-BOARD_TOKEN = "acme"
-_ids = itertools.count(8_000_000)
 
 
 def result_message(**fields):
@@ -374,44 +371,6 @@ def test_only_the_shared_loop_imports_the_sdks_query_entry_points():
 # --- jsa search --agent claude ------------------------------------------------------------
 
 
-class Boards:
-    """The outside world: Greenhouse boards, over the injected HTTP transport."""
-
-    def __init__(self):
-        self.jobs = {}
-
-    def job(self):
-        job_id = next(_ids)
-        updated = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
-        self.jobs[str(job_id)] = updated.replace("+00:00", "Z")
-        return f"https://job-boards.greenhouse.io/{BOARD_TOKEN}/jobs/{job_id}"
-
-    def handle(self, request):
-        parts = request.url.path.strip("/").split("/")
-        if request.url.host != "boards-api.greenhouse.io" or parts[2] != BOARD_TOKEN:
-            return httpx.Response(404, json={"error": "not found"})
-        if len(parts) == 4:
-            return httpx.Response(
-                200,
-                json={
-                    "jobs": [
-                        {"id": int(job_id), "updated_at": at}
-                        for job_id, at in self.jobs.items()
-                    ]
-                },
-            )
-        if parts[4] not in self.jobs:
-            return httpx.Response(404, json={"error": "not found"})
-        return httpx.Response(
-            200,
-            json={
-                "title": "Staff Engineer",
-                "content": "&lt;p&gt;Build the platform.&lt;/p&gt;",
-                "location": {"name": "Remote, US"},
-            },
-        )
-
-
 @pytest.fixture
 def world(db_url, sdk, tmp_path, monkeypatch):
     drop_all_tables(db_url)
@@ -446,14 +405,6 @@ def jsa_search_claude(monkeypatch, capsys, window="24"):
         code = exit_.code if isinstance(exit_.code, int) else 1
     captured = capsys.readouterr()
     return code, captured.out, captured.err
-
-
-def rows(url, sql):
-    conn = raw_connect(url)
-    try:
-        return conn.execute(sql).fetchall()
-    finally:
-        conn.close()
 
 
 def test_search_offers_claude_as_an_agent(world, monkeypatch, capsys):
