@@ -227,7 +227,13 @@ Judging output quality is the owner's job after deployment (see [Completion](#co
 
 Live checks run with `JSA_PROFILE_DIR=profile.example`, the fictional candidate PRD 06 requires. CI never has the owner's gitignored `profile/`, and live-check output goes into public PR descriptions ([convention 8](conventions.md#8-nothing-private-in-a-public-repository)).
 
-The app's Claude calls use the job's own Claude credential. `ANTHROPIC_API_KEY` is never set alongside an OAuth token, because the CLI prefers the API key and fails the OAuth flow with a 401. Live ATS fetches need no key.
+The app's Claude calls use the team's shared Claude credential. Claude Code keeps its own credential out of the shell commands an agent runs, so the FSE job also passes the token to the shell under a harness-only name, `FSE_CLAUDE_TOKEN`. The FSE starts every command that makes a Claude call with it:
+
+```
+CLAUDE_CODE_OAUTH_TOKEN="$FSE_CLAUDE_TOKEN" uv run jsa search --agent claude --window-hours 24
+```
+
+The app then inherits its credential from the environment, as `XC-1` specifies, and the shell expands the variable, so the value never appears in a transcript. The FSE never prints it. `ANTHROPIC_API_KEY` is never set alongside an OAuth token, because the CLI prefers the API key and fails the OAuth flow with a 401. Live ATS fetches need no key.
 
 Live job postings are text anyone can write, so the FSE reads untrusted content during real-world checks. The boundary that contains this is `FSE_TOKEN`'s scope: the FSE can't merge, push to `main`, or change workflows.
 
