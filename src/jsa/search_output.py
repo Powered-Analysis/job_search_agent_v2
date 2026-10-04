@@ -42,6 +42,16 @@ class Posting(BaseModel):
         return value
 
 
+class SearchOutput(BaseModel):
+    """The whole wire object, which a runner can have its API enforce."""
+
+    postings: list[Posting]
+
+
+def output_json_schema() -> dict:
+    return SearchOutput.model_json_schema()
+
+
 @dataclass(frozen=True)
 class ParsedSearch:
     postings: list[Posting]

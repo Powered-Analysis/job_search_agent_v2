@@ -23,6 +23,10 @@ WINDOW_SLACK = timedelta(hours=24)
 
 # Only a definite closed signal marks a stored posting closed (PRD 01).
 CLOSED_OUTCOMES = frozenset({"not_on_index", "page_closed"})
+# The outcomes whose postings are inserted (PRD 01).
+ADMITTED_OUTCOMES = frozenset(
+    {"verified", "verified_no_date", "reachable", "reachable_no_date"}
+)
 
 _ATS_DATE_KINDS = {
     "greenhouse": "updated",
@@ -56,8 +60,10 @@ class Page:
 @dataclass(frozen=True)
 class Checked:
     verdict: Verdict
-    # Kept so capture can reuse it instead of fetching again (PRD 01).
+    # Kept so capture can reuse them instead of fetching again (PRD 01).
     page: Page | None = None
+    # The Ashby board or the Rippling detail the check fetched.
+    record: Mapping | None = None
 
 
 def _parse_timestamp(value: object, *, epoch_ms: bool = False) -> datetime | None:
@@ -203,23 +209,23 @@ def _jobs_of(data: object) -> object:
     return data.get("jobs") if isinstance(data, dict) else None
 
 
-def _greenhouse_index(client: httpx.Client, board: str) -> Index:
+def _greenhouse_index(client: httpx.Client, board: str) -> tuple[Index, object]:
     data = get_json(client, f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs")
-    return _listing(_jobs_of(data), "updated_at")
+    return _listing(_jobs_of(data), "updated_at"), None
 
 
-def _lever_index(client: httpx.Client, board: str) -> Index:
-    return _listing(
-        get_lever_json(client, f"/v0/postings/{board}?mode=json"), "createdAt"
-    )
+def _lever_index(client: httpx.Client, board: str) -> tuple[Index, object]:
+    data = get_lever_json(client, f"/v0/postings/{board}?mode=json")
+    return _listing(data, "createdAt"), None
 
 
-def _ashby_index(client: httpx.Client, board: str) -> Index:
+def _ashby_index(client: httpx.Client, board: str) -> tuple[Index, object]:
     data = get_json(client, ashby_board_url(board))
-    return _listing(_jobs_of(data), "publishedAt")
+    # The board is also Ashby's capture source (PRD 01).
+    return _listing(_jobs_of(data), "publishedAt"), data
 
 
-def _rippling_index(client: httpx.Client, board: str) -> Index:
+def _rippling_index(client: httpx.Client, board: str) -> tuple[Index, object]:
     jobs: dict[str, object] = {}
     page = 0
     while True:
@@ -231,10 +237,10 @@ def _rippling_index(client: httpx.Client, board: str) -> Index:
         jobs |= _listing(data.get("items"), None)
         page += 1
         if page >= data["totalPages"]:
-            return jobs
+            return jobs, None
 
 
-_INDEX_FETCHERS: dict[str, Callable[[httpx.Client, str], Index]] = {
+_INDEX_FETCHERS: dict[str, Callable[[httpx.Client, str], tuple[Index, object]]] = {
     "greenhouse": _greenhouse_index,
     "lever": _lever_index,
     "ashby": _ashby_index,
@@ -248,12 +254,13 @@ class Verifier:
     def __init__(self, client: httpx.Client) -> None:
         self._client = client
         self._indexes: dict[tuple[str, str], Index | None] = {}
+        self._boards: dict[tuple[str, str], object] = {}
 
     def _index(self, ref: AtsRef) -> Index | None:
         key = (ref.platform, ref.board)
         if key not in self._indexes:
             try:
-                self._indexes[key] = _INDEX_FETCHERS[ref.platform](
+                self._indexes[key], self._boards[key] = _INDEX_FETCHERS[ref.platform](
                     self._client, ref.board
                 )
             except httpx.HTTPError, ValueError:
@@ -284,6 +291,7 @@ class Verifier:
     ) -> Checked:
         ref = resolve_ats(url)
         index = detail = page = None
+        board = None
         if ref:
             index = self._index(ref)
             if (
@@ -292,6 +300,7 @@ class Verifier:
                 and _needs_detail(ref, window_start)
             ):
                 detail = self._rippling_detail(ref)
+            board = self._boards.get((ref.platform, ref.board))
         elif mode == "best_effort" and not is_aggregator(url):
             page = self._page(url)
         verdict = classify(
@@ -304,7 +313,8 @@ class Verifier:
             window_start=window_start,
             now=datetime.now(UTC),
         )
-        return Checked(verdict, page)
+        record = board if ref and ref.platform == "ashby" else detail
+        return Checked(verdict, page, record if isinstance(record, dict) else None)
 
 
 def recheck(

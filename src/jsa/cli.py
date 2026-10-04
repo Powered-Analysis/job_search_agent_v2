@@ -1,5 +1,7 @@
 import argparse
+import logging
 import sys
+from dataclasses import asdict
 from datetime import date
 
 from jsa import db
@@ -8,6 +10,7 @@ from jsa.config import load_environment
 from jsa.errors import JsaError
 from jsa.http import make_client
 from jsa.review import review
+from jsa.search import RUNNERS, search
 
 
 def _init_db(args: argparse.Namespace) -> None:
@@ -29,6 +32,25 @@ def _add(args: argparse.Namespace) -> None:
 def _review(args: argparse.Namespace) -> None:
     with make_client() as client:
         review(client)
+
+
+def _search(args: argparse.Namespace) -> None:
+    with make_client() as client:
+        summary, warnings = search(client, args.agent, args.window_hours)
+    for key, value in asdict(summary).items():
+        print(f"{key}: {value}")
+    for warning in warnings:
+        print(f"warning: {warning}")
+
+
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a positive whole number")
+    return value
 
 
 def _iso_date(text: str) -> str:
@@ -61,8 +83,21 @@ def main() -> None:
     commands.add_parser(
         "review", help="decide Apply or Skip on each undecided posting"
     ).set_defaults(run=_review)
+    search_command = commands.add_parser(
+        "search", help="run one search-and-capture cycle"
+    )
+    search_command.add_argument("--agent", required=True, choices=sorted(RUNNERS))
+    search_command.add_argument(
+        "--window-hours",
+        required=True,
+        type=_positive_int,
+        help="how far back to look for postings",
+    )
+    search_command.set_defaults(run=_search)
     args = parser.parse_args()
 
+    # The search trace (steps, heartbeat, cost) goes to the log (PRD 01).
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     load_environment()
     try:
         args.run(args)
