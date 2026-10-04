@@ -1,0 +1,2 @@
+- Titles containing "Intern", "Junior", "Associate", or "Director".
+- Titles for roles outside data and analytics, such as "Sales Engineer".

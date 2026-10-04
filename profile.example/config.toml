@@ -1,0 +1,26 @@
+# Everything here is about you and stays on your machine; only profile/search/ ships to Fly.
+# Replace the fictional values below.
+
+# Used in the resume and packet files.
+candidate_name = "Jordan Example"
+
+# The id from your tracker sheet's URL: docs.google.com/spreadsheets/d/<id>/edit
+tracker_spreadsheet_id = "replace-with-your-sheet-id"
+
+# Where packet folders are created.
+# packets_dir = "~/Documents/Job Applications"
+
+[fly]
+app    = "jsa-example"
+region = "iad"
+
+# Any Claude model that accepts an effort setting will run; the app keeps no list.
+# Recommended: claude-fable-5-1 at "medium" for the resume checklist.
+[agents.checklist]
+model  = "claude-fable-5-1"
+effort = "medium"
+
+# Recommended: claude-opus-5-5 at "high" for refine.
+[agents.refine]
+model  = "claude-opus-5-5"
+effort = "high"

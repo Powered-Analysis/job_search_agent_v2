@@ -1,0 +1,4 @@
+- Location: fully remote within the United States, or onsite or hybrid in the Chicago area.
+- Seniority: senior individual contributor. No internships, entry-level roles, or people-management roles.
+- Company type: product companies or marketplaces. Not staffing agencies or consultancies.
+- Salary: a stated base salary below $130,000 a year is a no.

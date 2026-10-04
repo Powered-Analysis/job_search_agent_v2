@@ -1,0 +1,46 @@
+# IANA timezone name. The cadence, the search window, and the tracker's dates all use it.
+timezone = "America/New_York"
+
+# Time of day ("HH:MM", 24-hour, in the timezone above) after which the day's searches run.
+run_at = "07:00"
+
+# Each weekday lists its searches in run order. A day left out runs nothing.
+# agent is "perplexity", "claude", or "gemini"; window_hours looks back from the run.
+[schedule]
+monday    = [
+  { agent = "perplexity", window_hours = 72 },
+  { agent = "claude", window_hours = 72 },
+]
+tuesday   = [{ agent = "perplexity", window_hours = 24 }]
+wednesday = [{ agent = "claude", window_hours = 24 }]
+thursday  = [{ agent = "perplexity", window_hours = 24 }]
+friday    = [{ agent = "gemini", window_hours = 24 }]
+
+[runners.claude]
+# Any Claude model that accepts an effort setting will run: the pipeline checks every posting's
+# liveness itself, so this choice trades cost against the quality of what is found.
+# We recommend an Opus model at effort "high" or above. Lower effort makes fewer tool
+# calls, which shows up as more postings dropped `not_on_index` in your run summaries.
+model  = "claude-opus-5-5"
+effort = "high"
+
+[runners.gemini]
+# Any Gemini Deep Research agent ID. Today there are two:
+#   "deep-research-max-preview-04-2026"  more thorough, more expensive
+#   "deep-research-preview-04-2026"      faster, cheaper
+# Both are previews: Google may rename or retire them. An ID the API rejects fails
+# `jsa deploy --smoke` before it reaches the scheduled machine.
+agent = "deep-research-max-preview-04-2026"
+
+# Perplexity has no settings: it always runs the "xhigh" preset.
+
+[verification]
+# Which postings the pipeline admits. Required.
+#   "strict"       only Greenhouse, Lever, Ashby, and Rippling postings, each checked
+#                  against the employer's job index and the search window.
+#   "best_effort"  also postings on any other employer page (Workday, iCIMS, custom
+#                  careers sites). The pipeline checks those pages for signs the job
+#                  closed, and checks the posted date when the page publishes one, but
+#                  a page can stay up after its job closes, so expect some dead links.
+#                  Run summaries count these postings as `reachable`/`reachable_no_date`.
+mode = "strict"
