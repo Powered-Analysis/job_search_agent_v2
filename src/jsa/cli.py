@@ -249,6 +249,8 @@ def main() -> None:
 
     # The search trace (steps, heartbeat, cost) goes to the log (PRD 01).
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # httpx logs every request at INFO, which would bury that trace.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     load_environment()
     try:
         args.run(args)
