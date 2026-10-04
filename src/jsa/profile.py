@@ -144,7 +144,10 @@ class Config(BaseModel):
     model_config = _STRICT
     candidate_name: str | None = None
     tracker_spreadsheet_id: NonEmptyStr | None = None
-    packets_dir: Path = Path("~/Documents/Job Applications")
+    # validate_default: pydantic skips validators on defaults, and the default needs its `~` expanded too.
+    packets_dir: Path = Field(
+        Path("~/Documents/Job Applications"), validate_default=True
+    )
     fly: FlyConfig | None = None
     agents: AgentsConfig = AgentsConfig()
 
