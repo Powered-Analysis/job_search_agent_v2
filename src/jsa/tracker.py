@@ -3,6 +3,7 @@
 import json
 import subprocess
 from datetime import date, datetime
+from typing import NamedTuple
 
 from jsa import db
 from jsa.config import gws_bin
@@ -39,26 +40,19 @@ def tracker_row(
     ]
 
 
-def append_row(spreadsheet_id: str, row: list[str | int]) -> None:
-    """Append one row, raising on any ambiguity: a posting is marked tracked only after this returns."""
-    # OVERWRITE fills the sheet's pre-formatted blank rows; INSERT_ROWS would lose the Status dropdown (PRD 04).
-    params = {
-        "spreadsheetId": spreadsheet_id,
-        "range": f"{TAB}!A:H",
-        "valueInputOption": "USER_ENTERED",
-        "insertDataOption": "OVERWRITE",
-    }
+def _gws(method: str, params: dict, body: dict | None = None) -> object:
+    """Run one `gws sheets spreadsheets values` call and return its parsed JSON, raising on any failure."""
     command = [
         gws_bin(),
         "sheets",
         "spreadsheets",
         "values",
-        "append",
+        method,
         "--params",
         json.dumps(params),
-        "--json",
-        json.dumps({"values": [row]}),
     ]
+    if body is not None:
+        command += ["--json", json.dumps(body)]
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
     except OSError as error:
@@ -68,11 +62,65 @@ def append_row(spreadsheet_id: str, row: list[str | int]) -> None:
         hint = " (re-run `gws auth login`)" if result.returncode == 2 else ""
         raise JsaError(f"gws exited {result.returncode}{hint}: {detail}")
     try:
-        updated_rows = json.loads(result.stdout)["updates"]["updatedRows"]
-    except ValueError, KeyError, TypeError:
+        return json.loads(result.stdout)
+    except ValueError:
+        raise JsaError("gws output was not JSON") from None
+
+
+def append_row(spreadsheet_id: str, row: list[str | int]) -> None:
+    """Append one row, raising on any ambiguity: a posting is marked tracked only after this returns."""
+    # OVERWRITE fills the sheet's pre-formatted blank rows; INSERT_ROWS would lose the Status dropdown (PRD 04).
+    params = {
+        "spreadsheetId": spreadsheet_id,
+        "range": f"{TAB}!A:H",
+        "valueInputOption": "USER_ENTERED",
+        "insertDataOption": "OVERWRITE",
+    }
+    response = _gws("append", params, {"values": [row]})
+    try:
+        updated_rows = response["updates"]["updatedRows"]
+    except KeyError, TypeError:
         raise JsaError("gws output was not an append response") from None
     if not isinstance(updated_rows, int) or updated_rows < 1:
         raise JsaError("gws reported no updated row")
+
+
+class SheetRow(NamedTuple):
+    number: int
+    date_applied: str
+
+
+def sheet_index(spreadsheet_id: str) -> dict[int, SheetRow]:
+    """`postings.id` -> its Sheet row number and Date Applied; rows whose ID cell isn't an integer are skipped."""
+    # The range starts at row 1, so a value's position is its row number; blank rows come back empty.
+    response = _gws("get", {"spreadsheetId": spreadsheet_id, "range": f"{TAB}!A:G"})
+    rows = response.get("values", []) if isinstance(response, dict) else None
+    if not isinstance(rows, list):
+        raise JsaError("gws output was not a get response")
+    index: dict[int, SheetRow] = {}
+    for number, row in enumerate(rows, start=1):
+        cells = [str(cell).strip() for cell in row] if isinstance(row, list) else []
+        if cells and cells[0].isdecimal():
+            index.setdefault(
+                int(cells[0]), SheetRow(number, cells[6] if len(cells) > 6 else "")
+            )
+    return index
+
+
+def set_title(spreadsheet_id: str, row_number: int, title: str) -> None:
+    """Rewrite one row's Title cell (column C); raises on any ambiguity, like the append."""
+    params = {
+        "spreadsheetId": spreadsheet_id,
+        "range": f"{TAB}!C{row_number}",
+        "valueInputOption": "USER_ENTERED",
+    }
+    response = _gws("update", params, {"values": [[_literal(title)]]})
+    try:
+        updated_cells = response["updatedCells"]
+    except KeyError, TypeError:
+        raise JsaError("gws output was not an update response") from None
+    if not isinstance(updated_cells, int) or updated_cells < 1:
+        raise JsaError("gws reported no updated cell")
 
 
 def append_tracked(

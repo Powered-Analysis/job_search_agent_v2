@@ -36,7 +36,7 @@ def _job_description(job: db.PacketJob, directory: Path) -> str | None:
         return None
 
 
-def _build(
+def build_packet(
     job: db.PacketJob,
     config: Config,
     resume: Path,
@@ -105,7 +105,12 @@ def generate(client: httpx.Client, posting_id: int | None, *, dry_run: bool) -> 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(
-                _build, job, config, resume, settings, rewrite=posting_id is not None
+                build_packet,
+                job,
+                config,
+                resume,
+                settings,
+                rewrite=posting_id is not None,
             ): job
             for job in queue
         }

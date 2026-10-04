@@ -12,6 +12,7 @@ from jsa.errors import JsaError
 from jsa.generate import generate
 from jsa.http import make_client
 from jsa.packet import build_packets
+from jsa.refetch import refetch
 from jsa.review import review
 from jsa.search import RUNNERS, Summary, search
 from jsa.tracker import track
@@ -49,6 +50,11 @@ def _generate(args: argparse.Namespace) -> None:
 
 def _track(args: argparse.Namespace) -> None:
     track(args.id, dry_run=args.dry_run)
+
+
+def _refetch(args: argparse.Namespace) -> None:
+    with make_client() as client:
+        refetch(client, args.id, every_row=args.all, dry_run=args.dry_run)
 
 
 def _print_search(summary: Summary, warnings: list[str]) -> None:
@@ -153,6 +159,22 @@ def main() -> None:
         "--dry-run", action="store_true", help="show the rows without appending them"
     )
     track_command.set_defaults(run=_track)
+    refetch_command = commands.add_parser(
+        "refetch",
+        help="update stored postings, their tracker titles, and packets from the employer's edits",
+    )
+    refetch_command.add_argument(
+        "--id", type=_positive_int, help="reconcile this posting only"
+    )
+    refetch_command.add_argument(
+        "--all",
+        action="store_true",
+        help="reconcile every posting, not just unapplied Apply rows",
+    )
+    refetch_command.add_argument(
+        "--dry-run", action="store_true", help="show the changes without making them"
+    )
+    refetch_command.set_defaults(run=_refetch)
     search_command = commands.add_parser(
         "search", help="run one search-and-capture cycle"
     )
