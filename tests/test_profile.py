@@ -258,6 +258,26 @@ def test_packets_dir_defaults_to_documents_job_applications(profile):
     assert packets_dir.parts[-2:] == ("Documents", "Job Applications")
 
 
+def test_the_default_packets_dir_is_expanded_under_the_home_directory(
+    profile, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    write_config_toml(profile)
+    packets_dir = load_config().packets_dir
+    assert packets_dir == tmp_path / "Documents" / "Job Applications"
+    assert "~" not in packets_dir.parts
+
+
+def test_a_tilde_in_packets_dir_expands_to_the_home_directory(
+    profile, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_with(
+        profile, {"candidate_name": 'packets_dir = "~/Packets"\ncandidate_name'}
+    )
+    assert load_config().packets_dir == tmp_path / "Packets"
+
+
 def test_packets_dir_can_be_set(profile, tmp_path):
     config_with(
         profile, {"candidate_name": f'packets_dir = "{tmp_path}"\ncandidate_name'}
