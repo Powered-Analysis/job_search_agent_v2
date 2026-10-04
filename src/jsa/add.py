@@ -4,7 +4,13 @@ import httpx
 
 from jsa import db, prompts
 from jsa.ats import resolve_ats
-from jsa.capture import Capture, CaptureError, capture_posting
+from jsa.capture import (
+    Capture,
+    CaptureError,
+    JobPosting,
+    NoDescriptionError,
+    capture_posting,
+)
 from jsa.errors import JsaError
 from jsa.naming import company_from_board
 from jsa.urls import is_aggregator
@@ -48,16 +54,21 @@ def add_posting(
 
     ref = resolve_ats(url)
     captured: Capture | None = None
+    # What the page published, even when it had no description to capture.
+    published: Capture | JobPosting | None = None
     try:
-        captured = capture_posting(client, url, ref)
+        captured = published = capture_posting(client, url, ref)
+    except NoDescriptionError as error:
+        print(f"Capture failed: {error}")
+        published = error.posting
     except CaptureError as error:
         print(f"Capture failed: {error}")
 
     if ref:
         derived_company = company_from_board(ref.board)
     else:
-        derived_company = captured.company if captured else None
-    derived_title = captured.title if captured else None
+        derived_company = published.company if published else None
+    derived_title = published.title if published else None
     if no_input:
         company = company or derived_company
         title = title or derived_title
@@ -87,16 +98,13 @@ def add_posting(
         # Another writer stored it between the lookup and the insert.
         _promote(conn, url, *db.find_posting(conn, url))
         return
-    if captured:
+    if published:
         # No title: the one the user confirmed stands.
         db.capture_jd(
             conn,
             posting_id,
-            jd_markdown=captured.jd_markdown,
-            location=captured.location,
+            jd_markdown=published.jd_markdown,
+            location=published.location,
         )
-        print(f"Added posting {posting_id}: {company} — {title} (Apply)")
-    else:
-        print(
-            f"Added posting {posting_id}: {company} — {title} (Apply); {NO_PACKET_JD}"
-        )
+    message = f"Added posting {posting_id}: {company} — {title} (Apply)"
+    print(message if captured else f"{message}; {NO_PACKET_JD}")

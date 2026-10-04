@@ -185,11 +185,11 @@ def capture_jd(
     conn: Connection,
     posting_id: int,
     *,
-    jd_markdown: str,
+    jd_markdown: str | None,
     location: str | None,
     title: str | None = None,
 ) -> None:
-    """Store the JD; a non-empty title also replaces the title and its slug."""
+    """Store the JD (NULL when only the location is known); a non-empty title also replaces the title and its slug."""
     if title:
         conn.execute(
             "UPDATE postings SET jd_markdown = ?, location = ?, title = ?, title_slug = ? WHERE id = ?",
