@@ -12,6 +12,7 @@ import httpx
 import pytest
 from conftest import drop_all_tables, raw_connect
 from profile_helpers import copy_example
+from search_helpers import Jump
 
 from jsa import cli, db, runners, search
 from jsa.errors import JsaError
@@ -598,6 +599,23 @@ def test_commands_that_do_not_use_the_key_run_without_it(world, monkeypatch):
 # --- the wall-clock ceiling ------------------------------------------------------
 
 
+def test_a_request_may_wait_the_read_timeout_or_the_time_left_whichever_is_less():
+    clock = Tick(0)
+    deadline = Deadline(clock=clock)
+    for elapsed, allowed in [
+        (0, 1800),
+        (1800, 1800),
+        (1801, 1799),
+        (3000, 600),
+        (3599, 1),
+    ]:
+        clock.now = elapsed
+        assert deadline.request_timeout() == pytest.approx(allowed)
+    clock.now = 3601
+    with pytest.raises(WallClockExceeded):
+        deadline.request_timeout()
+
+
 def test_the_ceiling_is_3600_seconds_and_a_run_past_it_raises():
     assert runners.WALL_CLOCK_CEILING_SECONDS == 3600
     clock = Tick(0)
@@ -607,6 +625,36 @@ def test_the_ceiling_is_3600_seconds_and_a_run_past_it_raises():
     clock.now = 3601
     with pytest.raises(WallClockExceeded):
         deadline.check()
+
+
+def test_a_request_late_in_the_run_gets_only_the_time_left_as_its_read_timeout(
+    world, monkeypatch, capsys
+):
+    world.web.posted(entry(world.web.job()))
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Jump(3000)))
+    code, _out, _err = run(monkeypatch, capsys)
+    assert code == 0
+    (request,) = perplexity_requests(world.web)
+    assert request.extensions["timeout"]["read"] == 600
+
+
+def test_a_request_with_one_second_left_gets_a_one_second_read_timeout(
+    world, monkeypatch, capsys
+):
+    world.web.posted(entry(world.web.job()))
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Jump(3599)))
+    run(monkeypatch, capsys)
+    (request,) = perplexity_requests(world.web)
+    assert request.extensions["timeout"]["read"] == pytest.approx(1)
+
+
+def test_no_request_is_sent_once_the_ceiling_has_passed(world, monkeypatch, capsys):
+    world.web.posted(entry(world.web.job()))
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Jump(3601)))
+    code, _out, _err = run(monkeypatch, capsys)
+    assert code != 0
+    assert perplexity_requests(world.web) == []
+    assert count_rows(world.url, "postings") == 0
 
 
 def test_a_search_that_runs_past_the_ceiling_raises_and_inserts_nothing(

@@ -48,6 +48,18 @@ class Boards:
         )
 
 
+class Jump:
+    """A clock that reads 0 when a run starts its deadline and `later` seconds from then on."""
+
+    def __init__(self, later):
+        self.later = later
+        self.reads = 0
+
+    def __call__(self):
+        self.reads += 1
+        return 0.0 if self.reads == 1 else float(self.later)
+
+
 def rows(url, sql):
     conn = raw_connect(url)
     try:
