@@ -65,6 +65,53 @@ def _rename_packet(
     return None
 
 
+def _neighbour_moves(
+    before: list[db.PacketJob],
+    after: list[db.PacketJob],
+    config: Config,
+    posting_id: int,
+) -> list[tuple[int, Path, Path]]:
+    """The other postings' packet folders whose names a retitle changed, as (id, old, new)."""
+    old_names = {job.id: packet_paths(config, job)[0] for job in before}
+    moves = []
+    for job in after:
+        new_directory = packet_paths(config, job)[0]
+        old_directory = old_names[job.id]
+        if (
+            job.id != posting_id
+            and old_directory != new_directory
+            and old_directory.is_dir()
+        ):
+            moves.append((job.id, old_directory, new_directory))
+    return moves
+
+
+def _move_neighbours(
+    moves: list[tuple[int, Path, Path]], *, last_pass: bool
+) -> tuple[list[tuple[int, Path, Path]], list[str]]:
+    """Rename the folders whose new name is free; returns those still waiting and the hand fixes."""
+    waiting, fixes = [], []
+    for move in moves:
+        posting_id, old_directory, new_directory = move
+        if _taken(new_directory, old_directory):
+            if last_pass:
+                fixes.append(
+                    f"posting {posting_id}'s packet {old_directory} was not renamed: "
+                    f"{new_directory} already exists; rename it by hand"
+                )
+            else:
+                waiting.append(move)
+            continue
+        try:
+            old_directory.rename(new_directory)
+        except OSError as error:
+            fixes.append(
+                f"posting {posting_id}'s packet {old_directory} was not renamed to "
+                f"{new_directory} ({one_line(error)}); rename it by hand"
+            )
+    return waiting, fixes
+
+
 def _refresh_packet(
     fresh: db.PacketJob,
     old_directory: Path,
@@ -137,15 +184,15 @@ def _reconcile(
         return []
     title_changed = title is not None and title != job.title
     drift = title_changed or captured.jd_markdown != job.jd_markdown
-    old_directory, old_copy = packet_paths(config, job)
-    has_packet = old_directory.is_dir()
     if dry_run:
+        directory = packet_paths(config, job)[0]
         print(f"would update: posting {job.id}: {', '.join(changes)}")
-        if has_packet and drift:
-            print(f"would refresh the packet: {old_directory}")
+        if directory.is_dir() and drift:
+            print(f"would refresh the packet: {directory}")
         return []
     # A fresh connection: the server drops one left idle through the previous row's checklist run.
     with closing(db.connect()) as conn:
+        before = db.company_packet_jobs(conn, job.normalized_company)
         db.capture_jd(
             conn,
             job.id,
@@ -154,7 +201,12 @@ def _reconcile(
             title=title,
         )
         fresh = db.refetch_targets(conn, posting_id=job.id)[0].job
+        after = db.company_packet_jobs(conn, job.normalized_company)
     print(f"updated: posting {job.id}: {', '.join(changes)}")
+    # The packet is looked up as the posting stands now: an earlier row's retitle may have renamed its folder.
+    current = next(row for row in before if row.id == job.id)
+    old_directory, old_copy = packet_paths(config, current)
+    has_packet = old_directory.is_dir()
     fixes = []
     sheet_row = index.get(job.id) if index is not None else None
     if title_changed and sheet_row and not sheet_row.date_applied:
@@ -165,6 +217,11 @@ def _reconcile(
                 f"the Sheet's Title cell C{sheet_row.number} was not updated "
                 f"({one_line(error)}); fix it by hand"
             )
+    # A retitle can add or drop the "(id)" suffix of another posting's folder. A folder that gains it
+    # moves first, freeing the plain name for this posting; one that loses it waits for this posting to move.
+    moves = _neighbour_moves(before, after, config, job.id) if title_changed else []
+    waiting, neighbour_fixes = _move_neighbours(moves, last_pass=False)
+    fixes.extend(neighbour_fixes)
     if (
         has_packet
         and drift
@@ -175,6 +232,7 @@ def _reconcile(
         )
     ):
         fixes.append(problem)
+    fixes.extend(_move_neighbours(waiting, last_pass=True)[1])
     return fixes
 
 

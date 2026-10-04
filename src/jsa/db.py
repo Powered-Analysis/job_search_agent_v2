@@ -434,6 +434,15 @@ def packet_queue(conn: Connection, posting_id: int | None = None) -> list[Packet
     return [PacketJob(*row) for row in rows]
 
 
+def company_packet_jobs(conn: Connection, normalized_company: str) -> list[PacketJob]:
+    """Every posting of one company: the ones whose packet names a retitle can change."""
+    rows = conn.execute(
+        f"SELECT {_PACKET_JOB_COLUMNS} FROM postings p WHERE p.normalized_company = ?",
+        (normalized_company,),
+    ).fetchall()
+    return [PacketJob(*row) for row in rows]
+
+
 class RefetchTarget(NamedTuple):
     job: PacketJob
     location: str | None
