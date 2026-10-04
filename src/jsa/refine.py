@@ -236,7 +236,7 @@ def _resolved(directory: Path) -> dict[str, str]:
     }
 
 
-def _check_resolved(resolved: Mapping[str, str]) -> None:
+def _check_resolved(resolved: Mapping[str, str], directory: Path) -> None:
     left = [
         f"{name}, line {number}"
         for name, text in resolved.items()
@@ -252,6 +252,7 @@ def _check_resolved(resolved: Mapping[str, str]) -> None:
             load_search_config(),
             WINDOW_NOTE,
             resolved,
+            directory,
         )
     except JsaError as error:
         raise JsaError(
@@ -286,7 +287,7 @@ def accept() -> None:
         print("No proposal is pending.")
         return
     resolved = _resolved(directory)
-    _check_resolved(resolved)
+    _check_resolved(resolved, directory)
     _check_unedited(directory)
     for name, text in resolved.items():
         live = read_fragment(name) or ""

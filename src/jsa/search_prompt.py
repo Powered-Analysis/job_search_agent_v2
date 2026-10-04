@@ -43,11 +43,19 @@ def read_fragment(filename: str) -> str | None:
         return None
 
 
-def _read_fragment(name: str, filename: str, replacements: Mapping[str, str]) -> Slot:
+def _read_fragment(
+    name: str,
+    filename: str,
+    replacements: Mapping[str, str],
+    replacements_dir: Path | None,
+) -> Slot:
+    required = FRAGMENTS[name][1]
+    if replacements_dir is not None and filename in replacements:
+        return Slot(replacements[filename], str(replacements_dir / filename), required)
     return Slot(
-        replacements[filename] if filename in replacements else read_fragment(filename),
+        read_fragment(filename),
         f"{fragment_path(filename)} (copy the shape from profile.example/{SEARCH_DIR}/{filename})",
-        required=FRAGMENTS[name][1],
+        required,
     )
 
 
@@ -56,12 +64,16 @@ def assemble_search_prompt(config: SearchConfig, hours: int, now: datetime) -> s
 
 
 def assemble_search_prompt_for(
-    config: SearchConfig, window: str, replacements: Mapping[str, str] | None = None
+    config: SearchConfig,
+    window: str,
+    replacements: Mapping[str, str] | None = None,
+    replacements_dir: Path | None = None,
 ) -> str:
     """The search prompt with `window` in the window slot, for a caller with no run of its own.
 
     `replacements` maps a fragment's filename to text used in place of the file on disk, so a
-    proposed change can be checked before it is written."""
+    proposed change can be checked before it is written. `replacements_dir` is where that text
+    lives, so an error about an empty replacement names the file the user must fix."""
     slots = {
         "SEARCH_WINDOW": Slot(window, "the search window"),
         "LIVENESS_RULES": Slot(
@@ -70,5 +82,7 @@ def assemble_search_prompt_for(
         ),
     }
     for name, (filename, _) in FRAGMENTS.items():
-        slots[name] = _read_fragment(name, filename, replacements or {})
+        slots[name] = _read_fragment(
+            name, filename, replacements or {}, replacements_dir
+        )
     return assemble(app_template("search.md"), slots)
