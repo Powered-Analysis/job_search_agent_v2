@@ -226,3 +226,13 @@ def base_resume() -> Path:
     if not path.is_file() or path.stat().st_size == 0:
         raise JsaError(f"{path} is missing or empty. {_pointer('resume.docx')}")
     return path
+
+
+def checklist_settings(config: Config) -> AgentSettings:
+    """The checklist agent's model and effort (XC-14); a missing table raises before any row is processed."""
+    if config.agents.checklist is None:
+        raise JsaError(
+            f"{profile_dir() / 'config.toml'} has no [agents.checklist] table. "
+            f"{_pointer('config.toml')}"
+        )
+    return config.agents.checklist
