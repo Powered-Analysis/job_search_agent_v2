@@ -3,6 +3,7 @@
 import json
 import logging
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -12,8 +13,9 @@ import httpx
 from jsa import db
 from jsa.ats import resolve_ats
 from jsa.capture import CaptureError, capture_posting
+from jsa.claude import ClaudeRunner
 from jsa.perplexity import PerplexityRunner
-from jsa.profile import SearchConfig, load_search_config
+from jsa.profile import SearchConfig, claude_settings, load_search_config
 from jsa.runners import RunnerResult
 from jsa.search_output import parse_search_output
 from jsa.search_prompt import assemble_search_prompt
@@ -22,12 +24,20 @@ from jsa.verify import ADMITTED_OUTCOMES, Verifier
 
 log = logging.getLogger(__name__)
 
-# The agents whose runner exists; the CLI offers exactly these.
-RUNNERS = {"perplexity": PerplexityRunner}
-
 
 class Runner(Protocol):
     def run(self, prompt: str) -> RunnerResult: ...
+
+
+def _claude_runner(client: httpx.Client, config: SearchConfig) -> Runner:
+    return ClaudeRunner(claude_settings(config))
+
+
+# The agents whose runner exists; the CLI offers exactly these.
+RUNNERS: dict[str, Callable[[httpx.Client, SearchConfig], Runner]] = {
+    "perplexity": lambda client, config: PerplexityRunner(client),
+    "claude": _claude_runner,
+}
 
 
 @dataclass
@@ -174,7 +184,7 @@ def search(
     now = datetime.now(UTC)
     # Everything that can fail on setup fails here, before a model call or a run row.
     prompt = assemble_search_prompt(config, window_hours, now)
-    runner: Runner = RUNNERS[agent](client)
+    runner = RUNNERS[agent](client, config)
     conn = db.connect()
     run_id = db.open_search_run(
         conn,
