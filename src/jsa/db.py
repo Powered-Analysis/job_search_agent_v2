@@ -415,3 +415,29 @@ def packet_queue(conn: Connection, posting_id: int | None = None) -> list[tuple]
         """,
         params,
     ).fetchall()
+
+
+def tracker_queue(conn: Connection, posting_id: int | None = None) -> list[tuple]:
+    """Apply postings not yet tracked, lowest id first (PRD 02).
+
+    Rows are (id, normalized_company, title, url, date_posted). A posting id waives the
+    closed condition, never Apply or added_to_tracker, so a posting is never appended twice.
+    """
+    scope, params = (
+        ("p.id = ? AND p.added_to_tracker = 0", (posting_id,))
+        if posting_id is not None
+        else ("p.added_to_tracker = 0 AND p.closed_at IS NULL", ())
+    )
+    return conn.execute(
+        f"""
+        SELECT p.id, p.normalized_company, p.title, p.url, p.date_posted
+        FROM postings p
+        WHERE p.decision = 'Apply' AND {scope}
+        ORDER BY p.id
+        """,
+        params,
+    ).fetchall()
+
+
+def mark_tracked(conn: Connection, posting_id: int) -> None:
+    conn.execute("UPDATE postings SET added_to_tracker = 1 WHERE id = ?", (posting_id,))

@@ -206,6 +206,17 @@ def gemini_settings(config: SearchConfig) -> GeminiRunner:
     return _runner_table(config, "gemini", config.runners.gemini)
 
 
+def tracker_spreadsheet_id() -> str:
+    """The tracker Sheet's id; a missing or empty value raises before any row is processed."""
+    spreadsheet_id = load_config().tracker_spreadsheet_id
+    if not spreadsheet_id:
+        raise JsaError(
+            f"tracker_spreadsheet_id is missing or empty in {profile_dir() / 'config.toml'}. "
+            f"{_pointer('config.toml')}"
+        )
+    return spreadsheet_id
+
+
 def base_resume() -> Path:
     """The single base resume (XC-11); a missing or empty file raises before any row is processed."""
     path = profile_dir() / "resume.docx"

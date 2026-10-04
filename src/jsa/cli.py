@@ -13,6 +13,7 @@ from jsa.http import make_client
 from jsa.packet import build_packets
 from jsa.review import review
 from jsa.search import RUNNERS, Summary, search
+from jsa.tracker import track
 
 
 def _init_db(args: argparse.Namespace) -> None:
@@ -38,6 +39,10 @@ def _review(args: argparse.Namespace) -> None:
 
 def _packet(args: argparse.Namespace) -> None:
     build_packets(args.id, dry_run=args.dry_run)
+
+
+def _track(args: argparse.Namespace) -> None:
+    track(args.id, dry_run=args.dry_run)
 
 
 def _print_search(summary: Summary, warnings: list[str]) -> None:
@@ -117,6 +122,16 @@ def main() -> None:
         "--dry-run", action="store_true", help="show the folders without creating them"
     )
     packet.set_defaults(run=_packet)
+    track_command = commands.add_parser(
+        "track", help="append Apply postings to the Google Sheet tracker"
+    )
+    track_command.add_argument(
+        "--id", type=_positive_int, help="track this Apply posting only"
+    )
+    track_command.add_argument(
+        "--dry-run", action="store_true", help="show the rows without appending them"
+    )
+    track_command.set_defaults(run=_track)
     search_command = commands.add_parser(
         "search", help="run one search-and-capture cycle"
     )
