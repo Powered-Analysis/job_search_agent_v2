@@ -13,6 +13,7 @@ from jsa.generate import generate
 from jsa.http import make_client
 from jsa.packet import build_packets
 from jsa.refetch import refetch
+from jsa.refine import refine
 from jsa.review import review
 from jsa.search import RUNNERS, Summary, search
 from jsa.tracker import track
@@ -50,6 +51,10 @@ def _generate(args: argparse.Namespace) -> None:
 
 def _track(args: argparse.Namespace) -> None:
     track(args.id, dry_run=args.dry_run)
+
+
+def _refine(args: argparse.Namespace) -> None:
+    refine(dry_run=args.dry_run)
 
 
 def _refetch(args: argparse.Namespace) -> None:
@@ -159,6 +164,15 @@ def main() -> None:
         "--dry-run", action="store_true", help="show the rows without appending them"
     )
     track_command.set_defaults(run=_track)
+    refine_command = commands.add_parser(
+        "refine", help="propose search-profile edits learned from your decisions"
+    )
+    refine_command.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show the decisions in scope without calling the model or recording a run",
+    )
+    refine_command.set_defaults(run=_refine)
     refetch_command = commands.add_parser(
         "refetch",
         help="update stored postings, their tracker titles, and packets from the employer's edits",

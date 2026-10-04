@@ -228,11 +228,20 @@ def base_resume() -> Path:
     return path
 
 
-def checklist_settings(config: Config) -> AgentSettings:
-    """The checklist agent's model and effort (XC-14); a missing table raises before any row is processed."""
-    if config.agents.checklist is None:
+def _agent_settings(config: Config, name: str) -> AgentSettings:
+    """An agent's model and effort (XC-14); a missing table raises before any model call."""
+    settings = getattr(config.agents, name)
+    if settings is None:
         raise JsaError(
-            f"{profile_dir() / 'config.toml'} has no [agents.checklist] table. "
+            f"{profile_dir() / 'config.toml'} has no [agents.{name}] table. "
             f"{_pointer('config.toml')}"
         )
-    return config.agents.checklist
+    return settings
+
+
+def checklist_settings(config: Config) -> AgentSettings:
+    return _agent_settings(config, "checklist")
+
+
+def refine_settings(config: Config) -> AgentSettings:
+    return _agent_settings(config, "refine")
