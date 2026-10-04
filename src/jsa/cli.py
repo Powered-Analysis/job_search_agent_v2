@@ -10,6 +10,7 @@ from jsa.config import load_environment
 from jsa.cron import cron
 from jsa.errors import JsaError
 from jsa.http import make_client
+from jsa.packet import build_packets
 from jsa.review import review
 from jsa.search import RUNNERS, Summary, search
 
@@ -33,6 +34,10 @@ def _add(args: argparse.Namespace) -> None:
 def _review(args: argparse.Namespace) -> None:
     with make_client() as client:
         review(client)
+
+
+def _packet(args: argparse.Namespace) -> None:
+    build_packets(args.id, dry_run=args.dry_run)
 
 
 def _print_search(summary: Summary, warnings: list[str]) -> None:
@@ -102,6 +107,16 @@ def main() -> None:
     commands.add_parser(
         "review", help="decide Apply or Skip on each undecided posting"
     ).set_defaults(run=_review)
+    packet = commands.add_parser(
+        "packet", help="create a folder with the job description and a resume copy"
+    )
+    packet.add_argument(
+        "--id", type=_positive_int, help="build this Apply posting's packet only"
+    )
+    packet.add_argument(
+        "--dry-run", action="store_true", help="show the folders without creating them"
+    )
+    packet.set_defaults(run=_packet)
     search_command = commands.add_parser(
         "search", help="run one search-and-capture cycle"
     )

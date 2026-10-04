@@ -387,3 +387,31 @@ def clear_decision(conn: Connection, url: str) -> None:
         "UPDATE postings SET decision = NULL, fit_feedback = NULL, decided_at = NULL WHERE canonical_url = ?",
         (canonicalize_url(url),),
     )
+
+
+def packet_queue(conn: Connection, posting_id: int | None = None) -> list[tuple]:
+    """Apply postings needing a packet, lowest id first (PRD 02).
+
+    Rows are (id, normalized_company, title_slug, jd_markdown, shares_name), where
+    shares_name marks a posting whose folder name a lower-id posting already holds.
+    A posting id waives the tracker and closed conditions, never Apply.
+    """
+    scope, params = (
+        ("p.id = ?", (posting_id,))
+        if posting_id is not None
+        else ("p.added_to_tracker = 0 AND p.closed_at IS NULL", ())
+    )
+    return conn.execute(
+        f"""
+        SELECT p.id, p.normalized_company, p.title_slug, p.jd_markdown,
+            EXISTS (
+                SELECT 1 FROM postings other
+                WHERE other.normalized_company = p.normalized_company
+                    AND other.title_slug = p.title_slug AND other.id < p.id
+            )
+        FROM postings p
+        WHERE p.decision = 'Apply' AND {scope}
+        ORDER BY p.id
+        """,
+        params,
+    ).fetchall()

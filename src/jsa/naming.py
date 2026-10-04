@@ -35,3 +35,18 @@ def company_from_board(board: str) -> str:
     """Derive a company name from an ATS board slug, e.g. "acme-corp" -> "Acme Corp"."""
     words = re.split(r"[-_.+]+", board)
     return " ".join(word.capitalize() for word in words if word)
+
+
+def packet_dir_name(
+    normalized_company: str, slug: str, posting_id: int, *, shares_name: bool
+) -> str:
+    """The packet folder name; `shares_name` is set on every posting but the lowest id of its name (PRD 04)."""
+    name = f"{normalized_company} - {slug}"
+    return f"{name} ({posting_id})" if shares_name else name
+
+
+def resume_file_stem(
+    candidate_name: str | None, slug: str, normalized_company: str
+) -> str:
+    parts = [_path_safe(candidate_name or ""), "Resume", slug, normalized_company]
+    return "_".join(part for part in parts if part).replace(" ", "")

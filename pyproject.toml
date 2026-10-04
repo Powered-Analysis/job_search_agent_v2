@@ -11,6 +11,7 @@ dependencies = [
     "markdownify>=1.2.3",
     "prompt-toolkit>=3.0.53",
     "pydantic>=2.13.5",
+    "python-docx>=1.2.0",
     "python-dotenv",
     "turso-serverless",
 ]
