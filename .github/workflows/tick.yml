@@ -8,11 +8,12 @@
 # touched, so TICK_TOKEN is never on a machine where an agent or a PR's code ran.
 #
 # Each role's model, effort, and turn cap come from team.yml, through its guard.
+#
+# The finish job starts the next tick, so one dispatch by the owner keeps the
+# team running until it is done.
 name: tick
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 # Every write uses a fine-grained PAT chosen for that write.
@@ -172,7 +173,7 @@ jobs:
 
             `gh` and `git` act as your GitHub account in ${{ github.repository }}. The checkout is on `main`. A fresh libSQL database is at `TURSO_DATABASE_URL`. `JSA_PROFILE_DIR` points at a copy of `profile.example/` at the live-check settings of the CI environment section; after you change `profile.example/`, rebuild the copy with `bash scripts/live_profile.sh`. Your shell has no Claude credential of its own: start every command that makes a Claude call as `CLAUDE_CODE_OAUTH_TOKEN="$FSE_CLAUDE_TOKEN" uv run jsa …`, and never print the variable.
 
-            End the run by requesting the SA's review, or by escalating; the discharge check fails the tick otherwise.
+            End the run by requesting the SA's review, by filing a test discrepancy, or by escalating; the discharge check fails the tick otherwise.
 
   fse-check:
     needs: fse
@@ -418,10 +419,11 @@ jobs:
     needs: [pm, pm-check, fse, fse-check, gate, sa, sa-check, sdet, sdet-check]
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Longer than team.yml's idle wait, which this job sits out.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - name: Completion, progress report, next tick
+      - name: Completion, progress report, alert check, next tick
         env:
           GH_TOKEN: ${{ github.token }}
           TICK_TOKEN: ${{ secrets.TICK_TOKEN }}

@@ -2,8 +2,8 @@
 # The workflows and scripts read every value here on each run, from main.
 #
 # Not here, because GitHub Actions reads them from the workflow files
-# themselves: each job's time limit and the two cron schedules, in
-# .github/workflows/tick.yml and report.yml.
+# themselves: each job's time limit, in .github/workflows/tick.yml and
+# report.yml.
 
 # Model IDs are written in full, never an alias, and effort is always set, so a
 # provider's default can't silently retune a role.
@@ -43,6 +43,9 @@ live_checks:
 orchestration:
   # Rounds of requested changes on one PR before it goes to the owner.
   revision_cap: 4
+  # Minutes a tick that found no work, or failed, waits before starting the
+  # next one. Must stay under the finish job's time limit in tick.yml.
+  idle_wait_minutes: 10
 
 report:
   # The fixed sender of every report and alert; the mail filter matches it.

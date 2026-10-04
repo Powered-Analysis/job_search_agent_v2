@@ -124,9 +124,11 @@ guard_fse() {
   local issues prs
   issues=$(team_issues)
   prs=$(feature_prs open)
-  jq -n --argjson issues "$issues" --argjson prs "$prs" "$JQ_DEFS"'
+  jq -n --argjson issues "$issues" --argjson prs "$prs" --arg fse "$FSE_LOGIN" "$JQ_DEFS"'
     ($issues | fse_queue) as $queue
-    | (if ($prs | length) == 0 then $queue[0:1]
+    # A discrepancy the FSE filed holds it until the PM and SDET have resolved it.
+    | (if ($issues | any(.state == "OPEN" and .author.login == $fse and has_label("discrepancy"))) then []
+       elif ($prs | length) == 0 then $queue[0:1]
        else $prs[0] as $pr
          | if ($pr.requested | length) == 0 and $pr.issue != null and ($queue | index($pr.issue)) != null
            then [$pr.issue] else [] end
@@ -170,11 +172,18 @@ tick_runs() {
     jq '[.[] | select(.conclusion != "cancelled" and .conclusion != "skipped")]'
 }
 
-# The start of report.yml's most recent successful dispatched run.
+# report.yml's runs of one kind, newest first. A run's title is its kind:
+# "report" for a progress report, "alert" for an alert.
+report_runs() {
+  gh run list -R "$REPO" --workflow "$REPORT_WORKFLOW" --event workflow_dispatch --limit 100 \
+    --json displayTitle,status,conclusion,startedAt |
+    jq --arg kind "$1" '[.[] | select(.displayTitle == $kind)]'
+}
+
+# The start of the most recent progress report that was sent.
 last_report_time() {
-  gh run list -R "$REPO" --workflow "$REPORT_WORKFLOW" --event workflow_dispatch \
-    --status success --limit 1 --json startedAt |
-    jq -r --arg epoch "$EPOCH" '.[0].startedAt // $epoch'
+  report_runs report |
+    jq -r --arg epoch "$EPOCH" '[.[] | select(.conclusion == "success")][0].startedAt // $epoch'
 }
 
 # The computed Status (Progress reports, Sections): {"word": ..., "line": ...}.
