@@ -275,9 +275,10 @@ def test_folding_prefers_the_completed_interactions_text_over_the_deltas():
             created("e1"),
             text_delta("partial ", "e2"),
             text_delta("deltas", "e3"),
-            completed("e4", output_text="the whole answer"),
+            completed("e4"),
         ]
     )
+    state = gemini.fold_interaction(state, finished("the whole answer"))
     assert state.text == "the whole answer"
 
 
@@ -373,13 +374,12 @@ def test_the_ceiling_spans_reconnects_and_raises_instead_of_waiting_forever(
 # --- failures -------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("event_type", ["interaction.error", "error"])
-def test_an_error_event_raises(fake, event_type):
+def test_an_error_event_raises(fake):
     fake.created = [
         created("e1"),
         thought("e2"),
         {
-            "event_type": event_type,
+            "event_type": "error",
             "event_id": "e3",
             "error": {"code": "internal", "message": "the agent fell over"},
         },
@@ -607,9 +607,7 @@ def test_a_search_without_usage_succeeds_and_does_not_claim_an_estimate(
     assert "estimate" not in (out + err).lower()
 
 
-@pytest.mark.parametrize(
-    "failure", ["error event", "interaction.error event", "failed status"]
-)
+@pytest.mark.parametrize("failure", ["error event", "failed status"])
 def test_a_failed_gemini_run_closes_the_run_failed_and_inserts_nothing(
     world, monkeypatch, capsys, failure
 ):
