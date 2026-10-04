@@ -80,4 +80,19 @@ while read -r pr <&3; do
     add_label "$issue" in-progress
     echo "PR #$number: applied in-progress to #$issue (SA requested changes)"
   fi
+  # Rule 5: only the SA and the PM are ever asked to review. Every guard passes
+  # over a PR whose request names anyone else, so it would wait forever. The
+  # FSE's request was meant for the SA, so that is where it goes; once the SA
+  # has approved, rule 1 has already handed the PR to the PM.
+  stray=$(jq -r --arg sa "$SA_LOGIN" --arg pm "$PM_LOGIN" '.requested[] | select(. != $sa and . != $pm)' <<<"$pr")
+  for login in $stray; do
+    tick_gh api -X DELETE "repos/$REPO/pulls/$number/requested_reviewers" -f "reviewers[]=$login" >/dev/null
+    echo "PR #$number: removed the stray review request to $login"
+  done
+  if [[ -n "$stray" && $(jq -r '.approved' <<<"$state") != true ]] \
+    && ! jq -e --arg sa "$SA_LOGIN" --arg pm "$PM_LOGIN" '.requested | index($sa) != null or index($pm) != null' <<<"$pr" >/dev/null \
+    && (has in-progress || has priority-now); then
+    tick_gh api -X POST "repos/$REPO/pulls/$number/requested_reviewers" -f "reviewers[]=$SA_LOGIN" >/dev/null
+    echo "PR #$number: requested the SA's review"
+  fi
 done 3< <(jq -c '.[] | select(.issue != null)' <<<"$prs")
