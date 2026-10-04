@@ -216,16 +216,6 @@ def jsa_review(monkeypatch, capsys, lines, hooks=None):
     return code, captured.out + captured.err
 
 
-@pytest.fixture
-def offline(monkeypatch):
-    """Review needs only the database; any outside HTTP call fails the test."""
-
-    def refuse(self, request):
-        raise AssertionError(f"unexpected outside request {request.url}")
-
-    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", refuse)
-
-
 # --- backlog ------------------------------------------------------------------
 
 
@@ -782,11 +772,20 @@ def test_review_is_listed_in_the_help():
     assert "review" in result.stdout
 
 
-def test_a_review_session_makes_no_outside_call(rdb, offline, monkeypatch, capsys):
+def test_a_review_session_makes_no_model_call_only_the_recheck_http(
+    rdb, web, monkeypatch, capsys
+):
+    # A None entry makes any import of the SDK raise, so a model call cannot happen.
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)
     seed(rdb, name(), order=1)
     seed(rdb, name(), order=2)
     code, _ = jsa_review(monkeypatch, capsys, ["a", "note", "s", "", "q"])
     assert code == 0
+    assert web.requests
+    assert {request.url.host for request in web.requests} <= {
+        "job-boards.greenhouse.io",
+        "boards-api.greenhouse.io",
+    }
 
 
 def test_the_review_module_does_not_load_the_claude_sdk():
