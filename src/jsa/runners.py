@@ -9,7 +9,7 @@ from jsa.errors import JsaError
 # A hard stop, so a hung run can neither bill indefinitely nor block the day's later searches.
 WALL_CLOCK_CEILING_SECONDS = 3600
 # The longest a streamed runner waits for its connection to send anything, so a half-open one
-# surfaces as a transport error instead of blocking past the ceiling.
+# surfaces as a transport error. Each request is also capped by the time left on the ceiling.
 READ_TIMEOUT_SECONDS = 1800
 # How often a streamed runner logs that it is still working.
 HEARTBEAT_SECONDS = 5
@@ -54,6 +54,11 @@ class Deadline:
             raise WallClockExceeded(
                 f"the search ran past its {self._seconds:.0f}-second ceiling"
             )
+
+    def request_timeout(self) -> float:
+        """How long one request may wait on the connection: the read timeout, cut to the time left, so a stall cannot outlast the ceiling."""
+        self.check()
+        return min(READ_TIMEOUT_SECONDS, self._seconds - self.elapsed)
 
     def heartbeat_due(self) -> bool:
         """True at most once per heartbeat interval, so the caller logs when it returns True."""
