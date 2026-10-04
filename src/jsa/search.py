@@ -14,6 +14,7 @@ from jsa import db
 from jsa.ats import resolve_ats
 from jsa.capture import CaptureError, capture_posting
 from jsa.claude import ClaudeRunner
+from jsa.errors import one_line
 from jsa.gemini import GeminiAgentRunner
 from jsa.perplexity import PerplexityRunner
 from jsa.profile import (
@@ -189,23 +190,24 @@ def _process(
     return summary, _warnings(summary, no_date_platforms, result.cost_is_estimate)
 
 
-def _one_line(error: Exception) -> str:
-    return (str(error).splitlines() or [""])[0] or type(error).__name__
-
-
 def search(
-    client: httpx.Client, agent: str, window_hours: int
+    client: httpx.Client,
+    agent: str,
+    window_hours: int,
+    *,
+    trigger: str = "hand",
+    now: datetime | None = None,
 ) -> tuple[Summary, list[str]]:
-    """Run one hand search; returns its summary and closing warnings."""
+    """Run one search; returns its summary and closing warnings.
+
+    `now` is passed by a cron day so all its searches share one `run_date`.
+    """
     config = load_search_config()
-    now = datetime.now(UTC)
-    # Everything that can fail on setup fails here, before a model call or a run row.
-    prompt = assemble_search_prompt(config, window_hours, now)
-    runner = RUNNERS[agent](client, config)
+    now = now or datetime.now(UTC)
     conn = db.connect()
     run_id = db.open_search_run(
         conn,
-        trigger="hand",
+        trigger=trigger,
         run_date=now.astimezone(config.tz).date().isoformat(),
         agent=agent,
         window_hours=window_hours,
@@ -214,6 +216,9 @@ def search(
     conn.close()
     result: RunnerResult | None = None
     try:
+        # Setup failures (e.g. a missing API key) fall inside the try so the run row records them (PRD 01).
+        prompt = assemble_search_prompt(config, window_hours, now)
+        runner = RUNNERS[agent](client, config)
         result = runner.run(prompt)
         # The runner takes minutes, long enough for the server to drop an idle connection.
         conn = db.connect()
@@ -226,7 +231,7 @@ def search(
             conn,
             run_id,
             outcome="failed",
-            error=_one_line(error),
+            error=one_line(error),
             summary=None,
             warnings=None,
             model=result.model if result else None,

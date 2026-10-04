@@ -3,7 +3,7 @@
 import os
 import re
 import tomllib
-from datetime import time
+from datetime import date, time
 from pathlib import Path
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -61,6 +61,10 @@ class Schedule(BaseModel):
         return [
             search for day in type(self).model_fields for search in getattr(self, day)
         ]
+
+    def on(self, day: date) -> list[ScheduledSearch]:
+        # The fields run Monday to Sunday, the order of `date.weekday()`.
+        return getattr(self, tuple(type(self).model_fields)[day.weekday()])
 
 
 class GeminiRunner(BaseModel):

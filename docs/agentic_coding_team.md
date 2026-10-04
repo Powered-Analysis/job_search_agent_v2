@@ -16,7 +16,7 @@ This is the operating agreement for a **fully autonomous** four-agent team that 
   The PM's success is measured by how faithfully the delivered application matches the PRDs. **GitHub user: nickybell**, the owner's account, used through the PM's own token (see [Orchestration](#orchestration)).
 * A **Full Stack Engineer** (FSE) is responsible for feature development. By design, the FSE's focus is narrow: are the acceptance criteria of this particular issue met? The FSE is not responsible for the overall quality of the codebase, only for making sure the feature branch is free of bugs. **GitHub user: RoBOT-DeNiro**
 * A **Software Architect** (SA) is responsible for the overall quality of the codebase, which they maintain by reviewing the FSE's PRs. By design, the SA's focus is wide: does this feature fulfill the contracts set by the PRDs and by the rest of the codebase, and does the code follow this repository's standards? The SA may find bugs, but should not chase narrow edge cases at the expense of overall functionality. **GitHub user: LeBOT-James**
-* A **Software Development Engineer in Test** (SDET) writes tests **exclusively from the expectations in the PRDs and the issues' acceptance criteria**. By design, the SDET works independently of the FSE and SA and never sees the reasoning behind their decisions (see [SDET independence](#sdet-independence)). When a test fails against `main`, the SDET files a `discrepancy` issue for the PM to adjudicate. **GitHub user: Sandro-BOTicelli**
+* A **Software Development Engineer in Test** (SDET) writes tests **exclusively from the expectations in the PRDs and the issues' acceptance criteria**. By design, the SDET works independently of the FSE and SA and never sees the reasoning behind their decisions (see [SDET independence](#sdet-independence)). When a test and the code disagree, a `discrepancy` issue puts the question to the PM. **GitHub user: Sandro-BOTicelli**
 
 ### How the PRDs apply to this team
 
@@ -46,9 +46,10 @@ pm → (fse ∥ sdet) → sa        # fse and sdet need pm; sa needs fse
 - **Guards.** Each job starts with a deterministic guard that reads GitHub state and decides whether the agent has anything to do. If not, the job exits without invoking the agent. The guard conditions are listed under each role below.
 - **Reconcile, then check.** At the start of every tick, the [reconcile](#reconcile) step runs, followed by the [invariant](#invariants) check. After every agent job, reconcile runs, then the [discharge check](#discharge-check), then the invariant check. These three run in a job of their own, on a fresh runner, so `TICK_TOKEN` is never on a machine where an agent ran.
 - **Failure.** A failed job skips every job that depends on it. Nothing is retried within a tick; the next tick resumes from state. A job whose guard finds no work still succeeds, so the jobs after it still run. The guard is a step inside the job, not a job-level `if:`.
-- **Triggers.** The tick runs on a cron schedule (every 15 minutes) and on `workflow_dispatch`. The cron is the retry delay after a failure, and it's how the team picks up the owner's actions, such as a removed `needs-human` label. An idle tick costs little, because every guard exits before invoking an agent. When a tick succeeds and at least one agent job did work, the tick's final step dispatches the next tick, so work flows back-to-back. A failed tick does not re-dispatch, so the cron interval acts as the retry delay. The dispatch uses `TICK_TOKEN` (see [Credentials](#credentials)).
+- **Triggers.** The tick runs only on `workflow_dispatch`, and every tick's final step dispatches the next one, so the owner's one dispatch keeps the team running until it's [done](#completion). When a tick succeeds and at least one agent job did work, the next tick starts at once, so work flows back-to-back. A tick that found no work, or that failed, waits **10 minutes** first. That wait is the retry delay after a failure, and it's how soon the team picks up the owner's actions, such as a removed `needs-human` label. An idle tick costs little, because every guard exits before invoking an agent. The dispatch uses `TICK_TOKEN` (see [Credentials](#credentials)).
+- **Stopping and restarting.** The chain has no other source of ticks. Cancelling the running tick, or disabling the workflow, stops the team. So does a tick whose final step can't run or can't dispatch, for example when `TICK_TOKEN` has expired. The owner restarts the team by dispatching one tick.
 - **Concurrency.** A single concurrency group with `cancel-in-progress: false` means ticks never overlap.
-- **No other wiring.** No workflow is triggered by issue, PR, or review events. Handoffs between roles happen through state the next tick reads. The only other workflow is [`report.yml`](#progress-reports). The tick dispatches it for progress reports, and its own cron runs the [alert check](#alerts) every 30 minutes. It is outside the role loop and writes nothing to GitHub.
+- **No other wiring.** No workflow is triggered by issue, PR, or review events. Handoffs between roles happen through state the next tick reads. The only other workflow is [`report.yml`](#progress-reports), which sends one email per run. The tick's final step dispatches it for progress reports and for [alerts](#alerts). It is outside the role loop and writes nothing to GitHub.
 
 #### Labels and handoffs
 
@@ -56,7 +57,7 @@ pm → (fse ∥ sdet) → sa        # fse and sdet need pm; sa needs fse
 |---|---|---|---|
 | `in-progress` | The FSE has claimed this issue and it isn't yet approved by the SA. | FSE guard, on claim | Reconcile, on SA approval |
 | `priority-now` | The FSE must work this issue before any unlabeled one. | PM (discrepancy ruling); reconcile (PM concern on a PR) | Reconcile, on SA approval |
-| `discrepancy` | An SDET test fails against `main`; the issue lists the failing test IDs. | SDET | — (the issue closes when resolved) |
+| `discrepancy` | A test and the code disagree, and the PM must rule which is wrong. The issue lists the failing test IDs. The SDET files it when a test fails against `main`; the FSE files it when its issue's requirements make an existing test fail on its branch. | SDET or FSE | — (the issue closes when resolved) |
 | `revise-test` | The PM ruled that a `discrepancy` test misreads the PRDs; the SDET must revise it. | PM | — (the SDET closes the issue) |
 | `needs-human` | Work on this issue has stopped until the owner acts. A `Needs-human:` comment says what's needed. | PM, FSE, or SDET; reconcile (revision cap) | The owner |
 | `follow-up` | An improvement the SA raised as `levelup`. It is never worked unless the owner removes the label. | PM, at merge | The owner |
@@ -97,7 +98,7 @@ Invariants 1 and 2 together make the FSE's queue order produce one PR at a time,
 
 After each agent job, and after reconcile, the tick re-runs that role's guard. If the guard still selects any of the work items the job was invoked for, the agent exited without discharging them, and the tick fails. Each role's procedure below ends with every one of its work items either done or escalated. For example, the PM must merge or raise a concern on every PR awaiting it, and rule on every unruled discrepancy.
 
-This matters because the tick re-dispatches itself whenever an agent did work. Without the check, an agent that exits green without acting would be invoked again immediately, with the same result, for as long as the loop runs.
+This matters because the next tick starts at once whenever an agent did work. Without the check, an agent that exits green without acting would be invoked again immediately, with the same result, for as long as the loop runs.
 
 #### Escalation
 
@@ -107,9 +108,11 @@ An agent that can't proceed without the owner applies `needs-human` to the issue
 - the work needs a change under `.github/workflows/` (no token has the Workflows permission), a change to `team.yml`, a new secret, or a new account;
 - a revision loop that doesn't converge (reconcile handles this one; see rule 3).
 
+A test that stands in the way of an issue's requirements is not a reason to escalate: the FSE files a `discrepancy` issue, and the PM and SDET resolve it (see the FSE's [rules](#rules)).
+
 The SA never escalates directly. A standoff with the FSE reaches the owner through the revision cap.
 
-A `needs-human` issue that has an open PR keeps that PR open, so invariant 1 stops new feature work until the owner answers. That's deliberate: the team never builds on top of an unresolved question. The [alert check](#alerts) makes the wait visible.
+A `needs-human` issue that has an open PR keeps that PR open, so invariant 1 stops new feature work until the owner answers. That's deliberate: the team never builds on top of an unresolved question. The [alert check](#alerts) makes the wait visible. The team picks up the owner's answer at the next tick, at most one idle wait after the label is removed.
 
 #### Completion
 
@@ -120,7 +123,7 @@ The team is done when all three of these hold:
 
 At that point every test on `main` passes, because any failing test would be an open `discrepancy` issue.
 
-When the tick's last step finds the team done, it dispatches `report.yml` for a final report with Status *Complete*. It then disables the tick workflow using `TICK_TOKEN`. The owner re-enables the tick to resume, for example after promoting a `follow-up` issue.
+When the tick's last step finds the team done, it dispatches `report.yml` for a final report with Status *Complete*. It then disables the tick workflow using `TICK_TOKEN`, without dispatching another tick. The owner re-enables the workflow and dispatches one tick to resume, for example after promoting a `follow-up` issue.
 
 **Deployment and setup belong to the owner.** `jsa deploy` uses the owner's local Fly session (PRD 06). The accounts and secrets in PRD 06's setup inventory are created by hand. So neither is ever an issue. The final report ends with those steps.
 
@@ -136,10 +139,10 @@ The FSE notes in each PR description which checks it couldn't run. The final rep
 - **`team.yml`** sits at the repository root and holds the owner's settings:
   - each role's model, effort, and turn cap;
   - the settings live checks run at;
-  - the revision cap;
+  - the revision cap and the idle wait;
   - the report and alert thresholds, and the sender address.
 
-  The workflows and scripts read it on every run. The numbers this document gives for those settings are the values the file starts with. Job time limits and cron schedules live in the workflow files, because GitHub Actions reads them there.
+  The workflows and scripts read it on every run. The numbers this document gives for those settings are the values the file starts with. Job time limits live in the workflow files, because GitHub Actions reads them there.
 - **`CLAUDE.md`** sits at the repository root, and every agent loads it. It holds:
   - an `@docs/conventions.md` import line, so the owner's conventions load on every run;
   - the commands to install, run, and test the app;
@@ -256,10 +259,10 @@ The repository must stay public: `Powered-Analysis` is on GitHub's Free plan, wh
 |---|---|---|---|
 | `GITHUB_TOKEN` (ambient) | — | Checkout, and every read made by the guards, reconcile, the discharge check, and the invariant check | read / read / read, plus Actions and Commit statuses read |
 | `PM_TOKEN` | nickybell | PM agent: planning, acceptance-criteria rewrites, discrepancy rulings, reviews, squash-merge | write / write / write |
-| `FSE_TOKEN` | RoBOT-DeNiro | FSE agent: pushing `feat/` branches, opening and updating PRs, requesting the SA's review, escalating with `needs-human` | write / write / write |
+| `FSE_TOKEN` | RoBOT-DeNiro | FSE agent: pushing `feat/` branches, opening and updating PRs, requesting the SA's review, filing `discrepancy` issues, escalating with `needs-human` | write / write / write |
 | `SA_TOKEN` | LeBOT-James | SA agent: review comments, approving, requesting changes | read / read / write |
 | `SDET_TOKEN` | Sandro-BOTicelli | SDET agent: pushing tests to `main`, filing `discrepancy` issues, closing `revise-test` issues, escalating with `needs-human` | write / write / read |
-| `TICK_TOKEN` | LeBOT-James | Deterministic steps: the FSE claim, reconcile (including the revision-cap escalation), the `test-gate` status, self-dispatch, disabling the tick on completion | read / write / write, plus Actions write and Commit statuses write |
+| `TICK_TOKEN` | LeBOT-James | Deterministic steps: the FSE claim, reconcile (including the revision-cap escalation), the `test-gate` status, dispatching the next tick and `report.yml`, disabling the tick on completion | read / write / write, plus Actions write and Commit statuses write |
 
 `TICK_TOKEN` belongs to the SA's account because its visible writes are SA handoffs: the `test-gate` status, and the PM review request that follows an SA approval.
 
@@ -267,7 +270,7 @@ No token has the Workflows or Administration permission, so no agent can change 
 
 Every PM review request goes to `nickybell`. So the owner turns off GitHub email notifications for this repository; the progress reports and alerts are the owner's channel. Each agent receives only its own token, as `claude-code-action`'s `github_token` input. `TICK_TOKEN` never reaches a Claude process.
 
-Fine-grained PATs expire. Each one is created with the longest lifetime the org allows. An expired token stops ticks from succeeding, so it shows up as a *Blocked* alert.
+Fine-grained PATs expire. Each one is created with the longest lifetime the org allows. An expired agent token stops ticks from succeeding, so it shows up as a *Blocked* alert. An expired `TICK_TOKEN` is silent: the tick can dispatch neither the alert nor the next tick, so the team stops and the owner sees it only as an absence of runs.
 
 **Branch rules on `main`.** Two rulesets apply:
 
@@ -310,7 +313,7 @@ So every email keeps the same headings in the same order, and puts those items w
 - **Sender and subject.** Every email, report or alert, comes from one fixed sender address. Its subject starts with `[Job Search Agent]`, followed by the kind and the status, e.g. `[Job Search Agent] Progress — On track` or `[Job Search Agent] Alert — Blocked`. The owner's mail filter matches both the sender and the prefix. Anyone can write a subject line, so a filter on the prefix alone would put a stranger's email in front of the chief-of-staff agent as if it were a report.
 
 - **Trigger.** The tick's last step runs even when an earlier job failed. It counts feature PRs merged since the last report. When the count reaches **3**, it dispatches `report.yml` using `TICK_TOKEN`.
-- **The last report.** This is the start time of `report.yml`'s most recent successful `workflow_dispatch` run. A dispatched run has no guard: it always sends an email. So a successful one means a report was sent, and a failed send leaves the timestamp where it was until the next tick dispatches it again. Runs started by the cron are alert checks and don't count.
+- **The last report.** This is the start time of `report.yml`'s most recent successful progress-report run. Every run sends one email, of the kind its dispatch names, and the run's title is that kind: `report` or `alert`. So a successful `report` run means a report was sent, and a failed send leaves the timestamp where it was until the next tick dispatches it again.
 - **Who writes it.** A **reporter** agent writes the email, so the reader gets context and not just a list. It explains what each delivered capability means for the product, why each decision was made, and what is driving the status.
 - **What the reporter reads.** Before the reporter runs, a script collects the facts below from GitHub and writes them to files. The files include the full text of every issue and ruling the facts mention. They never include PR descriptions or comments, which can quote text from live job postings. The reporter reads those files and `prds/`, using read-only file tools (Read, Grep, Glob). It has no other tools, no GitHub token, and no network access beyond the model.
 - **Grounding.** Every statement in the email must trace to the collected facts or to the PRDs. The reporter explains and connects them, but never adds progress, dates, or decisions that aren't there. Plain-language wording comes from lines the PM writes for this reader: each issue's `Outcome:` and `Roadmap:` lines and each `Ruling:` comment.
@@ -336,9 +339,9 @@ So every email keeps the same headings in the same order, and puts those items w
 
 #### Alerts
 
-`report.yml` also runs an alert check on its own cron, every 30 minutes, independent of the tick. It therefore works even when the tick or its tokens are broken.
+The tick's last step also runs an alert check. It runs on every tick, including an idle one and one whose earlier jobs failed, so a waiting or failing team is checked every 10 minutes. It depends on the tick chain and on `TICK_TOKEN`: a team that has [stopped ticking](#the-tick) sends no alert.
 
-The thresholds are set by how long a feature cycle takes, not by how long the project takes. A normal tick finishes in under an hour, and a feature that needs no revision merges about one tick after its review. The check sends an email when any of these holds:
+The thresholds are set by how long a feature cycle takes, not by how long the project takes. A normal tick finishes in under an hour, and a feature that needs no revision merges about one tick after its review. The check dispatches `report.yml` for an alert email when any of these holds:
 
 - the last three completed ticks failed (*Blocked*);
 - an open issue is labeled `needs-human` (*Needs your input*);
@@ -346,7 +349,7 @@ The thresholds are set by how long a feature cycle takes, not by how long the pr
 
 The reporter writes the alert the same way as a progress report, with the same fallback. Otherwise the check sends nothing.
 
-While a condition holds, the alert repeats every 4 hours. The last alert is the most recent cron run whose send job succeeded; the send job is skipped when there's nothing to report. While the tick is disabled after [completion](#completion), the check sends nothing.
+While a condition holds, the alert repeats every 4 hours. The last alert is the most recent `alert` run of `report.yml` that succeeded or is still running. After [completion](#completion) no tick runs, so the check sends nothing.
 
 ---
 
@@ -401,6 +404,8 @@ For each open `discrepancy` issue that has no ruling yet, compare the failing te
 - **The code is wrong:** comment the `Ruling:` and apply `priority-now`. The issue becomes a work item for the FSE.
 - **The test misreads the PRDs:** comment the `Ruling:`, citing the PRD language, and apply `revise-test`.
 
+A `discrepancy` issue the FSE filed is about its open feature PR, and the FSE is held until the issue closes. Rule on it the same way, with one difference: when the code is wrong, comment the `Ruling:` and **close the issue** instead of applying `priority-now`. The FSE then resumes its PR and must make the test pass. When the test misreads the PRDs, the SDET revises it on `main` and closes the issue.
+
 When the PRDs are genuinely ambiguous, decide in line with their intent and record the decision the same way. When they contradict each other, or can't be met without changing them, apply `needs-human` with a `Needs-human:` comment stating the conflict. That counts as a ruling.
 
 ---
@@ -410,6 +415,8 @@ When the PRDs are genuinely ambiguous, decide in line with their intent and reco
 **Guard:** the FSE runs when either of these is true:
 - no feature PR is open, and the queue below is non-empty;
 - the open feature PR's issue is in the queue, and the PR has no pending review request.
+
+It never runs while a `discrepancy` issue it filed is open: that question is with the PM and the SDET.
 
 Otherwise the work is with the SA, the PM, or the owner, and the FSE does nothing this tick. Above all, it never claims a new issue while a feature PR is open.
 
@@ -431,18 +438,22 @@ The guard has already claimed the issue by applying `in-progress`.
 
 1. **Resume or start.** If a `feat/` branch or PR already exists for the issue, read its state:
    - no PR yet: finish the work and open the PR;
-   - unaddressed SA or PM review comments: address them.
+   - unaddressed SA or PM review comments: address them;
+   - a `discrepancy` issue the FSE filed for this PR has closed: read its `Ruling:`. If the SDET revised the test, merge `main` into the branch, so the [test gate](#test-gate) compares against the revised test. If the PM ruled the code wrong, change the code until the test passes.
 
    Otherwise, branch from `main` and implement the issue.
 2. **Open or update the PR** using `.github/pull_request_template.md`. For a `discrepancy` issue, the fix is done when the listed failing tests pass.
 3. **End every run by requesting the SA's review**, including after a revision. A run that ends without that request fails the discharge check.
 
-If the issue can't be finished without the owner (see [Escalation](#escalation)), escalate it and end the run without requesting review.
+Two other endings exist, and neither requests review:
+- the issue's requirements make an existing test fail (see [Rules](#rules)): push the work, open the PR, and file the `discrepancy` issue;
+- the issue can't be finished without the owner (see [Escalation](#escalation)): escalate it.
 
 #### Rules
 
 - **The FSE never writes or edits tests.** A test written in the same agentic loop as the code it tests only mirrors what that loop already believed about correctness, so it can't catch a shared blind spot. All test authorship lives in the SDET's separate, spec-derived loop.
   - The one exception is mechanical. When a rename or move in production code breaks a test's import or reference, the FSE may update that import or reference, and nothing else: no assertion, fixture, or test-logic changes. The PR description must call it out as a mechanical fix.
+  - When the issue's requirements make an existing test fail for any other reason, the question goes to the PM, never to the owner. File an issue labeled `discrepancy` that states the failing test IDs, the PRD language or acceptance criterion that requires the change, what the test assumes instead, and the PR. The guard then holds the FSE until that issue closes.
 - **Keep the test seams.** Code that touches HTTP, Claude, an external tool, or the database goes through its seam in [CI environment](#ci-environment). A call that bypasses a seam is untestable, and the SA treats it as a `needs-change`.
 - **Check agentic steps for real.** When an issue changes an agentic step (a search runner, the resume checklist, refine), run it once against the live service before requesting review. Record what ran and what came back in the PR description.
 - **Root cause before workaround.** When the FSE hits a bug, a flaky check, or unexpected behavior, the default move is to understand why, not to route around it. A retry loop, a broadened `except`, a widened timeout, or a skipped check are all workarounds. They're acceptable only after the FSE can state *why* the root cause can't be fixed within this issue's scope, and that reasoning goes in the PR description, not just the commit history.

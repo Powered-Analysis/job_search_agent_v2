@@ -73,3 +73,31 @@ def write_fragment(profile: Path, name: str, text: str) -> None:
 def copy_example(destination: Path) -> Path:
     shutil.copytree(EXAMPLE_DIR, destination)
     return destination
+
+
+WEEKDAYS = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+_RUNNERS_AND_VERIFICATION = (
+    "[runners.claude]" + SEARCH_TOML.split("[runners.claude]")[1]
+)
+
+
+def schedule_toml(timezone: str, run_at: str, days: dict[str, list[tuple[str, int]]]):
+    """A `search.toml` whose `[schedule]` maps each named weekday to ordered (agent, window_hours)."""
+    schedule = "\n".join(
+        f"{day} = ["
+        + ", ".join(f'{{ agent = "{a}", window_hours = {w} }}' for a, w in searches)
+        + "]"
+        for day, searches in days.items()
+    )
+    return (
+        f'timezone = "{timezone}"\nrun_at = "{run_at}"\n\n[schedule]\n{schedule}\n\n'
+        + _RUNNERS_AND_VERIFICATION
+    )

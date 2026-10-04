@@ -7,11 +7,12 @@ from datetime import date
 from jsa import db
 from jsa.add import add_posting
 from jsa.config import load_environment
+from jsa.cron import cron
 from jsa.errors import JsaError
 from jsa.http import make_client
 from jsa.packet import build_packets
 from jsa.review import review
-from jsa.search import RUNNERS, search
+from jsa.search import RUNNERS, Summary, search
 
 
 def _init_db(args: argparse.Namespace) -> None:
@@ -39,13 +40,31 @@ def _packet(args: argparse.Namespace) -> None:
     build_packets(args.id, dry_run=args.dry_run)
 
 
-def _search(args: argparse.Namespace) -> None:
-    with make_client() as client:
-        summary, warnings = search(client, args.agent, args.window_hours)
+def _print_search(summary: Summary, warnings: list[str]) -> None:
     for key, value in asdict(summary).items():
         print(f"{key}: {value}")
     for warning in warnings:
         print(f"warning: {warning}")
+
+
+def _search(args: argparse.Namespace) -> None:
+    with make_client() as client:
+        _print_search(*search(client, args.agent, args.window_hours))
+
+
+def _cron(args: argparse.Namespace) -> None:
+    with make_client() as client:
+        run = cron(client, ungated=args.ungated)
+    if run.skipped:
+        print(run.skipped)
+    for summary, warnings in run.results:
+        _print_search(summary, warnings)
+    if run.failures:
+        total = len(run.results) + len(run.failures)
+        raise JsaError(
+            f"{len(run.failures)} of {total} searches failed: "
+            + "; ".join(run.failures)
+        )
 
 
 def _positive_int(text: str) -> int:
@@ -109,6 +128,15 @@ def main() -> None:
         help="how far back to look for postings",
     )
     search_command.set_defaults(run=_search)
+    cron_command = commands.add_parser(
+        "cron", help="the scheduled machine's entrypoint: run the day's searches if due"
+    )
+    cron_command.add_argument(
+        "--ungated",
+        action="store_true",
+        help="skip the time-of-day gate and the daily claim (smoke test)",
+    )
+    cron_command.set_defaults(run=_cron)
     args = parser.parse_args()
 
     # The search trace (steps, heartbeat, cost) goes to the log (PRD 01).
