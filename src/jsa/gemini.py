@@ -38,7 +38,7 @@ OUTPUT_RATE = 12.00
 
 def make_client(key: str) -> genai.Client:
     # The one replaceable point for Gemini (XC-9): tests substitute a client that never reaches the network.
-    # HttpOptions.timeout is in milliseconds. A stalled read raises a transport error, which the run reconnects from.
+    # HttpOptions.timeout is in milliseconds. It is only the default: each call passes its own, cut to the time left.
     return genai.Client(
         api_key=key,
         http_options=genai.types.HttpOptions(timeout=READ_TIMEOUT_SECONDS * 1000),
@@ -161,7 +161,9 @@ class GeminiAgentRunner:
 
     def run(self, prompt: str) -> RunnerResult:
         deadline = Deadline()
-        state = self._consume(StreamState(), partial(self._create, prompt), deadline)
+        state = self._consume(
+            StreamState(), partial(self._create, prompt, deadline), deadline
+        )
         while not state.completed:
             deadline.check()
             if state.interaction_id is None:
@@ -173,15 +175,15 @@ class GeminiAgentRunner:
                 log.info("stream dropped; reconnecting from event %s", before)
                 state = self._consume(
                     state,
-                    partial(self._reconnect, state.interaction_id, before),
+                    partial(self._reconnect, state.interaction_id, before, deadline),
                     deadline,
                 )
             if not state.completed and state.last_event_id == before:
                 # A reconnect that gains nothing: ask the status instead of spinning on it.
-                state = self._poll(state)
+                state = self._poll(state, deadline)
                 if not state.completed:
                     self._sleep(POLL_SECONDS)
-        state = self._read_interaction(state)
+        state = self._read_interaction(state, deadline)
         if not state.text:
             raise RunnerError("Gemini's interaction completed without a final answer")
         cost = estimate_cost(state.usage)
@@ -197,7 +199,7 @@ class GeminiAgentRunner:
             state.text, self._agent, None, cost, cost_is_estimate=cost is not None
         )
 
-    def _create(self, prompt: str):
+    def _create(self, prompt: str, deadline: Deadline):
         return self._client.interactions.create(
             agent=self._agent,
             background=True,
@@ -205,11 +207,15 @@ class GeminiAgentRunner:
             input=prompt,
             agent_config=AGENT_CONFIG,
             tools=TOOLS,
+            timeout=deadline.request_timeout(),
         )
 
-    def _reconnect(self, interaction_id: str, last_event_id: str):
+    def _reconnect(self, interaction_id: str, last_event_id: str, deadline: Deadline):
         return self._client.interactions.get(
-            interaction_id, stream=True, last_event_id=last_event_id
+            interaction_id,
+            stream=True,
+            last_event_id=last_event_id,
+            timeout=deadline.request_timeout(),
         )
 
     def _consume(
@@ -237,15 +243,17 @@ class GeminiAgentRunner:
             log.warning("Gemini stream dropped: %s", error)
         return state
 
-    def _read_interaction(self, state: StreamState) -> StreamState:
-        interaction = self._client.interactions.get(state.interaction_id)
+    def _read_interaction(self, state: StreamState, deadline: Deadline) -> StreamState:
+        interaction = self._client.interactions.get(
+            state.interaction_id, timeout=deadline.request_timeout()
+        )
         return fold_interaction(
             state, interaction.model_dump(mode="json", exclude_none=True)
         )
 
-    def _poll(self, state: StreamState) -> StreamState:
+    def _poll(self, state: StreamState, deadline: Deadline) -> StreamState:
         try:
-            state = self._read_interaction(state)
+            state = self._read_interaction(state, deadline)
         except Exception as error:
             if not _dropped(error):
                 raise

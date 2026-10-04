@@ -11,7 +11,7 @@ import httpx
 import pytest
 from conftest import drop_all_tables
 from profile_helpers import SEARCH_TOML, copy_example, write_search_toml
-from search_helpers import Boards, rows
+from search_helpers import Boards, Jump, rows
 
 from jsa import cli, db, gemini
 from jsa.errors import JsaError
@@ -121,6 +121,7 @@ class Gemini:
         self.create_calls = []
         self.reconnect_calls = []
         self.read_calls = []
+        self.read_kwargs = []
         self.interactions = SimpleNamespace(create=self._create, get=self._get)
 
     def _create(self, **kwargs):
@@ -133,6 +134,7 @@ class Gemini:
             assert len(self.reconnect_calls) < 50, "the run never ends"
             return self._stream(self.reconnects.pop(0) if self.reconnects else [])
         self.read_calls.append(interaction_id)
+        self.read_kwargs.append(kwargs)
         assert len(self.read_calls) < 50, "the run never ends"
         read = self.reads.pop(0) if len(self.reads) > 1 else self.reads[0]
         return Wire(read)
@@ -358,6 +360,83 @@ def test_a_stalled_stream_that_keeps_timing_out_still_hits_the_ceiling(
     fake.reads = [{"id": INTERACTION, "status": "in_progress"}]
     with pytest.raises(WallClockExceeded):
         runner().run("p")
+
+
+# --- each request is bounded by the time left on the ceiling (issue #62) -------------------
+
+
+def every_timeout(fake):
+    calls = fake.create_calls + fake.reconnect_calls + fake.read_kwargs
+    assert calls, "the run made no Gemini calls"
+    return [call.get("timeout") for call in calls]
+
+
+def test_every_gemini_call_of_a_fresh_run_gets_the_1800_second_read_timeout(
+    fake, monkeypatch
+):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Tick(0)))
+    fake.created = [created("e1"), thought("e2")]
+    fake.reconnects = [[completed("e3")]]
+    runner().run("p")
+    assert every_timeout(fake) == [1800, 1800, 1800]
+
+
+def test_every_gemini_call_late_in_the_run_gets_only_the_time_left(fake, monkeypatch):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Jump(3000)))
+    fake.created = [created("e1"), thought("e2")]
+    fake.reconnects = [[completed("e3")]]
+    runner().run("p")
+    assert every_timeout(fake) == [600, 600, 600]
+
+
+def test_a_status_poll_is_bounded_by_the_time_left_too(fake, monkeypatch):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Jump(3000)))
+    fake.created = [created("e1")]
+    fake.reconnects = [[], []]
+    fake.reads = [{"id": INTERACTION, "status": "in_progress"}, finished("polled")]
+    assert runner().run("p").text == "polled"
+    assert len(fake.read_kwargs) >= 2
+    assert set(every_timeout(fake)) == {600}
+
+
+def test_a_gemini_call_with_one_second_left_gets_a_one_second_timeout(
+    fake, monkeypatch
+):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Jump(3599)))
+    runner().run("p")
+    assert every_timeout(fake) == [pytest.approx(1)] * len(every_timeout(fake))
+
+
+def test_a_gemini_call_is_not_made_once_the_ceiling_has_passed(fake, monkeypatch):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Jump(3601)))
+    with pytest.raises(WallClockExceeded):
+        runner().run("p")
+    assert fake.create_calls == []
+
+
+def test_a_reconnect_is_not_made_once_the_ceiling_has_passed(fake, monkeypatch):
+    class Late:
+        """In time for the first call, past the ceiling by the second."""
+
+        def __init__(self):
+            self.now = 0.0
+
+        def __call__(self):
+            return self.now
+
+    clock = Late()
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, clock))
+
+    def stalls():
+        yield Wire(created("e1"))
+        clock.now = 3601.0
+        raise httpx.ReadTimeout("stalled")
+
+    fake.created = stalls()
+    with pytest.raises(WallClockExceeded):
+        runner().run("p")
+    assert fake.reconnect_calls == []
+    assert fake.read_calls == []
 
 
 def test_a_second_drop_reconnects_from_the_event_the_first_reconnect_reached(fake):

@@ -4,6 +4,7 @@ import itertools
 import json
 import logging
 import sys
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -12,6 +13,7 @@ import httpx
 import pytest
 from conftest import drop_all_tables, raw_connect
 from profile_helpers import copy_example
+from search_helpers import Jump
 
 from jsa import cli, db, runners, search
 from jsa.errors import JsaError
@@ -86,15 +88,28 @@ def sse(events):
     )
 
 
-def stream_for(text, *, model=MODEL, cost=COST, steps=2, deltas=()):
-    events = [("response.created", {"response": {"model": "xhigh"}})]
-    events += [("response.sandbox.results", {})] * steps
+STEP_EVENTS = (
+    "response.reasoning.search_results",
+    "response.reasoning.fetch_url_results",
+)
+TIER = "flex"
+
+
+def stream_for(text, *, model=MODEL, cost=COST, steps=2, deltas=(), tier=TIER):
+    events = [("response.created", {"response": {"model": "high"}})]
+    events += [(STEP_EVENTS[i % 2], {}) for i in range(steps)]
     events += [("response.output_text.delta", {"delta": piece}) for piece in deltas]
     events += [
         ("response.output_text.done", {"text": text}),
         (
             "response.completed",
-            {"response": {"model": model, "usage": {"cost": {"total_cost": cost}}}},
+            {
+                "response": {
+                    "model": model,
+                    "service_tier": tier,
+                    "usage": {"cost": {"total_cost": cost}},
+                }
+            },
         ),
     ]
     return events
@@ -398,12 +413,14 @@ def test_an_unknown_agent_is_refused(world, monkeypatch, capsys):
 # --- the Perplexity request ------------------------------------------------------
 
 
-def test_request_body_pins_the_xhigh_preset_with_no_overrides():
+def test_request_body_pins_the_high_preset_on_flex_with_only_a_step_override():
     body = request_body("the assembled prompt")
-    assert body["preset"] == "xhigh"
+    assert body["preset"] == "high"
+    assert body["service_tier"] == "flex"
+    assert body["max_steps"] == 30
     assert body["input"] == "the assembled prompt"
     assert body["stream"] is True
-    for forbidden in ("model", "max_steps", "tools"):
+    for forbidden in ("model", "tools"):
         assert forbidden not in body
 
 
@@ -436,11 +453,13 @@ def test_the_request_on_the_wire_is_an_authorised_streaming_post_to_the_agent_ap
     assert str(request.url) == "https://api.perplexity.ai/v1/agent"
     assert request.headers["authorization"] == "Bearer test-perplexity-key"
     body = json.loads(request.content)
-    assert body["preset"] == "xhigh"
+    assert body["preset"] == "high"
+    assert body["service_tier"] == "flex"
+    assert body["max_steps"] == 30
     assert body["stream"] is True
     assert body["response_format"]["type"] == "json_schema"
     assert body["input"].strip()
-    for forbidden in ("model", "max_steps", "tools"):
+    for forbidden in ("model", "tools"):
         assert forbidden not in body
 
 
@@ -500,9 +519,41 @@ def test_fold_reads_cost_and_model_from_the_completed_event():
     assert state.cost == 3.5
 
 
-@pytest.mark.parametrize("steps", [0, 1, 4])
-def test_fold_counts_the_sandbox_steps(steps):
-    assert fold_events(stream_for("x", steps=steps)).sandbox_steps == steps
+def changed_values(before, after):
+    """The values a fold changed, so a test needn't name the state's fields."""
+    old, new = asdict(before), asdict(after)
+    return [new[name] for name in new if new[name] != old[name]]
+
+
+@pytest.mark.parametrize("steps", [1, 2, 5])
+def test_fold_counts_one_research_step_per_search_or_fetch_result(steps):
+    events = [(STEP_EVENTS[i % 2], {}) for i in range(steps)]
+    assert changed_values(StreamState(), fold_events(events)) == [steps]
+
+
+@pytest.mark.parametrize("event", STEP_EVENTS)
+def test_each_kind_of_research_event_counts_as_a_step(event):
+    assert changed_values(StreamState(), fold_events([(event, {})])) == [1]
+
+
+def test_the_retired_sandbox_event_is_not_a_research_step():
+    assert fold_events([("response.sandbox.results", {})]) == StreamState()
+
+
+def test_the_completed_event_records_the_service_tier_perplexity_reports():
+    reported = fold_events(stream_for("x", tier="default"))
+    assert "default" in asdict(reported).values()
+    assert "flex" not in asdict(reported).values()
+
+
+def test_the_closing_line_reports_the_tier_and_the_research_steps(web, profile, caplog):
+    web.perplexity(answer_with([]), steps=3, tier="default")
+    caplog.set_level(logging.INFO, logger="jsa")
+    with make_client() as client:
+        PerplexityRunner(client).run("a prompt")
+    closing = [r.getMessage() for r in caplog.records if r.name.startswith("jsa")][-1]
+    assert "default" in closing
+    assert "3" in closing
 
 
 def test_fold_ignores_events_it_does_not_know():
@@ -598,6 +649,23 @@ def test_commands_that_do_not_use_the_key_run_without_it(world, monkeypatch):
 # --- the wall-clock ceiling ------------------------------------------------------
 
 
+def test_a_request_may_wait_the_read_timeout_or_the_time_left_whichever_is_less():
+    clock = Tick(0)
+    deadline = Deadline(clock=clock)
+    for elapsed, allowed in [
+        (0, 1800),
+        (1800, 1800),
+        (1801, 1799),
+        (3000, 600),
+        (3599, 1),
+    ]:
+        clock.now = elapsed
+        assert deadline.request_timeout() == pytest.approx(allowed)
+    clock.now = 3601
+    with pytest.raises(WallClockExceeded):
+        deadline.request_timeout()
+
+
 def test_the_ceiling_is_3600_seconds_and_a_run_past_it_raises():
     assert runners.WALL_CLOCK_CEILING_SECONDS == 3600
     clock = Tick(0)
@@ -607,6 +675,36 @@ def test_the_ceiling_is_3600_seconds_and_a_run_past_it_raises():
     clock.now = 3601
     with pytest.raises(WallClockExceeded):
         deadline.check()
+
+
+def test_a_request_late_in_the_run_gets_only_the_time_left_as_its_read_timeout(
+    world, monkeypatch, capsys
+):
+    world.web.posted(entry(world.web.job()))
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Jump(3000)))
+    code, _out, _err = run(monkeypatch, capsys)
+    assert code == 0
+    (request,) = perplexity_requests(world.web)
+    assert request.extensions["timeout"]["read"] == 600
+
+
+def test_a_request_with_one_second_left_gets_a_one_second_read_timeout(
+    world, monkeypatch, capsys
+):
+    world.web.posted(entry(world.web.job()))
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Jump(3599)))
+    run(monkeypatch, capsys)
+    (request,) = perplexity_requests(world.web)
+    assert request.extensions["timeout"]["read"] == pytest.approx(1)
+
+
+def test_no_request_is_sent_once_the_ceiling_has_passed(world, monkeypatch, capsys):
+    world.web.posted(entry(world.web.job()))
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Jump(3601)))
+    code, _out, _err = run(monkeypatch, capsys)
+    assert code != 0
+    assert perplexity_requests(world.web) == []
+    assert count_rows(world.url, "postings") == 0
 
 
 def test_a_search_that_runs_past_the_ceiling_raises_and_inserts_nothing(
