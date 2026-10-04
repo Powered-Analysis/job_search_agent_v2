@@ -1,4 +1,4 @@
-"""The Perplexity runner (PRD 01): the Agent API's `xhigh` preset, streamed and folded into a final answer."""
+"""The Perplexity runner (PRD 01): the Agent API's `high` preset on the `flex` tier, streamed and folded into a final answer."""
 
 import logging
 from collections.abc import Iterable
@@ -16,6 +16,13 @@ log = logging.getLogger(__name__)
 URL = "https://api.perplexity.ai/v1/agent"
 KEY_NAME = "PERPLEXITY_API_KEY"
 _FAILURE_EVENTS = frozenset({"response.failed", "error"})
+# The preset's searches and page fetches: its research steps.
+_STEP_EVENTS = frozenset(
+    {"response.reasoning.search_results", "response.reasoning.fetch_url_results"}
+)
+SERVICE_TIER = "flex"
+# Double the preset's own step budget: the search template asks for per-posting index checks.
+MAX_STEPS = 30
 
 
 @dataclass(frozen=True)
@@ -24,9 +31,10 @@ class StreamState:
 
     deltas: tuple[str, ...] = ()
     final_text: str | None = None
-    sandbox_steps: int = 0
+    steps: int = 0
     cost: float | None = None
     model: str | None = None
+    service_tier: str | None = None
 
     @property
     def text(self) -> str:
@@ -35,9 +43,11 @@ class StreamState:
 
 
 def request_body(prompt: str) -> dict:
-    # No `model`, `max_steps`, or `tools`: any override replaces part of the preset's bundle.
+    # No `model` or `tools`: any further override replaces part of the preset's bundle.
     return {
-        "preset": "xhigh",
+        "preset": "high",
+        "service_tier": SERVICE_TIER,
+        "max_steps": MAX_STEPS,
         "input": prompt,
         "stream": True,
         "response_format": {
@@ -54,12 +64,17 @@ def fold(state: StreamState, event: str, data: dict) -> StreamState:
             return replace(state, deltas=(*state.deltas, data.get("delta") or ""))
         case "response.output_text.done":
             return replace(state, final_text=data.get("text"))
-        case "response.sandbox.results":
-            return replace(state, sandbox_steps=state.sandbox_steps + 1)
+        case _ if event in _STEP_EVENTS:
+            return replace(state, steps=state.steps + 1)
         case "response.completed":
             response = data.get("response") or {}
             cost = ((response.get("usage") or {}).get("cost") or {}).get("total_cost")
-            return replace(state, cost=cost, model=response.get("model"))
+            return replace(
+                state,
+                cost=cost,
+                model=response.get("model"),
+                service_tier=response.get("service_tier"),
+            )
     return state
 
 
@@ -90,26 +105,25 @@ class PerplexityRunner:
             deadline.check()
             if event in _FAILURE_EVENTS:
                 raise RunnerError(f"Perplexity reported a failure: {data}")
-            before = state.sandbox_steps
+            before = state.steps
             state = fold(state, event, data)
-            if state.sandbox_steps != before:
-                log.info(
-                    "sandbox step %d (%.0fs)", state.sandbox_steps, deadline.elapsed
-                )
+            if state.steps != before:
+                log.info("research step %d (%.0fs)", state.steps, deadline.elapsed)
             if deadline.heartbeat_due():
                 log.info(
-                    "still searching: %d sandbox steps, %.0fs",
-                    state.sandbox_steps,
+                    "still searching: %d research steps, %.0fs",
+                    state.steps,
                     deadline.elapsed,
                 )
         deadline.check()
         if not state.text:
             raise RunnerError("Perplexity's stream ended without a final answer")
         log.info(
-            "perplexity done: %d sandbox steps, %.0fs, cost %s, model %s",
-            state.sandbox_steps,
+            "perplexity done: %d research steps, %.0fs, cost %s, model %s, tier %s",
+            state.steps,
             deadline.elapsed,
             "unknown" if state.cost is None else f"${state.cost:.2f}",
             state.model,
+            state.service_tier,
         )
         return RunnerResult(state.text, state.model, None, state.cost)
