@@ -3,6 +3,7 @@
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 import turso_serverless
 
@@ -389,11 +390,21 @@ def clear_decision(conn: Connection, url: str) -> None:
     )
 
 
-def packet_queue(conn: Connection, posting_id: int | None = None) -> list[tuple]:
+class PacketJob(NamedTuple):
+    id: int
+    company: str
+    normalized_company: str
+    title: str
+    title_slug: str
+    url: str
+    jd_markdown: str | None
+    # Set on every posting but the lowest id of its folder name, so the folder is never shared.
+    shares_name: bool
+
+
+def packet_queue(conn: Connection, posting_id: int | None = None) -> list[PacketJob]:
     """Apply postings needing a packet, lowest id first (PRD 02).
 
-    Rows are (id, normalized_company, title_slug, jd_markdown, shares_name), where
-    shares_name marks a posting whose folder name a lower-id posting already holds.
     A posting id waives the tracker and closed conditions, never Apply.
     """
     scope, params = (
@@ -401,9 +412,9 @@ def packet_queue(conn: Connection, posting_id: int | None = None) -> list[tuple]
         if posting_id is not None
         else ("p.added_to_tracker = 0 AND p.closed_at IS NULL", ())
     )
-    return conn.execute(
+    rows = conn.execute(
         f"""
-        SELECT p.id, p.normalized_company, p.title_slug, p.jd_markdown,
+        SELECT p.id, p.company, p.normalized_company, p.title, p.title_slug, p.url, p.jd_markdown,
             EXISTS (
                 SELECT 1 FROM postings other
                 WHERE other.normalized_company = p.normalized_company
@@ -415,6 +426,7 @@ def packet_queue(conn: Connection, posting_id: int | None = None) -> list[tuple]
         """,
         params,
     ).fetchall()
+    return [PacketJob(*row) for row in rows]
 
 
 def tracker_queue(conn: Connection, posting_id: int | None = None) -> list[tuple]:
