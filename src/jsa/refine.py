@@ -133,7 +133,7 @@ def refine_dir() -> Path:
     return profile_dir() / REFINE_DIR
 
 
-def _pending(directory: Path) -> bool:
+def proposal_pending(directory: Path) -> bool:
     return directory.is_dir() and any(directory.iterdir())
 
 
@@ -180,7 +180,7 @@ def _run_in_scratch(
 
 def refine(*, dry_run: bool) -> None:
     directory = refine_dir()
-    if not dry_run and _pending(directory):
+    if not dry_run and proposal_pending(directory):
         raise JsaError(
             f"{directory} holds a pending proposal. Accept or reject it before refining again."
         )
@@ -282,7 +282,7 @@ def _check_unedited(directory: Path) -> None:
 
 def accept() -> None:
     directory = refine_dir()
-    if not _pending(directory):
+    if not proposal_pending(directory):
         print("No proposal is pending.")
         return
     resolved = _resolved(directory)
@@ -307,7 +307,7 @@ def accept() -> None:
 
 def reject() -> None:
     directory = refine_dir()
-    if not _pending(directory):
+    if not proposal_pending(directory):
         print("No proposal is pending.")
         return
     shutil.rmtree(directory)

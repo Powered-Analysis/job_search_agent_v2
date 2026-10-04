@@ -1,0 +1,8 @@
+# No `app` or `primary_region`: `jsa deploy` passes both from [fly] in profile/config.toml.
+# No schedule or [deploy] block: `jsa deploy` sets the schedule on the machine itself.
+
+[[vm]]
+  # The Claude Code CLI subprocess hangs at Fly's 256 MB default.
+  memory = "1024mb"
+  cpu_kind = "shared"
+  cpus = 1

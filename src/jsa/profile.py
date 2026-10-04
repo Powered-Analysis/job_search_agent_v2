@@ -239,6 +239,15 @@ def _agent_settings(config: Config, name: str) -> AgentSettings:
     return settings
 
 
+def fly_settings(config: Config) -> FlyConfig:
+    """The Fly app and region `jsa deploy` passes to `fly`; a missing table raises before any build."""
+    if config.fly is None:
+        raise JsaError(
+            f"{profile_dir() / 'config.toml'} has no [fly] table. {_pointer('config.toml')}"
+        )
+    return config.fly
+
+
 def checklist_settings(config: Config) -> AgentSettings:
     return _agent_settings(config, "checklist")
 

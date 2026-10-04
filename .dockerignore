@@ -1,0 +1,20 @@
+# Only profile/search/ ships (XC-11): the rest of the profile never enters the build context.
+profile/*
+!profile/search
+
+.env
+.env.*
+.git
+.github
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+*.db
+*.db-*
+docs
+prds
+profile.example
+scripts
+tests
+team.yml
