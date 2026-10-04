@@ -2,6 +2,7 @@
 
 import sqlite3
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 import turso_serverless
 
@@ -277,6 +278,47 @@ def close_search_run(
         """,
         (outcome, error, summary, warnings, model, effort, run_id),
     )
+
+
+def claim_cron_day(conn: Connection, run_date: str) -> bool:
+    """True when this call won the day; every later claim of it is False (PRD 02)."""
+    rows = conn.execute(
+        "INSERT INTO cron_runs (run_date) VALUES (?) ON CONFLICT(run_date) DO NOTHING RETURNING run_date",
+        (run_date,),
+    ).fetchall()
+    return bool(rows)
+
+
+def cron_run_dates(conn: Connection) -> set[str]:
+    """Every day the cron claimed, as profile-timezone dates."""
+    return {row[0] for row in conn.execute("SELECT run_date FROM cron_runs").fetchall()}
+
+
+def health_search_runs(conn: Connection, since: datetime) -> list[tuple]:
+    """The runs review's health line reads, oldest first.
+
+    Runs started since `since`, every run with no outcome, and each agent's latest run:
+    (id, run_date, trigger, agent, started_at, outcome, error, summary, warnings).
+    """
+    return conn.execute(
+        """
+        SELECT id, run_date, trigger, agent, started_at, outcome, error, summary, warnings
+        FROM search_runs
+        WHERE started_at >= ? OR outcome IS NULL OR id IN (
+            SELECT id FROM (
+                SELECT id, ROW_NUMBER() OVER (
+                    PARTITION BY agent ORDER BY started_at DESC, id DESC
+                ) AS n FROM search_runs
+            ) WHERE n = 1
+        )
+        ORDER BY started_at, id
+        """,
+        (
+            since.astimezone(UTC)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z"),
+        ),
+    ).fetchall()
 
 
 def find_posting(conn: Connection, url: str) -> tuple[int, str | None] | None:
