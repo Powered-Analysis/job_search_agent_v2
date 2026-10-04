@@ -9,6 +9,7 @@ from jsa.add import add_posting
 from jsa.config import load_environment
 from jsa.cron import cron
 from jsa.errors import JsaError
+from jsa.generate import generate
 from jsa.http import make_client
 from jsa.packet import build_packets
 from jsa.review import review
@@ -39,6 +40,11 @@ def _review(args: argparse.Namespace) -> None:
 
 def _packet(args: argparse.Namespace) -> None:
     build_packets(args.id, dry_run=args.dry_run)
+
+
+def _generate(args: argparse.Namespace) -> None:
+    with make_client() as client:
+        generate(client, args.id, dry_run=args.dry_run)
 
 
 def _track(args: argparse.Namespace) -> None:
@@ -122,6 +128,21 @@ def main() -> None:
         "--dry-run", action="store_true", help="show the folders without creating them"
     )
     packet.set_defaults(run=_packet)
+    generate_command = commands.add_parser(
+        "generate",
+        help="build each Apply posting's packet with a resume checklist, then track it",
+    )
+    generate_command.add_argument(
+        "--id",
+        type=_positive_int,
+        help="generate this Apply posting only, rewriting its checklist",
+    )
+    generate_command.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show the folders without building anything",
+    )
+    generate_command.set_defaults(run=_generate)
     track_command = commands.add_parser(
         "track", help="append Apply postings to the Google Sheet tracker"
     )

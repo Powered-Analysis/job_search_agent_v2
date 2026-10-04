@@ -45,3 +45,16 @@ def search_anthropic_api_key() -> str | None:
 
 def gws_bin() -> str:
     return os.environ.get("JSA_GWS_BIN") or "gws"
+
+
+def generate_workers() -> int:
+    raw = os.environ.get("JSA_GENERATE_WORKERS") or "3"
+    try:
+        workers = int(raw)
+    except ValueError:
+        workers = 0
+    if workers < 1:
+        raise JsaError(
+            f"JSA_GENERATE_WORKERS must be a positive whole number, not {raw!r}."
+        )
+    return workers

@@ -75,6 +75,17 @@ def append_row(spreadsheet_id: str, row: list[str | int]) -> None:
         raise JsaError("gws reported no updated row")
 
 
+def append_tracked(
+    conn: db.Connection, spreadsheet_id: str, today: date, entry: tuple
+) -> None:
+    """Append one tracker-queue row, then mark it tracked; raises JsaError if the append fails."""
+    posting_id, company, title, url, date_posted = entry
+    append_row(
+        spreadsheet_id, tracker_row(posting_id, company, title, url, date_posted, today)
+    )
+    db.mark_tracked(conn, posting_id)
+
+
 def track(posting_id: int | None, *, dry_run: bool) -> None:
     spreadsheet_id = tracker_spreadsheet_id()
     today = datetime.now(load_search_config().tz).date()
@@ -84,18 +95,17 @@ def track(posting_id: int | None, *, dry_run: bool) -> None:
         print("No postings awaiting the tracker.")
         return
     failures = []
-    for pid, company, title, url, date_posted in queue:
-        row = tracker_row(pid, company, title, url, date_posted, today)
+    for entry in queue:
+        pid = entry[0]
         if dry_run:
-            print(f"would append: {row}")
+            print(f"would append: {tracker_row(*entry, today)}")
             continue
         try:
-            append_row(spreadsheet_id, row)
+            append_tracked(conn, spreadsheet_id, today, entry)
         except JsaError as error:
             print(f"failed: posting {pid}: {error}")
             failures.append(pid)
             continue
-        db.mark_tracked(conn, pid)
         print(f"appended: posting {pid}")
     if failures:
         raise JsaError(
