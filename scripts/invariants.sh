@@ -15,8 +15,9 @@ prs=$(feature_prs open)
 open=$(jq 'length' <<<"$prs")
 ((open <= 1)) || violation "1: $open feature PRs are open; at most one may be."
 
-idle=$(jq -r --argjson issues "$issues" --arg sa "$SA_LOGIN" --arg pm "$PM_LOGIN" "$JQ_DEFS"'
-  .[] | . as $pr
+idle=$(jq -r --slurpfile issues <(json_file "$issues") --arg sa "$SA_LOGIN" --arg pm "$PM_LOGIN" "$JQ_DEFS"'
+  $issues[0] as $issues
+  | .[] | . as $pr
   | ([$issues[] | select(.number == $pr.issue)][0]) as $issue
   | select((($pr.requested | index($sa)) != null or ($pr.requested | index($pm)) != null
       or ($issue != null and ($issue | has_label("in-progress") or has_label("priority-now") or has_label("needs-human"))))
