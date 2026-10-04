@@ -16,7 +16,11 @@ from profile_helpers import (
 from jsa.assemble import OPTIONAL_PLACEHOLDER, app_template
 from jsa.errors import JsaError
 from jsa.profile import load_search_config
-from jsa.search_prompt import assemble_search_prompt, search_window
+from jsa.search_prompt import (
+    assemble_search_prompt,
+    assemble_search_prompt_for,
+    search_window,
+)
 
 REQUIRED = ("candidate", "target_roles", "filters")
 OPTIONAL = ("positive_signals", "negative_signals", "hard_exclusions")
@@ -297,3 +301,101 @@ def test_the_search_template_states_the_output_contract_it_owns():
     text = app_template("search.md")
     assert "postings" in text
     assert "date_posted" in text
+
+
+# --- a directory of replacement fragments ------------------------------------
+
+
+@pytest.fixture
+def replacements(tmp_path):
+    path = tmp_path / "replacements"
+    path.mkdir()
+    return path
+
+
+def assembled_with(replacements):
+    return assemble_search_prompt_for(
+        load_search_config(), "a test window", replacements
+    )
+
+
+def test_a_fragment_in_the_replacements_directory_is_used_in_place_of_the_live_one(
+    profile, replacements
+):
+    marked(profile)
+    (replacements / "filters.md").write_text("REPLACED-FILTERS-TEXT", encoding="utf-8")
+    prompt = assembled_with(replacements)
+    assert "REPLACED-FILTERS-TEXT" in prompt
+    assert "UNIQUE-FILTERS-TEXT" not in prompt
+
+
+def test_a_fragment_absent_from_the_replacements_directory_comes_from_the_live_profile(
+    profile, replacements
+):
+    marked(profile)
+    (replacements / "filters.md").write_text("REPLACED-FILTERS-TEXT", encoding="utf-8")
+    prompt = assembled_with(replacements)
+    for name in FRAGMENTS:
+        if name != "filters":
+            assert f"UNIQUE-{name.upper()}-TEXT" in prompt, name
+
+
+def test_replacing_a_fragment_leaves_the_live_file_untouched(profile, replacements):
+    marked(profile)
+    live = profile / "search" / "filters.md"
+    before = live.read_bytes()
+    (replacements / "filters.md").write_text("REPLACED-FILTERS-TEXT", encoding="utf-8")
+    assembled_with(replacements)
+    assert live.read_bytes() == before
+
+
+def test_an_empty_replacements_directory_assembles_the_same_prompt_as_none(
+    profile, replacements
+):
+    window = "a test window"
+    assert assembled_with(replacements) == assemble_search_prompt_for(
+        load_search_config(), window
+    )
+
+
+def test_a_replacement_supplies_a_required_fragment_the_live_profile_lacks(
+    profile, replacements
+):
+    (profile / "search" / "filters.md").unlink()
+    (replacements / "filters.md").write_text("REPLACED-FILTERS-TEXT", encoding="utf-8")
+    assert "REPLACED-FILTERS-TEXT" in assembled_with(replacements)
+
+
+@pytest.mark.parametrize("name", REQUIRED)
+@pytest.mark.parametrize("content", ["", "  \n\n \t"], ids=["empty", "blank"])
+def test_an_empty_replacement_of_a_required_fragment_raises_naming_the_replacement_file(
+    profile, replacements, name, content
+):
+    marked(profile)
+    (replacements / f"{name}.md").write_text(content, encoding="utf-8")
+    with pytest.raises(JsaError) as raised:
+        assembled_with(replacements)
+    message = str(raised.value)
+    assert str(replacements / f"{name}.md") in message
+    assert str(profile / "search" / f"{name}.md") not in message
+
+
+@pytest.mark.parametrize("name", OPTIONAL)
+def test_an_empty_replacement_of_an_optional_fragment_fills_its_slot_with_the_placeholder(
+    profile, replacements, name
+):
+    marked(profile)
+    (replacements / f"{name}.md").write_text("", encoding="utf-8")
+    prompt = assembled_with(replacements)
+    assert OPTIONAL_PLACEHOLDER in prompt
+    assert f"UNIQUE-{name.upper()}-TEXT" not in prompt
+
+
+@pytest.mark.parametrize("name", REQUIRED)
+def test_a_live_required_fragment_that_is_missing_is_still_named_by_its_live_path(
+    profile, replacements, name
+):
+    (profile / "search" / f"{name}.md").unlink()
+    with pytest.raises(JsaError) as raised:
+        assembled_with(replacements)
+    assert str(profile / "search" / f"{name}.md") in str(raised.value)

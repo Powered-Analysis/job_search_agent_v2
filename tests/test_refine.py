@@ -1069,6 +1069,31 @@ def test_accept_with_a_required_fragment_resolved_to_empty_refuses_naming_it(
     assert live_snapshot(profile) == before
 
 
+@pytest.mark.parametrize("name", ["target_roles", "filters"])
+@pytest.mark.parametrize("emptied", ["", "\n\n"], ids=["empty", "blank-lines"])
+def test_accept_refusing_an_empty_required_fragment_names_the_proposal_file_not_the_live_one(
+    name, emptied, seed, refiner, profile, monkeypatch, capsys
+):
+    propose(
+        seed,
+        refiner,
+        profile,
+        monkeypatch,
+        capsys,
+        **{name: live(profile, f"{name}.md") + "- One more line.\n"},
+    )
+    resolve_all(profile, "proposed")
+    proposal_file = proposal_dir(profile) / f"{name}.md"
+    proposal_file.write_text(emptied, encoding="utf-8")
+    before = live_snapshot(profile)
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code != 0
+    assert str(proposal_file) in out, out
+    assert str(profile / "search" / f"{name}.md") not in out, out
+    assert live_snapshot(profile) == before
+    assert proposal_file.exists()
+
+
 def test_accept_after_a_hand_edit_of_a_live_fragment_refuses_and_says_to_reject_and_rerun(
     seed, refiner, profile, monkeypatch, capsys
 ):
