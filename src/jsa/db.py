@@ -453,3 +453,45 @@ def tracker_queue(conn: Connection, posting_id: int | None = None) -> list[tuple
 
 def mark_tracked(conn: Connection, posting_id: int) -> None:
     conn.execute("UPDATE postings SET added_to_tracker = 1 WHERE id = ?", (posting_id,))
+
+
+class DecidedPosting(NamedTuple):
+    id: int
+    company: str | None
+    title: str | None
+    decision: str
+    fit_feedback: str | None
+    search_agent: str | None
+    url: str | None
+    location: str | None
+    date_posted: str | None
+    jd_markdown: str | None
+    decided_at: str
+
+
+def refinement_cutoff(conn: Connection) -> str | None:
+    """The newest cutoff among recorded refine runs; None before the first (PRD 02)."""
+    return conn.execute("SELECT MAX(cutoff) FROM prompt_refinement_runs").fetchone()[0]
+
+
+def decided_postings(conn: Connection) -> list[DecidedPosting]:
+    """Every decided posting in full, oldest decision first."""
+    rows = conn.execute(
+        """
+        SELECT id, company, title, decision, fit_feedback, search_agent, url, location,
+            date_posted, jd_markdown, decided_at
+        FROM postings
+        WHERE decision IS NOT NULL
+        ORDER BY decided_at, id
+        """
+    ).fetchall()
+    return [DecidedPosting(*row) for row in rows]
+
+
+def record_refinement_run(
+    conn: Connection, cutoff: str, considered: int, changed: int
+) -> None:
+    conn.execute(
+        "INSERT INTO prompt_refinement_runs (cutoff, considered, changed) VALUES (?, ?, ?)",
+        (cutoff, considered, changed),
+    )

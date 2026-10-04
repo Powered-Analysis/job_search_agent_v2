@@ -1,6 +1,7 @@
 """The one search prompt every runner sends (PRD 01, XC-13)."""
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from jsa.assemble import Slot, app_template, assemble
 from jsa.profile import SearchConfig, profile_dir
@@ -29,22 +30,34 @@ def search_window(hours: int, now: datetime, config: SearchConfig) -> str:
     return f"the last {hours} hours (from {render(start)} through {render(now)})"
 
 
-def _read_fragment(name: str, filename: str) -> Slot:
-    path = profile_dir() / SEARCH_DIR / filename
+def fragment_path(filename: str) -> Path:
+    return profile_dir() / SEARCH_DIR / filename
+
+
+def read_fragment(filename: str) -> str | None:
+    """The fragment's text; None when the user has no such file."""
     try:
-        text = path.read_text(encoding="utf-8")
+        return fragment_path(filename).read_text(encoding="utf-8")
     except FileNotFoundError:
-        text = None
+        return None
+
+
+def _read_fragment(name: str, filename: str) -> Slot:
     return Slot(
-        text,
-        f"{path} (copy the shape from profile.example/{SEARCH_DIR}/{filename})",
+        read_fragment(filename),
+        f"{fragment_path(filename)} (copy the shape from profile.example/{SEARCH_DIR}/{filename})",
         required=FRAGMENTS[name][1],
     )
 
 
 def assemble_search_prompt(config: SearchConfig, hours: int, now: datetime) -> str:
+    return assemble_search_prompt_for(config, search_window(hours, now, config))
+
+
+def assemble_search_prompt_for(config: SearchConfig, window: str) -> str:
+    """The search prompt with `window` in the window slot, for a caller with no run of its own."""
     slots = {
-        "SEARCH_WINDOW": Slot(search_window(hours, now, config), "the search window"),
+        "SEARCH_WINDOW": Slot(window, "the search window"),
         "LIVENESS_RULES": Slot(
             app_template(f"liveness_{config.verification.mode}.md"),
             "the app's liveness rules",

@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -99,6 +100,7 @@ def run_agent(
     tools: list[str],
     max_turns: int,
     permission_mode: PermissionMode,
+    cwd: Path | None = None,
     env: dict[str, str] | None = None,
     on_message: Callable[[Message], None] | None = None,
 ) -> AgentResult:
@@ -112,6 +114,7 @@ def run_agent(
         strict_mcp_config=True,
         max_turns=max_turns,
         permission_mode=permission_mode,
+        cwd=cwd,
         env=env or {},
     )
     return asyncio.run(_drive(prompt, options, on_message))

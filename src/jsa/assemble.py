@@ -25,10 +25,12 @@ def app_template(name: str) -> str:
 
 
 def assemble(template: str, slots: Mapping[str, Slot]) -> str:
+    unfilled: list[str] = []
+
     def fill(marker: re.Match[str]) -> str:
         name = marker[0][2:-2]
         if name not in slots:
-            # Left in place so the check below names it.
+            unfilled.append(marker[0])
             return marker[0]
         slot = slots[name]
         text = (slot.text or "").strip()
@@ -38,8 +40,9 @@ def assemble(template: str, slots: Mapping[str, Slot]) -> str:
             raise JsaError(f"{name} has no content: {slot.source} is missing or empty.")
         return OPTIONAL_PLACEHOLDER
 
-    # A single pass, so text a slot brings in is never itself expanded.
+    # A single pass, so text a slot brings in is never itself expanded or mistaken for an
+    # unfilled marker: a job description may contain `{{...}}` of its own.
     assembled = _MARKER.sub(fill, template)
-    if unfilled := _MARKER.search(assembled):
+    if unfilled:
         raise JsaError(f"The prompt template has no source for {unfilled[0]}.")
     return assembled
