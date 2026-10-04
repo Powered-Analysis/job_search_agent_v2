@@ -55,6 +55,12 @@ tick_gh() { GH_TOKEN="${TICK_TOKEN:?TICK_TOKEN must be set}" gh "$@"; }
 # Every page of a REST list endpoint, as one JSON array.
 api_list() { gh api --paginate "$1" --jq '.[]' | jq -s '.'; }
 
+# A JSON value for jq's --slurpfile, as <(json_file "$value"). A value that grows
+# with the repository (the issue list) never goes in --argjson: one command-line
+# argument over 128 KiB fails with "Argument list too long". --slurpfile wraps
+# the value in an array, so filters rebind it: `$issues[0] as $issues | ...`.
+json_file() { printf '%s\n' "$1"; }
+
 issue_url() { echo "https://github.com/$REPO/issues/$1"; }
 
 # Every issue a team account wrote, open or closed, lowest number first.
@@ -108,8 +114,9 @@ guard_pm() {
   issues=$(team_issues)
   prs=$(feature_prs open)
   role=$(cfg '.roles.pm')
-  jq -n --argjson issues "$issues" --argjson prs "$prs" --argjson role "$role" --arg pm "$PM_LOGIN" "$JQ_DEFS"'
-    ($prs | map(.issue)) as $linked
+  jq -n --slurpfile issues <(json_file "$issues") --argjson prs "$prs" --argjson role "$role" --arg pm "$PM_LOGIN" "$JQ_DEFS"'
+    $issues[0] as $issues
+    | ($prs | map(.issue)) as $linked
     | ((if ($issues | length) == 0 then ["plan"] else [] end)
       + [$prs[] | select(.requested | index($pm)) | "pr:\(.number)"]
       + [$issues[]
@@ -124,8 +131,9 @@ guard_fse() {
   local issues prs
   issues=$(team_issues)
   prs=$(feature_prs open)
-  jq -n --argjson issues "$issues" --argjson prs "$prs" --arg fse "$FSE_LOGIN" "$JQ_DEFS"'
-    ($issues | fse_queue) as $queue
+  jq -n --slurpfile issues <(json_file "$issues") --argjson prs "$prs" --arg fse "$FSE_LOGIN" "$JQ_DEFS"'
+    $issues[0] as $issues
+    | ($issues | fse_queue) as $queue
     # A discrepancy the FSE filed holds it until the PM and SDET have resolved it.
     | (if ($issues | any(.state == "OPEN" and .author.login == $fse and has_label("discrepancy"))) then []
        elif ($prs | length) == 0 then $queue[0:1]
@@ -146,8 +154,9 @@ guard_sdet() {
   local issues uncovered
   issues=$(team_issues)
   uncovered=$(sdet_uncovered)
-  jq -n --argjson issues "$issues" --argjson uncovered "$uncovered" "$JQ_DEFS"'
-    {items: (($uncovered | map("cover:\(.)"))
+  jq -n --slurpfile issues <(json_file "$issues") --argjson uncovered "$uncovered" "$JQ_DEFS"'
+    $issues[0] as $issues
+    | {items: (($uncovered | map("cover:\(.)"))
       + [$issues[] | select(.state == "OPEN" and has_label("revise-test")) | "revise:\(.number)"])}'
 }
 
@@ -158,8 +167,9 @@ team_done() {
   issues=$(team_issues)
   prs=$(feature_prs open)
   uncovered=$(sdet_uncovered)
-  jq -n --argjson issues "$issues" --argjson prs "$prs" --argjson uncovered "$uncovered" "$JQ_DEFS"'
-    ($issues | length) > 0
+  jq -n --slurpfile issues <(json_file "$issues") --argjson prs "$prs" --argjson uncovered "$uncovered" "$JQ_DEFS"'
+    $issues[0] as $issues
+    | ($issues | length) > 0
     and ($issues | all(.state != "OPEN" or has_label("follow-up")))
     and ($prs | length) == 0
     and ($uncovered | length) == 0'
@@ -194,9 +204,11 @@ report_status() {
   merged=$(feature_prs merged)
   runs=$(tick_runs)
   complete=$(team_done)
-  jq -n --argjson issues "$issues" --argjson merged "$merged" --argjson runs "$runs" \
+  jq -n --slurpfile issues <(json_file "$issues") --slurpfile merged <(json_file "$merged") --argjson runs "$runs" \
     --argjson complete "$complete" --argjson limits "$limits" "$JQ_DEFS"'
-    ($runs | map(.conclusion == "success")) as $ok
+    $issues[0] as $issues
+    | $merged[0] as $merged
+    | ($runs | map(.conclusion == "success")) as $ok
     | $limits.blocked_after_failed_ticks as $streak
     | (($runs | length) >= $streak and ($ok[0:$streak] | any | not)) as $blocked
     | ($ok | index(true)) as $first_ok

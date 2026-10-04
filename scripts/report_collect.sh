@@ -49,9 +49,10 @@ for number in $(jq -r --arg since "$since" '.[] | select(.updatedAt > $since) | 
 done
 
 facts=$(jq -n --arg repo "$REPO" --arg since "$since" --arg pm "$PM_LOGIN" \
-  --argjson status "$status" --argjson issues "$issues" --argjson prs "$prs" \
-  --argjson comments "$comments" --argjson needs "$needs" --argjson flagged "$flagged" "$JQ_DEFS"'
-  def issue($n): [$issues[] | select(.number == $n)][0];
+  --argjson status "$status" --slurpfile issues <(json_file "$issues") --slurpfile prs <(json_file "$prs") \
+  --slurpfile comments <(json_file "$comments") --argjson needs "$needs" --argjson flagged "$flagged" "$JQ_DEFS"'
+  $issues[0] as $issues | $prs[0] as $prs | $comments[0] as $comments
+  | def issue($n): [$issues[] | select(.number == $n)][0];
   def outcome: field("Outcome") as $o | if $o == "" then .title else $o end;
   def link: "[#\(.number)](https://github.com/\($repo)/issues/\(.number))";
   def section($title; $lines; $empty): ["## " + $title, ""] + (if ($lines | length) == 0 then [$empty] else $lines end) + [""];
