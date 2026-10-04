@@ -16,6 +16,14 @@ type Connection = sqlite3.Connection | turso_serverless.Connection
 # timestamps as text, so every stored one must come from here (PRD 02).
 NOW = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
 
+
+def format_timestamp(moment: datetime) -> str:
+    """A moment in the stored format, matching `NOW`."""
+    return (
+        moment.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    )
+
+
 SEARCH_AGENTS = ("claude", "perplexity", "gemini")
 POSTING_SOURCES = (*SEARCH_AGENTS, "manual")
 DECISIONS = ("Apply", "Skip")
@@ -313,11 +321,7 @@ def health_search_runs(conn: Connection, since: datetime) -> list[tuple]:
         )
         ORDER BY started_at, id
         """,
-        (
-            since.astimezone(UTC)
-            .isoformat(timespec="milliseconds")
-            .replace("+00:00", "Z"),
-        ),
+        (format_timestamp(since),),
     ).fetchall()
 
 

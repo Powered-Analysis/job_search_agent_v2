@@ -78,13 +78,6 @@ def _parse_timestamp(value: object, *, epoch_ms: bool = False) -> datetime | Non
     return None
 
 
-def _format_timestamp(moment: datetime) -> str:
-    # The one stored-timestamp format, matching db.NOW (PRD 02).
-    return (
-        moment.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    )
-
-
 def _needs_detail(ref: AtsRef, window_start: datetime | None) -> bool:
     # Rippling's list carries no timestamp, so only the window test needs the detail record.
     return ref.platform == "rippling" and window_start is not None
@@ -102,7 +95,7 @@ def _judge(
     moment = _parse_timestamp(raw, epoch_ms=epoch_ms)
     if moment is None:
         return Verdict(no_date_outcome)
-    ats_date = _format_timestamp(moment)
+    ats_date = db.format_timestamp(moment)
     if window_start is not None and moment < window_start - WINDOW_SLACK:
         return Verdict("out_of_window", ats_date, kind)
     return Verdict(open_outcome, ats_date, kind)

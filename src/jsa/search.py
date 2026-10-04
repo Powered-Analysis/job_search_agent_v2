@@ -204,9 +204,6 @@ def search(
     """
     config = load_search_config()
     now = now or datetime.now(UTC)
-    # Everything that can fail on setup fails here, before a model call or a run row.
-    prompt = assemble_search_prompt(config, window_hours, now)
-    runner = RUNNERS[agent](client, config)
     conn = db.connect()
     run_id = db.open_search_run(
         conn,
@@ -219,6 +216,9 @@ def search(
     conn.close()
     result: RunnerResult | None = None
     try:
+        # Setup failures (e.g. a missing API key) fall inside the try so the run row records them (PRD 01).
+        prompt = assemble_search_prompt(config, window_hours, now)
+        runner = RUNNERS[agent](client, config)
         result = runner.run(prompt)
         # The runner takes minutes, long enough for the server to drop an idle connection.
         conn = db.connect()
