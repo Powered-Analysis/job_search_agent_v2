@@ -145,10 +145,12 @@ jobs:
           display_report: true
           plugin_marketplaces: https://github.com/WithWoz/wozcode-plugin.git
           plugins: woz@wozcode-marketplace
-          # Only this job gets live service keys.
+          # Only this job gets live service keys. FSE_CLAUDE_TOKEN is the Claude
+          # credential under a name that reaches the agent's shell, for live checks.
           settings: |
             {"env": {
               "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+              "FSE_CLAUDE_TOKEN": "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
               "WOZCODE_API_KEY": "${{ secrets.WOZCODE_API_KEY }}",
               "TURSO_DATABASE_URL": "http://127.0.0.1:8080",
               "JSA_PROFILE_DIR": "${{ runner.temp }}/profile",
@@ -168,7 +170,7 @@ jobs:
 
             Your guard claimed this work item from GitHub's current state: ${{ steps.guard.outputs.items }} (`issue:<n>` is issue <n>).
 
-            `gh` and `git` act as your GitHub account in ${{ github.repository }}. The checkout is on `main`. A fresh libSQL database is at `TURSO_DATABASE_URL`. `JSA_PROFILE_DIR` points at a copy of `profile.example/` at the live-check settings of the CI environment section; after you change `profile.example/`, rebuild the copy with `bash scripts/live_profile.sh`.
+            `gh` and `git` act as your GitHub account in ${{ github.repository }}. The checkout is on `main`. A fresh libSQL database is at `TURSO_DATABASE_URL`. `JSA_PROFILE_DIR` points at a copy of `profile.example/` at the live-check settings of the CI environment section; after you change `profile.example/`, rebuild the copy with `bash scripts/live_profile.sh`. Your shell has no Claude credential of its own: start every command that makes a Claude call as `CLAUDE_CODE_OAUTH_TOKEN="$FSE_CLAUDE_TOKEN" uv run jsa …`, and never print the variable.
 
             End the run by requesting the SA's review, or by escalating; the discharge check fails the tick otherwise.
 
