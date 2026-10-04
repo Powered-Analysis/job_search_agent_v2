@@ -935,3 +935,348 @@ def test_a_pending_proposal_does_not_stop_a_dry_run(
     code, _ = refine(monkeypatch, capsys, "--dry-run")
     assert code == 0
     assert refiner.calls == [] and runs(rdb) == []
+
+
+# --- accepting and rejecting (issue #16; PRD 05 "Proposal review", "Edge Cases") -------
+
+SALARY = "- Salary: a stated base salary below $130,000 a year is a no."
+NEW_SALARY = "- Salary: a stated base salary below $150,000 a year is a no."
+NEW_EXCLUSION = '- Titles containing "Research".'
+
+
+def edit_files(changes: dict[str, str]):
+    """An agent edit that overwrites each named fragment copy with its new full text."""
+
+    def edit(cwd: Path):
+        for name, text in changes.items():
+            (cwd / name).write_text(text, encoding="utf-8")
+        return RATIONALE
+
+    return edit
+
+
+def propose(seed, refiner, profile, monkeypatch, capsys, **changes: str):
+    """Run refine so that `profile/refine/` holds a proposal; `changes` maps stem to new text."""
+    seed("Skip")
+    refiner.edit = edit_files({f"{stem}.md": text for stem, text in changes.items()})
+    code, _ = refine(monkeypatch, capsys)
+    assert code == 0
+    assert proposal_dir(profile).is_dir()
+
+
+def two_file_proposal(seed, refiner, profile, monkeypatch, capsys):
+    propose(
+        seed,
+        refiner,
+        profile,
+        monkeypatch,
+        capsys,
+        filters=live(profile, "filters.md").replace(SALARY, NEW_SALARY),
+        hard_exclusions=live(profile, "hard_exclusions.md") + NEW_EXCLUSION + "\n",
+    )
+
+
+def resolve_all(profile: Path, side: str) -> None:
+    for name in visible_files(profile) - {"rationale.md"}:
+        path = proposal_dir(profile) / name
+        path.write_text(
+            resolve(path.read_text(encoding="utf-8"), side), encoding="utf-8"
+        )
+
+
+def test_accept_with_a_marker_line_left_refuses_naming_the_file_and_line(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    long_filters = "".join(f"- Rule number {n} of the filters.\n" for n in range(1, 41))
+    (profile / "search" / "filters.md").write_text(long_filters, encoding="utf-8")
+    propose(
+        seed,
+        refiner,
+        profile,
+        monkeypatch,
+        capsys,
+        filters=long_filters.replace("Rule number 37", "Rule number thirty-seven"),
+    )
+    path = proposal_dir(profile) / "filters.md"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    marker_line = lines.index(CURRENT) + 1
+    assert marker_line == 37
+    before = live_snapshot(profile)
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code != 0
+    assert re.search(rf"filters\.md\b[^\n]{{0,40}}\b{marker_line}\b", out), out
+    assert live_snapshot(profile) == before
+
+
+@pytest.mark.parametrize("marker", [CURRENT, SEPARATOR, PROPOSED])
+def test_accept_refuses_while_any_single_kind_of_marker_line_remains(
+    marker, seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    resolve_all(profile, "proposed")
+    path = proposal_dir(profile) / "hard_exclusions.md"
+    path.write_text(path.read_text(encoding="utf-8") + marker + "\n", encoding="utf-8")
+    before = live_snapshot(profile)
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code != 0
+    assert "hard_exclusions.md" in out
+    assert live_snapshot(profile) == before
+
+
+def test_a_marker_in_one_file_blocks_the_whole_accept_so_no_fragment_is_replaced(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    filters = proposal_dir(profile) / "filters.md"
+    filters.write_text(
+        resolve(filters.read_text(encoding="utf-8"), "proposed"), encoding="utf-8"
+    )
+    before = live_snapshot(profile)
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code != 0
+    assert "hard_exclusions.md" in out
+    assert live_snapshot(profile) == before
+    assert "filters.md" in visible_files(profile)
+
+
+@pytest.mark.parametrize("emptied", ["", "\n\n"], ids=["empty", "blank-lines"])
+def test_accept_with_a_required_fragment_resolved_to_empty_refuses_naming_it(
+    emptied, seed, refiner, profile, monkeypatch, capsys
+):
+    propose(
+        seed,
+        refiner,
+        profile,
+        monkeypatch,
+        capsys,
+        target_roles=live(profile, "target_roles.md") + "- Data Scientist\n",
+        hard_exclusions=live(profile, "hard_exclusions.md") + NEW_EXCLUSION + "\n",
+    )
+    resolve_all(profile, "proposed")
+    (proposal_dir(profile) / "target_roles.md").write_text(emptied, encoding="utf-8")
+    before = live_snapshot(profile)
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code != 0
+    assert "target_roles" in out
+    assert live_snapshot(profile) == before
+
+
+def test_accept_after_a_hand_edit_of_a_live_fragment_refuses_and_says_to_reject_and_rerun(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    resolve_all(profile, "proposed")
+    edited = live(profile, "filters.md") + "- Hand edit made after the run.\n"
+    (profile / "search" / "filters.md").write_text(edited, encoding="utf-8")
+    before = live_snapshot(profile)
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code != 0
+    assert "reject" in out.lower()
+    assert "jsa refine" in out or "re-run" in out.lower() or "rerun" in out.lower()
+    assert live_snapshot(profile) == before
+    assert live(profile, "filters.md") == edited
+    assert live(profile, "hard_exclusions.md").count(NEW_EXCLUSION) == 0
+
+
+def test_accept_with_every_file_resolved_replaces_the_live_fragments(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    old_filters = live(profile, "filters.md")
+    old_exclusions = live(profile, "hard_exclusions.md")
+    resolve_all(profile, "proposed")
+    resolved = {
+        name: (proposal_dir(profile) / name).read_text(encoding="utf-8")
+        for name in ("filters.md", "hard_exclusions.md")
+    }
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code == 0, out
+    assert live(profile, "filters.md") == resolved["filters.md"] != old_filters
+    assert live(profile, "hard_exclusions.md") == resolved["hard_exclusions.md"]
+    assert resolved["hard_exclusions.md"] == old_exclusions + NEW_EXCLUSION + "\n"
+    assert NEW_SALARY in live(profile, "filters.md")
+    assert not proposal_dir(profile).exists()
+
+
+def test_accept_prints_the_diff_of_each_resolved_file_against_its_live_fragment(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    resolve_all(profile, "proposed")
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code == 0
+    lines = out.splitlines()
+    assert "filters.md" in out and "hard_exclusions.md" in out
+    assert "-" + SALARY in lines
+    assert "+" + NEW_SALARY in lines
+    assert "+" + NEW_EXCLUSION in lines
+
+
+def test_accept_prints_the_deploy_reminder(seed, refiner, profile, monkeypatch, capsys):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    resolve_all(profile, "proposed")
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code == 0
+    assert "jsa deploy" in out
+
+
+def test_accept_leaves_live_fragments_without_a_proposal_file_unchanged(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    before = live_snapshot(profile)
+    resolve_all(profile, "proposed")
+    code, _ = refine(monkeypatch, capsys, "--accept")
+    assert code == 0
+    after = live_snapshot(profile)
+    assert set(after) == set(before)
+    changed = {name for name in before if before[name] != after[name]}
+    assert changed == {"filters.md", "hard_exclusions.md"}
+
+
+def test_accept_writes_whatever_the_user_resolved_even_text_neither_side_had(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    resolve_all(profile, "current")
+    mine = "- Salary: below $140,000 a year is a no.\n"
+    (proposal_dir(profile) / "filters.md").write_text(mine, encoding="utf-8")
+    old_exclusions = live(profile, "hard_exclusions.md")
+    code, _ = refine(monkeypatch, capsys, "--accept")
+    assert code == 0
+    assert live(profile, "filters.md") == mine
+    assert live(profile, "hard_exclusions.md") == old_exclusions
+
+
+def test_accept_does_not_copy_the_rationale_or_the_hidden_record_into_the_profile(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    before = set(live_snapshot(profile))
+    resolve_all(profile, "proposed")
+    refine(monkeypatch, capsys, "--accept")
+    assert set(live_snapshot(profile)) == before
+    assert not list(profile.rglob("rationale.md"))
+
+
+def test_accept_makes_no_model_call_and_records_no_run(
+    seed, rdb, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    recorded = runs(rdb)
+    resolve_all(profile, "proposed")
+    refine(monkeypatch, capsys, "--accept")
+    assert len(refiner.calls) == 1
+    assert runs(rdb) == recorded
+
+
+def test_a_proposal_resolved_by_keeping_the_current_side_everywhere_changes_nothing_live(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    before = live_snapshot(profile)
+    resolve_all(profile, "current")
+    code, _ = refine(monkeypatch, capsys, "--accept")
+    assert code == 0
+    assert live_snapshot(profile) == before
+    assert not proposal_dir(profile).exists()
+
+
+def test_an_optional_fragment_resolved_to_empty_is_accepted(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    resolve_all(profile, "proposed")
+    (proposal_dir(profile) / "hard_exclusions.md").write_text("", encoding="utf-8")
+    code, out = refine(monkeypatch, capsys, "--accept")
+    assert code == 0, out
+    assert live(profile, "hard_exclusions.md").strip() == ""
+    assert not proposal_dir(profile).exists()
+
+
+def test_reject_removes_the_proposal_and_leaves_the_live_fragments_unchanged(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    before = live_snapshot(profile)
+    code, _ = refine(monkeypatch, capsys, "--reject")
+    assert code == 0
+    assert not proposal_dir(profile).exists()
+    assert live_snapshot(profile) == before
+
+
+def test_reject_works_on_a_fully_resolved_proposal_without_applying_it(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    before = live_snapshot(profile)
+    resolve_all(profile, "proposed")
+    code, _ = refine(monkeypatch, capsys, "--reject")
+    assert code == 0
+    assert not proposal_dir(profile).exists()
+    assert live_snapshot(profile) == before
+
+
+def test_reject_works_after_a_live_fragment_was_hand_edited(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    path = profile / "search" / "filters.md"
+    path.write_text(path.read_text(encoding="utf-8") + "- mine\n", encoding="utf-8")
+    before = live_snapshot(profile)
+    code, _ = refine(monkeypatch, capsys, "--reject")
+    assert code == 0
+    assert not proposal_dir(profile).exists()
+    assert live_snapshot(profile) == before
+
+
+@pytest.mark.parametrize("decision", ["--accept", "--reject"])
+def test_after_an_accept_or_a_reject_refine_no_longer_refuses_for_a_pending_proposal(
+    decision, seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    if decision == "--accept":
+        resolve_all(profile, "proposed")
+    assert refine(monkeypatch, capsys, decision)[0] == 0
+    seed("Apply", decided_at=at(30))
+    refiner.edit = lambda cwd: RATIONALE
+    code, out = refine(monkeypatch, capsys)
+    assert code == 0, out
+    assert len(refiner.calls) == 2
+
+
+@pytest.mark.parametrize("decision", ["--accept", "--reject"])
+def test_with_no_proposal_pending_the_command_says_so_and_changes_nothing(
+    decision, profile, monkeypatch, capsys
+):
+    before = live_snapshot(profile)
+    code, out = refine(monkeypatch, capsys, decision)
+    assert code == 0
+    assert out.strip()
+    assert live_snapshot(profile) == before
+    assert not proposal_dir(profile).exists()
+
+
+@pytest.mark.parametrize("decision", ["--accept", "--reject"])
+def test_with_an_empty_refine_directory_the_command_treats_no_proposal_as_pending(
+    decision, profile, monkeypatch, capsys
+):
+    proposal_dir(profile).mkdir()
+    before = live_snapshot(profile)
+    code, out = refine(monkeypatch, capsys, decision)
+    assert code == 0
+    assert out.strip()
+    assert live_snapshot(profile) == before
+
+
+def test_accept_and_reject_together_are_refused_and_change_nothing(
+    seed, refiner, profile, monkeypatch, capsys
+):
+    two_file_proposal(seed, refiner, profile, monkeypatch, capsys)
+    resolve_all(profile, "proposed")
+    before = live_snapshot(profile)
+    pending = visible_files(profile)
+    code, _ = refine(monkeypatch, capsys, "--accept", "--reject")
+    assert code != 0
+    assert live_snapshot(profile) == before
+    assert visible_files(profile) == pending
