@@ -41,3 +41,7 @@ def api_key(name: str) -> str:
 def search_anthropic_api_key() -> str | None:
     # Unset in development, where the Claude CLI uses its inherited credential (XC-1).
     return os.environ.get("JSA_SEARCH_ANTHROPIC_API_KEY") or None
+
+
+def gws_bin() -> str:
+    return os.environ.get("JSA_GWS_BIN") or "gws"
