@@ -3,8 +3,10 @@
 import difflib
 import hashlib
 import json
+import re
+import shutil
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from pathlib import Path
 
@@ -18,7 +20,12 @@ from jsa.profile import (
     profile_dir,
     refine_settings,
 )
-from jsa.search_prompt import FRAGMENTS, assemble_search_prompt_for, read_fragment
+from jsa.search_prompt import (
+    FRAGMENTS,
+    assemble_search_prompt_for,
+    fragment_path,
+    read_fragment,
+)
 
 REFINE_DIR = "refine"
 RATIONALE = "rationale.md"
@@ -36,6 +43,8 @@ WINDOW_NOTE = (
 CONFLICT_CURRENT = "<<<<<<< current"
 CONFLICT_SEPARATOR = "======="
 CONFLICT_PROPOSED = ">>>>>>> proposed"
+# Any git-style marker the user left behind, even one they edited a little.
+_MARKER_LINE = re.compile(r"(<{7}|>{7})( .*)?|={7}")
 
 
 def _field(value: str | None, empty: str = "(not recorded)") -> str:
@@ -120,6 +129,10 @@ def _hash(text: str | None) -> str | None:
     return None if text is None else hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def refine_dir() -> Path:
+    return profile_dir() / REFINE_DIR
+
+
 def _pending(directory: Path) -> bool:
     return directory.is_dir() and any(directory.iterdir())
 
@@ -166,7 +179,7 @@ def _run_in_scratch(
 
 
 def refine(*, dry_run: bool) -> None:
-    directory = profile_dir() / REFINE_DIR
+    directory = refine_dir()
     if not dry_run and _pending(directory):
         raise JsaError(
             f"{directory} holds a pending proposal. Accept or reject it before refining again."
@@ -212,3 +225,90 @@ def refine(*, dry_run: bool) -> None:
         print(f"Proposal written to {directory}")
     else:
         print("The refiner proposed no changes.")
+
+
+def _resolved(directory: Path) -> dict[str, str]:
+    """The user's text for each fragment the proposal changed; stray files are not fragments."""
+    return {
+        name: (directory / name).read_text(encoding="utf-8")
+        for name in REFINABLE
+        if (directory / name).is_file()
+    }
+
+
+def _check_resolved(resolved: Mapping[str, str]) -> None:
+    left = [
+        f"{name}, line {number}"
+        for name, text in resolved.items()
+        for number, line in enumerate(text.splitlines(), start=1)
+        if _MARKER_LINE.fullmatch(line.rstrip())
+    ]
+    if left:
+        raise JsaError(
+            "The proposal still has conflict markers to resolve: " + "; ".join(left)
+        )
+    try:
+        assemble_search_prompt_for(
+            load_search_config(),
+            WINDOW_NOTE,
+            resolved,
+        )
+    except JsaError as error:
+        raise JsaError(
+            f"The resolved proposal would break the search prompt. {error}"
+        ) from error
+
+
+def _check_unedited(directory: Path) -> None:
+    try:
+        built_from = json.loads((directory / BUILT_FROM).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise JsaError(
+            f"{directory / BUILT_FROM} is missing, so the proposal can't be checked "
+            "against your live fragments. Reject it and run `jsa refine` again."
+        ) from None
+    edited = [
+        name
+        for name, hashed in built_from.items()
+        if _hash(read_fragment(name)) != hashed
+    ]
+    if edited:
+        raise JsaError(
+            f"{', '.join(edited)} changed since this proposal was built, "
+            "so accepting would overwrite your edit. "
+            "Reject the proposal and run `jsa refine` again."
+        )
+
+
+def accept() -> None:
+    directory = refine_dir()
+    if not _pending(directory):
+        print("No proposal is pending.")
+        return
+    resolved = _resolved(directory)
+    _check_resolved(resolved)
+    _check_unedited(directory)
+    for name, text in resolved.items():
+        live = read_fragment(name) or ""
+        diff = list(
+            difflib.unified_diff(
+                live.splitlines(),
+                text.splitlines(),
+                fromfile=f"{name} (live)",
+                tofile=f"{name} (accepted)",
+                lineterm="",
+            )
+        )
+        print("\n".join(diff) if diff else f"{name}: no change")
+        fragment_path(name).write_text(text, encoding="utf-8")
+    shutil.rmtree(directory)
+    print("Proposal accepted. Run `jsa deploy` to ship the change to the cloud.")
+
+
+def reject() -> None:
+    directory = refine_dir()
+    if not _pending(directory):
+        print("No proposal is pending.")
+        return
+    shutil.rmtree(directory)
+    print("Proposal rejected. Your search fragments are unchanged.")
