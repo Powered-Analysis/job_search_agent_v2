@@ -79,13 +79,13 @@ fly auth login
 fly apps create <app>
 ```
 
-Put the app name and a region in `[fly]` of `profile/config.toml`. Then stage the cloud's secrets.
-Only the keys your schedule uses are needed; the cloud runs search alone, so it holds no other
-Claude credential:
+Put the app name and a region in `[fly]` of `profile/config.toml`. Then stage the cloud's secrets
+from `.env`. The cloud runs search alone, so only these five keys go, never your local Claude
+credential or machine-local overrides. The `=.` skips any key you left empty:
 
 ```sh
-fly secrets set --stage -a <app> TURSO_DATABASE_URL=… TURSO_AUTH_TOKEN=… \
-  JSA_SEARCH_ANTHROPIC_API_KEY=… PERPLEXITY_API_KEY=… GEMINI_API_KEY=…
+grep -E '^(TURSO_DATABASE_URL|TURSO_AUTH_TOKEN|JSA_SEARCH_ANTHROPIC_API_KEY|PERPLEXITY_API_KEY|GEMINI_API_KEY)=.' .env \
+  | fly secrets import --stage -a <app>
 ```
 
 `jsa deploy` never sets secrets; this step is always yours.
