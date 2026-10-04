@@ -6,8 +6,8 @@ from datetime import date, datetime
 
 from jsa import db
 from jsa.config import gws_bin
-from jsa.errors import JsaError, one_line
-from jsa.profile import load_config, load_search_config
+from jsa.errors import JsaError
+from jsa.profile import load_search_config, tracker_spreadsheet_id
 
 TAB = "Applications"
 _FORMULA_STARTS = ("=", "+", "-", "@")
@@ -64,7 +64,7 @@ def append_row(spreadsheet_id: str, row: list[str | int]) -> None:
     except OSError as error:
         raise JsaError(f"could not run {command[0]}: {error}") from error
     if result.returncode != 0:
-        detail = one_line(Exception(result.stderr.strip() or result.stdout.strip()))
+        detail = (result.stderr.strip() or result.stdout.strip()).partition("\n")[0]
         hint = " (re-run `gws auth login`)" if result.returncode == 2 else ""
         raise JsaError(f"gws exited {result.returncode}{hint}: {detail}")
     try:
@@ -76,12 +76,7 @@ def append_row(spreadsheet_id: str, row: list[str | int]) -> None:
 
 
 def track(posting_id: int | None, *, dry_run: bool) -> None:
-    spreadsheet_id = load_config().tracker_spreadsheet_id
-    if not spreadsheet_id:
-        raise JsaError(
-            "tracker_spreadsheet_id is missing or empty in config.toml. "
-            "Copy the shape from profile.example/config.toml."
-        )
+    spreadsheet_id = tracker_spreadsheet_id()
     today = datetime.now(load_search_config().tz).date()
     conn = db.connect()
     queue = db.tracker_queue(conn, posting_id)
