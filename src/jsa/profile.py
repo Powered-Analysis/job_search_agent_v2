@@ -200,3 +200,11 @@ def claude_settings(config: SearchConfig) -> AgentSettings:
 
 def gemini_settings(config: SearchConfig) -> GeminiRunner:
     return _runner_table(config, "gemini", config.runners.gemini)
+
+
+def base_resume() -> Path:
+    """The single base resume (XC-11); a missing or empty file raises before any row is processed."""
+    path = profile_dir() / "resume.docx"
+    if not path.is_file() or path.stat().st_size == 0:
+        raise JsaError(f"{path} is missing or empty. {_pointer('resume.docx')}")
+    return path
