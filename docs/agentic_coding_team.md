@@ -223,7 +223,7 @@ The first infrastructure issue proves that `turso_serverless` connects to the co
 
 - **Claude** (the Claude search runner, the resume checklist, refine): `claude-sonnet-5-5` at `low` effort. Not Haiku 4.5, which doesn't accept an effort setting, and the app always passes one (`XC-14`). This also leaves the team's shared Claude credential its usage headroom.
 - **Gemini:** `deep-research-preview-04-2026`, the cheaper of the two agents.
-- **Perplexity:** no settings to lower, because PRD 01 fixes the `xhigh` preset. The prepaid balance is its only limit, so it's checked once per issue that changes the Perplexity runner.
+- **Perplexity:** no settings to lower, because PRD 01 fixes the preset, service tier, and step budget. The prepaid balance is its only limit, so it's checked once per issue that changes the Perplexity runner.
 
 Search live checks use a 24-hour window. If a live check fails because of what the model returned, rather than because of the integration, the FSE reruns it once at `profile.example/`'s own settings before treating it as a bug. A weaker model's messier output is never a reason to loosen validation: PRD 01 requires an unparseable response to raise an error and every invalid posting to be dropped and counted.
 
