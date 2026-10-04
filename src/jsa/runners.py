@@ -25,6 +25,8 @@ class RunnerResult:
     model: str | None
     effort: str | None
     cost: float | None
+    # True where the runner could only estimate the USD from token counts.
+    cost_is_estimate: bool = False
 
 
 class Deadline:

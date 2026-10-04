@@ -185,10 +185,18 @@ def load_search_config() -> SearchConfig:
     return _load(SEARCH_TOML, SearchConfig)
 
 
-def claude_settings(config: SearchConfig) -> AgentSettings:
-    if config.runners.claude is None:
+def _runner_table[T](config: SearchConfig, agent: str, table: T | None) -> T:
+    if table is None:
         raise JsaError(
-            f"{profile_dir() / SEARCH_TOML} has no [runners.claude] table. "
+            f"{profile_dir() / SEARCH_TOML} has no [runners.{agent}] table. "
             f"{_pointer(SEARCH_TOML)}"
         )
-    return config.runners.claude
+    return table
+
+
+def claude_settings(config: SearchConfig) -> AgentSettings:
+    return _runner_table(config, "claude", config.runners.claude)
+
+
+def gemini_settings(config: SearchConfig) -> GeminiRunner:
+    return _runner_table(config, "gemini", config.runners.gemini)

@@ -14,8 +14,14 @@ from jsa import db
 from jsa.ats import resolve_ats
 from jsa.capture import CaptureError, capture_posting
 from jsa.claude import ClaudeRunner
+from jsa.gemini import GeminiAgentRunner
 from jsa.perplexity import PerplexityRunner
-from jsa.profile import SearchConfig, claude_settings, load_search_config
+from jsa.profile import (
+    SearchConfig,
+    claude_settings,
+    gemini_settings,
+    load_search_config,
+)
 from jsa.runners import RunnerResult
 from jsa.search_output import parse_search_output
 from jsa.search_prompt import assemble_search_prompt
@@ -33,10 +39,15 @@ def _claude_runner(client: httpx.Client, config: SearchConfig) -> Runner:
     return ClaudeRunner(claude_settings(config))
 
 
+def _gemini_runner(client: httpx.Client, config: SearchConfig) -> Runner:
+    return GeminiAgentRunner(gemini_settings(config))
+
+
 # The agents whose runner exists; the CLI offers exactly these.
 RUNNERS: dict[str, Callable[[httpx.Client, SearchConfig], Runner]] = {
     "perplexity": lambda client, config: PerplexityRunner(client),
     "claude": _claude_runner,
+    "gemini": _gemini_runner,
 }
 
 
@@ -68,7 +79,9 @@ class Summary:
     errors: list[str] = field(default_factory=list)
 
 
-def _warnings(summary: Summary, no_date_platforms: Counter[str]) -> list[str]:
+def _warnings(
+    summary: Summary, no_date_platforms: Counter[str], cost_is_estimate: bool
+) -> list[str]:
     warnings = [
         f"verified_no_date: {platform} returned no posted date for {count} "
         f"{'posting' if count == 1 else 'postings'}, so their recency was not checked"
@@ -78,6 +91,10 @@ def _warnings(summary: Summary, no_date_platforms: Counter[str]) -> list[str]:
         warnings.append(
             f"reachable_no_date: {summary.reachable_no_date} postings' pages publish no "
             "posted date, so their recency rests on the agent's claim"
+        )
+    if cost_is_estimate:
+        warnings.append(
+            "cost: an estimate from token usage at pinned per-token rates, not a billed amount"
         )
     if summary.malformed:
         warnings.append(
@@ -169,7 +186,7 @@ def _process(
             title=captured.title if ref else None,
         )
         summary.jd_captured += 1
-    return summary, _warnings(summary, no_date_platforms)
+    return summary, _warnings(summary, no_date_platforms, result.cost_is_estimate)
 
 
 def _one_line(error: Exception) -> str:
