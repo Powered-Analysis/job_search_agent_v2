@@ -8,6 +8,9 @@ from jsa.errors import JsaError
 
 # A hard stop, so a hung run can neither bill indefinitely nor block the day's later searches.
 WALL_CLOCK_CEILING_SECONDS = 3600
+# The longest a streamed runner waits for its connection to send anything, so a half-open one
+# surfaces as a transport error instead of blocking past the ceiling.
+READ_TIMEOUT_SECONDS = 1800
 # How often a streamed runner logs that it is still working.
 HEARTBEAT_SECONDS = 5
 

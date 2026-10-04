@@ -11,7 +11,7 @@ from google import genai
 
 from jsa.config import api_key
 from jsa.profile import GeminiRunner as GeminiSettings
-from jsa.runners import Deadline, RunnerError, RunnerResult
+from jsa.runners import READ_TIMEOUT_SECONDS, Deadline, RunnerError, RunnerResult
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +38,11 @@ OUTPUT_RATE = 12.00
 
 def make_client(key: str) -> genai.Client:
     # The one replaceable point for Gemini (XC-9): tests substitute a client that never reaches the network.
-    return genai.Client(api_key=key)
+    # HttpOptions.timeout is in milliseconds. A stalled read raises a transport error, which the run reconnects from.
+    return genai.Client(
+        api_key=key,
+        http_options=genai.types.HttpOptions(timeout=READ_TIMEOUT_SECONDS * 1000),
+    )
 
 
 @dataclass(frozen=True)
