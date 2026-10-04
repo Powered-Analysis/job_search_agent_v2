@@ -192,6 +192,93 @@ def capture_jd(
         )
 
 
+def record_finding(
+    conn: Connection,
+    *,
+    run_date: str,
+    agent: str,
+    canonical_url: str,
+    window_hours: int,
+    rank: int,
+    verification: str,
+    ats_date: str | None,
+    ats_date_kind: str | None,
+    model: str | None,
+    effort: str | None,
+) -> None:
+    """Log one emitted posting before any insert; a repeat of the same day's find is a no-op (PRD 02)."""
+    conn.execute(
+        f"""
+        INSERT INTO search_findings (
+            run_date, agent, canonical_url, window_hours, rank, found_at, decision,
+            verification, ats_date, ats_date_kind, model, effort
+        ) VALUES (
+            ?, ?, ?, ?, ?, {NOW},
+            (SELECT decision FROM postings WHERE canonical_url = ?),
+            ?, ?, ?, ?, ?
+        )
+        ON CONFLICT(run_date, agent, canonical_url) DO NOTHING
+        """,
+        (
+            run_date,
+            agent,
+            canonical_url,
+            window_hours,
+            rank,
+            canonical_url,
+            verification,
+            ats_date,
+            ats_date_kind,
+            model,
+            effort,
+        ),
+    )
+
+
+def open_search_run(
+    conn: Connection,
+    *,
+    trigger: str,
+    run_date: str,
+    agent: str,
+    window_hours: int,
+    mode: str,
+) -> int:
+    """Open a run's row before its runner starts; a row never closed means the process died (PRD 02)."""
+    rows = conn.execute(
+        f"""
+        INSERT INTO search_runs (run_date, trigger, agent, window_hours, mode, started_at)
+        VALUES (?, ?, ?, ?, ?, {NOW})
+        RETURNING id
+        """,
+        (run_date, trigger, agent, window_hours, mode),
+    ).fetchall()
+    return rows[0][0]
+
+
+def close_search_run(
+    conn: Connection,
+    run_id: int,
+    *,
+    outcome: str,
+    error: str | None,
+    summary: str | None,
+    warnings: str | None,
+    model: str | None,
+    effort: str | None,
+) -> None:
+    """The run row's one closing update; the model and effort a runner reports are known only now."""
+    conn.execute(
+        f"""
+        UPDATE search_runs
+        SET finished_at = {NOW}, outcome = ?, error = ?, summary = ?, warnings = ?,
+            model = COALESCE(?, model), effort = COALESCE(?, effort)
+        WHERE id = ?
+        """,
+        (outcome, error, summary, warnings, model, effort, run_id),
+    )
+
+
 def find_posting(conn: Connection, url: str) -> tuple[int, str | None] | None:
     """A UX-only read: the posting's (id, decision) for this URL's canonical form."""
     rows = conn.execute(

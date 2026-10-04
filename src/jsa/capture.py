@@ -80,7 +80,7 @@ def _capture(jd_html: str | None, title: str | None, location: object) -> Captur
     return _build(html_to_markdown(jd_html or ""), title, location)
 
 
-def _greenhouse(client: httpx.Client, ref: AtsRef) -> Capture:
+def _greenhouse(client: httpx.Client, ref: AtsRef, known: object = None) -> Capture:
     record = _record(
         get_json(
             client,
@@ -95,7 +95,7 @@ def _greenhouse(client: httpx.Client, ref: AtsRef) -> Capture:
     )
 
 
-def _lever(client: httpx.Client, ref: AtsRef) -> Capture:
+def _lever(client: httpx.Client, ref: AtsRef, known: object = None) -> Capture:
     record = _record(
         get_lever_json(client, f"/v0/postings/{ref.board}/{ref.job_id}?mode=json")
     )
@@ -107,8 +107,8 @@ def _lever(client: httpx.Client, ref: AtsRef) -> Capture:
     return _build(plain, record.get("text"), location)
 
 
-def _ashby(client: httpx.Client, ref: AtsRef) -> Capture:
-    board = _record(get_json(client, ashby_board_url(ref.board)))
+def _ashby(client: httpx.Client, ref: AtsRef, known: object = None) -> Capture:
+    board = _record(known or get_json(client, ashby_board_url(ref.board)))
     for job in board.get("jobs") or []:
         if _record(job).get("id") == ref.job_id:
             return _capture(
@@ -117,8 +117,10 @@ def _ashby(client: httpx.Client, ref: AtsRef) -> Capture:
     raise CaptureError(f"job {ref.job_id} is not on the {ref.board} board")
 
 
-def _rippling(client: httpx.Client, ref: AtsRef) -> Capture:
-    record = _record(get_json(client, rippling_detail_url(ref.board, ref.job_id)))
+def _rippling(client: httpx.Client, ref: AtsRef, known: object = None) -> Capture:
+    record = _record(
+        known or get_json(client, rippling_detail_url(ref.board, ref.job_id))
+    )
     description = record.get("description")
     if isinstance(description, dict):
         # The role comes first, the company blurb after it.
@@ -273,21 +275,16 @@ def _failure(source: str, error: Exception) -> CaptureError:
     return CaptureError(f"{source} capture failed: {detail}")
 
 
-def capture(client: httpx.Client, ref: AtsRef) -> Capture:
+def capture(client: httpx.Client, ref: AtsRef, known: object = None) -> Capture:
+    """`known` is the Ashby board or Rippling detail verification already fetched."""
     try:
-        return _FETCHERS[ref.platform](client, ref)
+        return _FETCHERS[ref.platform](client, ref, known)
     except (httpx.HTTPError, ValueError) as error:
         raise _failure(ref.platform, error) from error
 
 
-def capture_page(client: httpx.Client, url: str) -> Capture:
-    """One GET of the posting page, read for its `JobPosting` data."""
-    try:
-        response = client.get(url)
-        response.raise_for_status()
-    except httpx.HTTPError as error:
-        raise _failure("page", error) from error
-    posting = extract_job_posting(response.text)
+def _page_capture(markup: str) -> Capture:
+    posting = extract_job_posting(markup)
     if posting is None:
         raise CaptureError("the page carries no schema.org JobPosting data")
     return _build(
@@ -295,16 +292,37 @@ def capture_page(client: httpx.Client, url: str) -> Capture:
     )
 
 
-def capture_posting(client: httpx.Client, url: str, ref: AtsRef | None) -> Capture:
+def capture_page(
+    client: httpx.Client, url: str, page_html: str | None = None
+) -> Capture:
+    """Read the posting page's `JobPosting` data; `page_html` is a page verification already fetched."""
+    if page_html is None:
+        try:
+            response = client.get(url)
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise _failure("page", error) from error
+        page_html = response.text
+    return _page_capture(page_html)
+
+
+def capture_posting(
+    client: httpx.Client,
+    url: str,
+    ref: AtsRef | None,
+    *,
+    known: object = None,
+    page_html: str | None = None,
+) -> Capture:
     """Capture order (XC-5): supported ATS fetcher, then `JobPosting` data; the caller stores NULL."""
     if ref is None:
-        return capture_page(client, url)
+        return capture_page(client, url, page_html)
     try:
-        return capture(client, ref)
+        return capture(client, ref, known)
     except CaptureError as ats_error:
         if ref.platform in _NO_JOBPOSTING_DATA:
             raise
         try:
-            return capture_page(client, url)
+            return capture_page(client, url, page_html)
         except CaptureError as page_error:
             raise CaptureError(f"{ats_error}; {page_error}") from page_error
