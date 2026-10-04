@@ -21,4 +21,5 @@ dist/
 
 # OS
 .DS_Store
-.env-pre
+
+.env-ariel
