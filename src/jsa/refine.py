@@ -236,7 +236,7 @@ def _resolved(directory: Path) -> dict[str, str]:
     }
 
 
-def _check_resolved(resolved: Mapping[str, str]) -> None:
+def _check_resolved(resolved: Mapping[str, str], directory: Path) -> None:
     left = [
         f"{name}, line {number}"
         for name, text in resolved.items()
@@ -248,11 +248,7 @@ def _check_resolved(resolved: Mapping[str, str]) -> None:
             "The proposal still has conflict markers to resolve: " + "; ".join(left)
         )
     try:
-        assemble_search_prompt_for(
-            load_search_config(),
-            WINDOW_NOTE,
-            resolved,
-        )
+        assemble_search_prompt_for(load_search_config(), WINDOW_NOTE, directory)
     except JsaError as error:
         raise JsaError(
             f"The resolved proposal would break the search prompt. {error}"
@@ -286,7 +282,7 @@ def accept() -> None:
         print("No proposal is pending.")
         return
     resolved = _resolved(directory)
-    _check_resolved(resolved)
+    _check_resolved(resolved, directory)
     _check_unedited(directory)
     for name, text in resolved.items():
         live = read_fragment(name) or ""
