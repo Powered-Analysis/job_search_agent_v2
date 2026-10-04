@@ -8,6 +8,7 @@ from jsa import db
 from jsa.add import add_posting
 from jsa.config import load_environment
 from jsa.cron import cron
+from jsa.deploy import deploy
 from jsa.errors import JsaError
 from jsa.generate import generate
 from jsa.http import make_client
@@ -92,6 +93,10 @@ def _cron(args: argparse.Namespace) -> None:
             f"{len(run.failures)} of {total} searches failed: "
             + "; ".join(run.failures)
         )
+
+
+def _deploy(args: argparse.Namespace) -> None:
+    deploy(dry_run=args.dry_run, smoke=args.smoke)
 
 
 def _positive_int(text: str) -> int:
@@ -225,6 +230,21 @@ def main() -> None:
         help="skip the time-of-day gate and the daily claim (smoke test)",
     )
     cron_command.set_defaults(run=_cron)
+    deploy_command = commands.add_parser(
+        "deploy", help="build the image and swap it onto the scheduled Fly machine"
+    )
+    deploy_mode = deploy_command.add_mutually_exclusive_group()
+    deploy_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate the search profile and list the files that would ship; no build",
+    )
+    deploy_mode.add_argument(
+        "--smoke",
+        action="store_true",
+        help="build, then run one ungated cron on a throwaway machine; the scheduled machine is untouched",
+    )
+    deploy_command.set_defaults(run=_deploy)
     args = parser.parse_args()
 
     # The search trace (steps, heartbeat, cost) goes to the log (PRD 01).

@@ -47,6 +47,10 @@ def gws_bin() -> str:
     return os.environ.get("JSA_GWS_BIN") or "gws"
 
 
+def fly_bin() -> str:
+    return os.environ.get("JSA_FLY_BIN") or "fly"
+
+
 def generate_workers() -> int:
     raw = os.environ.get("JSA_GENERATE_WORKERS") or "3"
     try:
