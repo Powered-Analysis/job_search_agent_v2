@@ -7,6 +7,7 @@ from typing import Literal
 import httpx
 
 from jsa import db, prompts
+from jsa.health import search_health
 from jsa.verify import CLOSED_OUTCOMES, Verifier, recheck
 
 FEEDBACK_LABEL = "Feedback (Enter to skip, :a/:s to change the decision)"
@@ -145,6 +146,8 @@ def _recheck_backlog(
 
 def review(client: httpx.Client) -> None:
     conn = db.connect()
+    for line in search_health(conn):
+        print(line)
     # Captured once so stepping back is stable (PRD 03).
     backlog = db.review_backlog(conn)
     entries = _recheck_backlog(conn, client, backlog) if backlog else []
