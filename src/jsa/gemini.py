@@ -11,12 +11,20 @@ from google import genai
 
 from jsa.config import api_key
 from jsa.profile import GeminiRunner as GeminiSettings
-from jsa.runners import READ_TIMEOUT_SECONDS, Deadline, RunnerError, RunnerResult
+from jsa.runners import (
+    READ_TIMEOUT_SECONDS,
+    Deadline,
+    RunnerError,
+    RunnerResult,
+    clip,
+)
 
 log = logging.getLogger(__name__)
 
 KEY_NAME = "GEMINI_API_KEY"
 POLL_SECONDS = 10
+# The cancel is sent after the run's own deadline may have passed, so it has its own short one.
+CANCEL_TIMEOUT_SECONDS = 30
 AGENT_CONFIG = {
     "type": "deep-research",
     # Without summaries the stream carries no progress; headless, so no plan to approve (PRD 01).
@@ -68,12 +76,28 @@ class StreamState:
         return self.status == "completed"
 
     @property
+    def ended(self) -> bool:
+        """True once Gemini itself has stopped working on the interaction."""
+        return self.completed or self.status in _FAILED_STATUSES
+
+    @property
     def failure(self) -> str | None:
         if self.error is not None:
             return self.error
         if self.status in _FAILED_STATUSES:
             return f"the interaction ended {self.status}"
         return None
+
+
+def thought_summary(event: dict) -> str | None:
+    """Pure: the text of a thought-summary event, the agent's own account of what it is doing."""
+    delta = event.get("delta") or {}
+    if (
+        event.get("event_type") != "step.delta"
+        or delta.get("type") != "thought_summary"
+    ):
+        return None
+    return (delta.get("content") or {}).get("text") or None
 
 
 def fold(state: StreamState, event: dict) -> StreamState:
@@ -158,8 +182,18 @@ class GeminiAgentRunner:
         self._client = make_client(api_key(KEY_NAME))
         self._agent = settings.agent
         self._sleep = sleep
+        # The latest stream state, kept here so a run that raises still knows which interaction to cancel.
+        self._latest = StreamState()
 
     def run(self, prompt: str) -> RunnerResult:
+        try:
+            return self._research(prompt)
+        except BaseException:
+            # A background interaction outlives the connection: left alone it keeps working and billing (PRD 01).
+            self._cancel_unfinished()
+            raise
+
+    def _research(self, prompt: str) -> RunnerResult:
         deadline = Deadline()
         state = self._consume(
             StreamState(), partial(self._create, prompt, deadline), deadline
@@ -228,7 +262,10 @@ class GeminiAgentRunner:
         try:
             for raw in open_events():
                 deadline.check()
-                state = fold(state, raw.model_dump(mode="json", exclude_none=True))
+                event = raw.model_dump(mode="json", exclude_none=True)
+                state = self._track(fold(state, event))
+                if summary := thought_summary(event):
+                    log.info("gemini: %s", clip(summary))
                 if state.failure:
                     raise RunnerError(f"Gemini reported a failure: {state.failure}")
                 if deadline.heartbeat_due():
@@ -247,9 +284,35 @@ class GeminiAgentRunner:
         interaction = self._client.interactions.get(
             state.interaction_id, timeout=deadline.request_timeout()
         )
-        return fold_interaction(
-            state, interaction.model_dump(mode="json", exclude_none=True)
+        return self._track(
+            fold_interaction(
+                state, interaction.model_dump(mode="json", exclude_none=True)
+            )
         )
+
+    def _track(self, state: StreamState) -> StreamState:
+        if state.interaction_id and not self._latest.interaction_id:
+            # Logged at once, so a run that dies uncancelled can still be found and cancelled by hand.
+            log.info("gemini interaction %s", state.interaction_id)
+        self._latest = state
+        return state
+
+    def _cancel_unfinished(self) -> None:
+        interaction_id = self._latest.interaction_id
+        if interaction_id is None or self._latest.ended:
+            return
+        try:
+            self._client.interactions.cancel(
+                interaction_id, timeout=CANCEL_TIMEOUT_SECONDS
+            )
+        except Exception:
+            # Never let a failed cancel hide the error that ended the run.
+            log.exception(
+                "Could not cancel Gemini interaction %s, so it may still be running",
+                interaction_id,
+            )
+        else:
+            log.info("cancelled Gemini interaction %s", interaction_id)
 
     def _poll(self, state: StreamState, deadline: Deadline) -> StreamState:
         try:
