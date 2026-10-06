@@ -7,6 +7,7 @@ No test reaches the network, and none needs the database.
 """
 
 import json
+import os
 import re
 import shutil
 import stat
@@ -32,7 +33,7 @@ from jsa.deploy import BUILD_INPUTS
 
 # Logs argv to $STUB_LOG, answers a machine listing from $STUB_MACHINES, and fails any call whose
 # subcommand is named in $STUB_FAIL (exit 1). `machine update` fails its first $STUB_UPDATE_FAILS
-# attempts, as a registry that hasn't caught up with the push would. When $STUB_SNAPSHOT is set, a
+# attempts, and `machine run` its first $STUB_RUN_FAILS, as a registry that hasn't caught up with the push would. When $STUB_SNAPSHOT is set, a
 # `deploy` call copies its build context (the directory named in its arguments, else its working
 # directory) there, since the app may delete the context once the build returns.
 STUB = """\
@@ -59,6 +60,13 @@ if "update" in words:
     if seen < int(os.environ.get("STUB_UPDATE_FAILS", "0")):
         print("Error: image not found", file=sys.stderr)
         sys.exit(1)
+if "run" in words:
+    counter = os.environ["STUB_LOG"] + ".runs"
+    seen = int(open(counter).read()) if os.path.exists(counter) else 0
+    open(counter, "w").write(str(seen + 1))
+    if seen < int(os.environ.get("STUB_RUN_FAILS", "0")):
+        print("Error: failed to get manifest: manifest unknown", file=sys.stderr)
+        sys.exit(1)
 """
 
 FULL_WEEK = {day: [("perplexity", 24)] for day in WEEKDAYS}
@@ -78,7 +86,13 @@ def fly(tmp_path, monkeypatch):
     log = tmp_path / "fly.log"
     monkeypatch.setenv("JSA_FLY_BIN", str(stub))
     monkeypatch.setenv("STUB_LOG", str(log))
-    for name in ("STUB_FAIL", "STUB_MACHINES", "STUB_UPDATE_FAILS", "STUB_SNAPSHOT"):
+    for name in (
+        "STUB_FAIL",
+        "STUB_MACHINES",
+        "STUB_UPDATE_FAILS",
+        "STUB_RUN_FAILS",
+        "STUB_SNAPSHOT",
+    ):
         monkeypatch.delenv(name, raising=False)
     # A retry for registry lag must not slow the suite, whichever way the app sleeps.
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
@@ -679,6 +693,156 @@ def test_smoke_fails_when_the_machine_run_fails(fly, monkeypatch, capsys):
     monkeypatch.setenv("STUB_FAIL", "machine")
     code, _ = jsa_deploy(monkeypatch, capsys, "--smoke")
     assert code != 0
+
+
+# --- registry lag on every launch of the pushed image -----------------------------------
+
+
+@pytest.fixture
+def naps(monkeypatch):
+    """The seconds the app sleeps between launch attempts, however it sleeps."""
+    slept: list[float] = []
+    monkeypatch.setattr("time.sleep", slept.append)
+    monkeypatch.setattr("jsa.deploy.sleep", slept.append, raising=False)
+    return slept
+
+
+def attempts_until_giving_up(monkeypatch, capsys, verb: str, *args) -> int:
+    """How many `machine <verb>` calls a launch that never succeeds makes before the deploy fails."""
+    monkeypatch.setenv("STUB_UPDATE_FAILS", "1000")
+    monkeypatch.setenv("STUB_RUN_FAILS", "1000")
+    code, _ = jsa_deploy(monkeypatch, capsys, *args)
+    assert code != 0
+    return len(pick_machine(calls(Path(os.environ["STUB_LOG"])), verb))
+
+
+def test_create_retries_while_the_registry_catches_up(fly, monkeypatch, capsys):
+    _, log = fly
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    monkeypatch.setenv("STUB_RUN_FAILS", "2")
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    all_calls = calls(log)
+    runs = pick_machine(all_calls, "run")
+    assert len(runs) == 3
+    for run in runs:
+        assert has_flag(run, "--schedule", "hourly")
+        assert "--rm" not in run
+    assert len(pick(all_calls, "deploy")) == 1
+    assert pick_machine(all_calls, "update") == []
+
+
+def test_smoke_retries_while_the_registry_catches_up(fly, monkeypatch, capsys):
+    _, log = fly
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv("STUB_RUN_FAILS", "2")
+    code, _ = jsa_deploy(monkeypatch, capsys, "--smoke")
+    assert code == 0
+    all_calls = calls(log)
+    runs = pick_machine(all_calls, "run")
+    assert len(runs) == 3
+    for run in runs:
+        assert "--rm" in run
+        assert "--ungated" in " ".join(run)
+    assert len(pick(all_calls, "deploy")) == 1
+    assert pick_machine(all_calls, "update") == []
+
+
+def test_smoke_retry_leaves_a_scheduled_machine_alone(fly, monkeypatch, capsys):
+    _, log = fly
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv("STUB_RUN_FAILS", "2")
+    code, _ = jsa_deploy(monkeypatch, capsys, "--smoke")
+    assert code == 0
+    all_calls = calls(log)
+    assert not any(has_flag(argv, "--schedule", "hourly") for argv in all_calls)
+    assert not any("m0" in argv for argv in all_calls)
+
+
+@pytest.mark.parametrize("smoke", [(), ("--smoke",)], ids=["create", "smoke"])
+def test_every_launch_retries_the_image_it_just_pushed(fly, monkeypatch, capsys, smoke):
+    _, log = fly
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    monkeypatch.setenv("STUB_RUN_FAILS", "2")
+    code, _ = jsa_deploy(monkeypatch, capsys, *smoke)
+    assert code == 0
+    all_calls = calls(log)
+    (build,) = pick(all_calls, "deploy")
+    runs = pick_machine(all_calls, "run")
+    assert all(label_of(build) in " ".join(run) for run in runs)
+    assert all(run == runs[0] for run in runs)
+
+
+def test_create_gives_up_after_as_many_attempts_as_update(fly, monkeypatch, capsys):
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    update_attempts = attempts_until_giving_up(monkeypatch, capsys, "update")
+    assert update_attempts > 1
+    Path(os.environ["STUB_LOG"]).unlink()
+    for suffix in (".updates", ".runs"):
+        Path(os.environ["STUB_LOG"] + suffix).unlink(missing_ok=True)
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    assert attempts_until_giving_up(monkeypatch, capsys, "run") == update_attempts
+
+
+def test_smoke_gives_up_after_as_many_attempts_as_update(fly, monkeypatch, capsys):
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    update_attempts = attempts_until_giving_up(monkeypatch, capsys, "update")
+    Path(os.environ["STUB_LOG"]).unlink()
+    for suffix in (".updates", ".runs"):
+        Path(os.environ["STUB_LOG"] + suffix).unlink(missing_ok=True)
+    assert (
+        attempts_until_giving_up(monkeypatch, capsys, "run", "--smoke")
+        == update_attempts
+    )
+
+
+@pytest.mark.parametrize("smoke", [(), ("--smoke",)], ids=["create", "smoke"])
+def test_a_launch_that_succeeds_on_the_last_attempt_deploys(
+    fly, monkeypatch, capsys, smoke
+):
+    _, log = fly
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    attempts = attempts_until_giving_up(monkeypatch, capsys, "run", *smoke)
+    log.unlink()
+    Path(str(log) + ".runs").unlink()
+    monkeypatch.setenv("STUB_RUN_FAILS", str(attempts - 1))
+    code, _ = jsa_deploy(monkeypatch, capsys, *smoke)
+    assert code == 0
+    assert len(pick_machine(calls(log), "run")) == attempts
+
+
+@pytest.mark.parametrize("smoke", [(), ("--smoke",)], ids=["create", "smoke"])
+def test_a_launch_that_never_succeeds_exits_nonzero_with_the_fly_error(
+    fly, monkeypatch, capsys, smoke
+):
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    monkeypatch.setenv("STUB_RUN_FAILS", "1000")
+    code, output = jsa_deploy(monkeypatch, capsys, *smoke)
+    assert code != 0
+    assert "machine run" in output
+    assert "Traceback" not in output
+
+
+@pytest.mark.parametrize("smoke", [(), ("--smoke",)], ids=["create", "smoke"])
+def test_launch_retries_wait_the_same_as_update_retries(
+    fly, monkeypatch, capsys, naps, smoke
+):
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv("STUB_UPDATE_FAILS", "2")
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    update_naps = list(naps)
+    assert update_naps
+    naps.clear()
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    monkeypatch.setenv("STUB_RUN_FAILS", "2")
+    assert jsa_deploy(monkeypatch, capsys, *smoke)[0] == 0
+    assert naps == update_naps
+
+
+def test_a_first_try_launch_does_not_wait(fly, monkeypatch, capsys, naps):
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    assert naps == []
 
 
 def test_a_missing_fly_binary_is_a_clean_error(fly, monkeypatch, capsys, tmp_path):
