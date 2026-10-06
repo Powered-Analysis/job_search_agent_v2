@@ -61,7 +61,7 @@ cp -r profile.example profile
 |---|---|
 | `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, and the model and effort for the resume checklist and refine |
 | `profile/resume.docx` | your single base resume |
-| `profile/search/search.toml` | timezone, `run_at`, the weekly schedule, the Claude and Gemini runner settings, and the verification mode |
+| `profile/search/search.toml` | timezone, `run_at`, the weekly schedule, the Claude runner settings, and the verification mode |
 | `profile/search/*.md` | the six fragments that tell the search who you are and what you want |
 
 No prompt in `src/` needs an edit. If one seems to, a profile slot is missing.

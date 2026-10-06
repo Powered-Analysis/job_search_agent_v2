@@ -101,14 +101,14 @@ profile/
   resume.docx             local   the single base resume                    (PRD 04)
   search/                 SHIPS IN THE FLY IMAGE
     search.toml                 timezone; run_at; [schedule] weekday → ordered (agent, window_hours);
-                                [runners.claude] model + effort; [runners.gemini] agent;
+                                [runners.claude] model + effort;
                                 [verification] mode (strict | best_effort)  (PRD 01)
     candidate.md, target_roles.md, filters.md,
     positive_signals.md, negative_signals.md, hard_exclusions.md               (PRD 01 slots)
   refine/                 local   a pending refine proposal: rationale + conflict-marked fragments (PRD 05)
 ```
 
-- **Validated at load:** each TOML file is parsed into a typed config; an unknown key raises (a typo never silently falls back to a default), and a key a command needs but the profile lacks raises naming the file and pointing to `profile.example/`. Requiredness is per command: `tracker_spreadsheet_id` for `track`/`generate`/`refetch`; `resume.docx` for `packet`/`generate`/`refetch`; `[fly]` for `deploy`; each `[agents.*]` for its command; each scheduled runner's `[runners.*]` and `[verification] mode` for `search`/`cron`/`deploy`. Model and effort values are checked for form only, never against a list of allowed models (`XC-14`); `profile.example/` carries the recommended defaults as comments.
+- **Validated at load:** each TOML file is parsed into a typed config; an unknown key raises (a typo never silently falls back to a default), and a key a command needs but the profile lacks raises naming the file and pointing to `profile.example/`. Requiredness is per command: `tracker_spreadsheet_id` for `track`/`generate`/`refetch`; `resume.docx` for `packet`/`generate`/`refetch`; `[fly]` for `deploy`; each `[agents.*]` for its command; `[runners.claude]` when Claude is scheduled, and `[verification] mode`, for `search`/`cron`/`deploy`. Model and effort values are checked for form only, never against a list of allowed models (`XC-14`); `profile.example/` carries the recommended defaults as comments.
 - **The profile is only data.** No profile file is executable or imported as code; the app reads it only through its config loading and prompt assembly (`XC-13`).
 
 **Complete user-setup inventory (Priority: P0)** — the consolidated home; other PRDs reference this:

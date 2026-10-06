@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Iterable
+from contextlib import closing
 from dataclasses import dataclass, replace
 
 import httpx
@@ -80,29 +81,35 @@ class PerplexityRunner:
     def run(self, prompt: str) -> RunnerResult:
         deadline = Deadline()
         state = StreamState()
-        events = post_sse(
-            self._client,
-            URL,
-            request_body(prompt),
-            headers={"Authorization": f"Bearer {self._key}"},
-            read_timeout=deadline.request_timeout(),
-        )
-        for event, data in events:
-            deadline.check()
-            if event in _FAILURE_EVENTS:
-                raise RunnerError(f"Perplexity reported a failure: {data}")
-            before = state.sandbox_steps
-            state = fold(state, event, data)
-            if state.sandbox_steps != before:
-                log.info(
-                    "sandbox step %d (%.0fs)", state.sandbox_steps, deadline.elapsed
-                )
-            if deadline.heartbeat_due():
-                log.info(
-                    "still searching: %d sandbox steps, %.0fs",
-                    state.sandbox_steps,
-                    deadline.elapsed,
-                )
+        # Closing the stream is what makes Perplexity stop the run, so it is closed the moment
+        # this block is left, however it is left (PRD 01).
+        with closing(
+            post_sse(
+                self._client,
+                URL,
+                request_body(prompt),
+                headers={"Authorization": f"Bearer {self._key}"},
+                read_timeout=deadline.request_timeout(),
+            )
+        ) as events:
+            for event, data in events:
+                deadline.check()
+                if event in _FAILURE_EVENTS:
+                    raise RunnerError(f"Perplexity reported a failure: {data}")
+                before = state.sandbox_steps
+                state = fold(state, event, data)
+                if state.sandbox_steps != before:
+                    log.info(
+                        "sandbox step %d (%.0fs)",
+                        state.sandbox_steps,
+                        deadline.elapsed,
+                    )
+                if deadline.heartbeat_due():
+                    log.info(
+                        "still searching: %d sandbox steps, %.0fs",
+                        state.sandbox_steps,
+                        deadline.elapsed,
+                    )
         deadline.check()
         if not state.text:
             raise RunnerError("Perplexity's stream ended without a final answer")

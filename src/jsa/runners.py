@@ -15,6 +15,16 @@ READ_TIMEOUT_SECONDS = 1800
 HEARTBEAT_SECONDS = 5
 
 
+# The most of one narration or tool line a live trace prints.
+_CLIP = 300
+
+
+def clip(text: str) -> str:
+    """One trace line: whitespace collapsed, long text cut short."""
+    text = " ".join(text.split())
+    return text if len(text) <= _CLIP else text[:_CLIP] + "…"
+
+
 class RunnerError(JsaError):
     """A runner could not produce a final answer."""
 

@@ -38,7 +38,6 @@ roles:
 live_checks:
   claude_model: claude-sonnet-5-5
   claude_effort: low
-  gemini_agent: deep-research-preview-04-2026
 
 orchestration:
   # Rounds of requested changes on one PR before it goes to the owner.

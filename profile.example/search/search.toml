@@ -24,15 +24,8 @@ friday    = [{ agent = "gemini", window_hours = 24 }]
 model  = "claude-opus-5-5"
 effort = "high"
 
-[runners.gemini]
-# Any Gemini Deep Research agent ID. Today there are two:
-#   "deep-research-max-preview-04-2026"  more thorough, more expensive
-#   "deep-research-preview-04-2026"      faster, cheaper
-# Both are previews: Google may rename or retire them. An ID the API rejects fails
-# `jsa deploy --smoke` before it reaches the scheduled machine.
-agent = "deep-research-max-preview-04-2026"
-
-# Perplexity has no settings: it always runs the "xhigh" preset.
+# Perplexity and Gemini have no settings: Perplexity always runs the "xhigh" preset, and
+# Gemini the "deep-research-preview-04-2026" agent.
 
 [verification]
 # Which postings the pipeline admits. Required.

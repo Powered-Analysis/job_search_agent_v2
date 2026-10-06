@@ -16,19 +16,13 @@ from claude_agent_sdk import (
 from jsa import agent_loop
 from jsa.config import search_anthropic_api_key
 from jsa.profile import AgentSettings
-from jsa.runners import RunnerResult
+from jsa.runners import RunnerResult, clip
 
 log = logging.getLogger(__name__)
 
 # The agent reads untrusted pages with the app's keys in its environment, so it gets nothing else.
 TOOLS = ["WebSearch", "WebFetch"]
 MAX_TURNS = 120
-_CLIP = 300
-
-
-def _clip(text: str) -> str:
-    text = " ".join(text.split())
-    return text if len(text) <= _CLIP else text[:_CLIP] + "…"
 
 
 def credential_env() -> dict[str, str]:
@@ -48,13 +42,13 @@ def _trace(message: Message) -> None:
     for block in blocks:
         match block:
             case ToolUseBlock():
-                log.info("tool %s %s", block.name, _clip(json.dumps(block.input)))
+                log.info("tool %s %s", block.name, clip(json.dumps(block.input)))
             case TextBlock():
-                log.info("claude: %s", _clip(block.text))
+                log.info("claude: %s", clip(block.text))
             case ThinkingBlock() if block.thinking:
-                log.info("thinking: %s", _clip(block.thinking))
+                log.info("thinking: %s", clip(block.thinking))
             case ToolResultBlock(is_error=True):
-                log.warning("tool error: %s", _clip(str(block.content)))
+                log.warning("tool error: %s", clip(str(block.content)))
 
 
 class ClaudeRunner:
