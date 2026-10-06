@@ -26,9 +26,9 @@ from jsa.tools import run_tool
 
 MEMORY_MB = "1024"
 SCHEDULE = "hourly"
-# Fly's registry can lag a push by a few seconds, so an update right after it may not find the image.
-UPDATE_ATTEMPTS = 5
-UPDATE_RETRY_SECONDS = 5
+# Fly's registry can lag a push by a few seconds, so a launch right after it may not find the image.
+LAUNCH_ATTEMPTS = 5
+LAUNCH_RETRY_SECONDS = 5
 # A wake that slips past 23:59 lands on the next day and misses the day (PRD 01).
 LATEST_SAFE_RUN_AT = time(22, 59)
 # What the Dockerfile copies from the build context, apart from the profile.
@@ -137,6 +137,18 @@ def _fly(args: Sequence[str], app: str, *, capture: bool = False) -> str:
     return result.stdout or ""
 
 
+def _launch(args: Sequence[str], app: str) -> None:
+    """A `fly` call that starts the pushed image, retried for registry lag (PRD 06)."""
+    for attempt in range(1, LAUNCH_ATTEMPTS + 1):
+        try:
+            _fly(args, app)
+            return
+        except JsaError:
+            if attempt == LAUNCH_ATTEMPTS:
+                raise
+            sleep(LAUNCH_RETRY_SECONDS)
+
+
 def _stage_build_context(stage: Path) -> None:
     """Lay out the project with the validated search profile at ./profile/search, wherever it lives (XC-13)."""
     for name in BUILD_INPUTS:
@@ -176,7 +188,7 @@ def _swap_in(image: str, fly: FlyConfig) -> None:
             f"({', '.join(ids)}). Remove all but one in Fly, then deploy again."
         )
     if not ids:
-        _fly(
+        _launch(
             [
                 "machine",
                 "run",
@@ -192,32 +204,27 @@ def _swap_in(image: str, fly: FlyConfig) -> None:
         )
         print(f"Created the {SCHEDULE} machine from {image}.")
         return
-    update = [
-        "machine",
-        "update",
-        ids[0],
-        "--image",
-        image,
-        "--vm-memory",
-        MEMORY_MB,
-        "--schedule",
-        SCHEDULE,
-        "--yes",
-    ]
-    for attempt in range(1, UPDATE_ATTEMPTS + 1):
-        try:
-            _fly(update, fly.app)
-            break
-        except JsaError:
-            if attempt == UPDATE_ATTEMPTS:
-                raise
-            sleep(UPDATE_RETRY_SECONDS)
+    _launch(
+        [
+            "machine",
+            "update",
+            ids[0],
+            "--image",
+            image,
+            "--vm-memory",
+            MEMORY_MB,
+            "--schedule",
+            SCHEDULE,
+            "--yes",
+        ],
+        fly.app,
+    )
     print(f"Updated machine {ids[0]} to {image}.")
 
 
 def _smoke(image: str, fly: FlyConfig) -> None:
     # An ungated cron skips the gate and the daily claim; its postings are real (PRD 06).
-    _fly(
+    _launch(
         [
             "machine",
             "run",
