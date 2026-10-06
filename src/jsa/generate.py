@@ -65,7 +65,10 @@ def build_packet(
     prompt = assemble_checklist_prompt(
         job.title, job.company, job_description, render_resume(copy)
     )
-    checklist.write_text(run_checklist(prompt, settings) + "\n", encoding="utf-8")
+    text = run_checklist(prompt, settings)
+    # A failed render must not leave the old checklist's PDF beside the new checklist.
+    pdf.unlink(missing_ok=True)
+    checklist.write_text(text + "\n", encoding="utf-8")
     render_checklist_pdf(checklist, pdf)
     return True
 
