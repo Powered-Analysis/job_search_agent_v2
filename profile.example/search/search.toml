@@ -32,8 +32,7 @@ effort = "high"
 # `jsa deploy --smoke` before it reaches the scheduled machine.
 agent = "deep-research-max-preview-04-2026"
 
-# Perplexity has no settings: it always runs the "high" preset on the "flex" service
-# tier, with a 30-step budget.
+# Perplexity has no settings: it always runs the "xhigh" preset.
 
 [verification]
 # Which postings the pipeline admits. Required.
