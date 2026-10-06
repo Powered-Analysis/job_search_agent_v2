@@ -5,6 +5,7 @@ documented seams: HTTP at the transport, Claude at `agent_loop.query`, and `gws`
 reached through `JSA_GWS_BIN`. The profile and the packets directory are temporary directories.
 """
 
+import os
 import re
 import sys
 import threading
@@ -947,6 +948,29 @@ def test_the_pandoc_binary_is_the_one_named_by_jsa_pandoc_bin(
     assert code == 0
     assert (packets / PLAIN / PDF).read_text(encoding="utf-8") == "FROM OTHER"
     assert pandoc_calls(pandoc) == []
+
+
+def test_pandoc_is_found_on_the_path_when_jsa_pandoc_bin_is_unset(
+    gdb, env, pandoc, tmp_path, monkeypatch, capsys
+):
+    _, packets = env
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "pandoc").symlink_to(tmp_path / "stub-pandoc")
+    monkeypatch.delenv("JSA_PANDOC_BIN")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    folder = packets / PLAIN
+    assert pandoc_calls(pandoc) == [
+        [
+            str(folder / "resume_checklist.md"),
+            "-o",
+            str(folder / PDF),
+            "--pdf-engine=typst",
+        ]
+    ]
 
 
 def test_a_pandoc_failure_flags_the_row_and_the_other_rows_continue(
