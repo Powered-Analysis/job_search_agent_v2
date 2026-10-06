@@ -10,7 +10,6 @@ import httpx
 from google import genai
 
 from jsa.config import api_key
-from jsa.profile import GeminiRunner as GeminiSettings
 from jsa.runners import (
     READ_TIMEOUT_SECONDS,
     Deadline,
@@ -22,6 +21,8 @@ from jsa.runners import (
 log = logging.getLogger(__name__)
 
 KEY_NAME = "GEMINI_API_KEY"
+# Pinned (PRD 01, XC-14): the only other Deep Research agent runs past the wall-clock ceiling on this search.
+AGENT = "deep-research-preview-04-2026"
 POLL_SECONDS = 10
 # The cancel is sent after the run's own deadline may have passed, so it has its own short one.
 CANCEL_TIMEOUT_SECONDS = 30
@@ -173,14 +174,9 @@ def _dropped(error: Exception) -> bool:
 
 
 class GeminiAgentRunner:
-    def __init__(
-        self,
-        settings: GeminiSettings,
-        sleep: Callable[[float], None] = time.sleep,
-    ) -> None:
+    def __init__(self, sleep: Callable[[float], None] = time.sleep) -> None:
         # Validated here, so a missing key raises before any request is made.
         self._client = make_client(api_key(KEY_NAME))
-        self._agent = settings.agent
         self._sleep = sleep
         # The latest stream state, kept here so a run that raises still knows which interaction to cancel.
         self._latest = StreamState()
@@ -230,12 +226,12 @@ class GeminiAgentRunner:
             else f"estimated cost ${cost:.2f} from token usage {state.usage}",
         )
         return RunnerResult(
-            state.text, self._agent, None, cost, cost_is_estimate=cost is not None
+            state.text, AGENT, None, cost, cost_is_estimate=cost is not None
         )
 
     def _create(self, prompt: str, deadline: Deadline):
         return self._client.interactions.create(
-            agent=self._agent,
+            agent=AGENT,
             background=True,
             stream=True,
             input=prompt,

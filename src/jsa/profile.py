@@ -67,15 +67,11 @@ class Schedule(BaseModel):
         return getattr(self, tuple(type(self).model_fields)[day.weekday()])
 
 
-class GeminiRunner(BaseModel):
-    model_config = _STRICT
-    agent: NonEmptyStr
-
-
 class Runners(BaseModel):
+    """Claude is the one search runner with settings; Perplexity and Gemini are pinned (XC-14)."""
+
     model_config = _STRICT
     claude: AgentSettings | None = None
-    gemini: GeminiRunner | None = None
 
 
 class Verification(BaseModel):
@@ -114,11 +110,10 @@ class SearchConfig(BaseModel):
     @model_validator(mode="after")
     def _scheduled_runners_are_configured(self) -> SearchConfig:
         scheduled = {search.agent for search in self.schedule.searches()}
-        for agent in ("claude", "gemini"):
-            if agent in scheduled and getattr(self.runners, agent) is None:
-                raise ValueError(
-                    f"{agent} is scheduled but there is no [runners.{agent}] table"
-                )
+        if "claude" in scheduled and self.runners.claude is None:
+            raise ValueError(
+                "claude is scheduled but there is no [runners.claude] table"
+            )
         return self
 
     @property
@@ -192,21 +187,13 @@ def load_search_config() -> SearchConfig:
     return _load(SEARCH_TOML, SearchConfig)
 
 
-def _runner_table[T](config: SearchConfig, agent: str, table: T | None) -> T:
-    if table is None:
+def claude_settings(config: SearchConfig) -> AgentSettings:
+    if config.runners.claude is None:
         raise JsaError(
-            f"{profile_dir() / SEARCH_TOML} has no [runners.{agent}] table. "
+            f"{profile_dir() / SEARCH_TOML} has no [runners.claude] table. "
             f"{_pointer(SEARCH_TOML)}"
         )
-    return table
-
-
-def claude_settings(config: SearchConfig) -> AgentSettings:
-    return _runner_table(config, "claude", config.runners.claude)
-
-
-def gemini_settings(config: SearchConfig) -> GeminiRunner:
-    return _runner_table(config, "gemini", config.runners.gemini)
+    return config.runners.claude
 
 
 def tracker_spreadsheet_id() -> str:

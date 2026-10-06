@@ -20,7 +20,6 @@ from jsa.perplexity import PerplexityRunner
 from jsa.profile import (
     SearchConfig,
     claude_settings,
-    gemini_settings,
     load_search_config,
 )
 from jsa.runners import RunnerResult
@@ -40,15 +39,11 @@ def _claude_runner(client: httpx.Client, config: SearchConfig) -> Runner:
     return ClaudeRunner(claude_settings(config))
 
 
-def _gemini_runner(client: httpx.Client, config: SearchConfig) -> Runner:
-    return GeminiAgentRunner(gemini_settings(config))
-
-
 # The agents whose runner exists; the CLI offers exactly these.
 RUNNERS: dict[str, Callable[[httpx.Client, SearchConfig], Runner]] = {
     "perplexity": lambda client, config: PerplexityRunner(client),
     "claude": _claude_runner,
-    "gemini": _gemini_runner,
+    "gemini": lambda client, config: GeminiAgentRunner(),
 }
 
 
