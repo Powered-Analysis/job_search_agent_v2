@@ -9,6 +9,7 @@ from jsa.profile import Config, base_resume, load_config
 
 JOB_POSTING = "job_posting.md"
 CHECKLIST = "resume_checklist.md"
+CHECKLIST_PDF = "resume_checklist.pdf"
 
 
 def packet_paths(config: Config, job: db.PacketJob) -> tuple[Path, Path]:

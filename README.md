@@ -127,8 +127,8 @@ Google OAuth (`gws auth login`) and Fly's login (`fly auth login`) stay on your 
 
 **Local tools:** `uv`; Google Chrome (`jsa review`); the `gws` CLI, signed in with `gws auth login`
 (while the OAuth consent screen is in testing status the token expires after 7 days; publish it, or
-sign in again when `jsa track` reports exit code 2); `flyctl` (`jsa deploy`); the Claude Code CLI
-(the local Claude commands).
+sign in again when `jsa track` reports exit code 2); `flyctl` (`jsa deploy`); `pandoc` and `typst`
+(`jsa generate` renders each checklist to a PDF); the Claude Code CLI (the local Claude commands).
 
 **The profile:** `config.toml`, `resume.docx`, `search/search.toml`, and the six `search/*.md`
 fragments, seeded from `profile.example/` (step 4).
