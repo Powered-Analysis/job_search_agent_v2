@@ -16,12 +16,14 @@ import docx
 import httpx
 import pytest
 from conftest import drop_all_tables
+from pandoc_helpers import install_pandoc
 from profile_helpers import copy_example, write_config_toml
 from test_generate import (
     BASE_LINE,
     CHECKLIST_TEXT,
     CONFIG,
     LONG_AGO,
+    PDF,
     Agent,
     column,
     edit_copy,
@@ -122,6 +124,12 @@ def gws(tmp_path, monkeypatch):
     for name in ("STUB_GET_FAIL", "STUB_UPDATE_FAIL"):
         monkeypatch.delenv(name, raising=False)
     return log
+
+
+@pytest.fixture(autouse=True)
+def pandoc(tmp_path, monkeypatch):
+    """A stub `pandoc` whose invocations are logged; returns the log's path."""
+    return install_pandoc(tmp_path, monkeypatch)
 
 
 @pytest.fixture
@@ -559,6 +567,7 @@ def test_a_retitled_row_with_a_packet_is_renamed_and_regenerated_in_place(
     assert {path.name for path in renamed.iterdir()} == {
         "job_posting.md",
         "resume_checklist.md",
+        PDF,
         "notes.txt",
         NEW_COPY,
     }
@@ -596,6 +605,7 @@ def test_a_description_only_change_regenerates_without_renaming(
     checklist = (folder / "resume_checklist.md").read_text(encoding="utf-8")
     assert checklist.strip() == CHECKLIST_TEXT.strip()
     assert len(agent.calls) == 1
+    assert (folder / PDF).read_text(encoding="utf-8") == f"PDF OF: {checklist}"
     assert title_updates(gws) == []
 
 
@@ -878,6 +888,23 @@ def test_a_failed_regenerate_is_flagged_and_nothing_is_rolled_back(
     assert (packets / NEW_DIR / NEW_COPY).read_bytes() == revised
     assert (packets / NEW_DIR / "resume_checklist.md").exists()
     assert (packets / NEW_DIR / "notes.txt").exists()
+
+
+def test_a_pandoc_failure_on_regenerate_is_flagged_and_the_new_checklist_stays(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    make_packet(rdb, packets, posting_id)
+    monkeypatch.setenv("PANDOC_FAIL", "1")
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert flagged(code, output, posting_id)
+    renamed = packets / NEW_DIR
+    checklist = (renamed / "resume_checklist.md").read_text(encoding="utf-8")
+    assert checklist.strip() == CHECKLIST_TEXT.strip()
+    assert not (renamed / PDF).exists()
 
 
 # --- dry run ------------------------------------------------------------------

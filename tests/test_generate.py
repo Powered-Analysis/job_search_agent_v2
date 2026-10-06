@@ -18,6 +18,7 @@ import httpx
 import pytest
 from claude_agent_sdk import ResultMessage
 from conftest import drop_all_tables
+from pandoc_helpers import install_pandoc, pandoc_calls
 from profile_helpers import copy_example, write_config_toml
 from test_claude_runner import result_message
 from test_review import Web
@@ -29,6 +30,7 @@ from jsa.resume import render_document, render_resume
 LONG_AGO = "2020-01-01T00:00:00.000Z"
 JD = "# Staff Engineer\n\nBuild the Frobnicator platform.\n"
 PLAIN = "Acme Widgets - Staff Engineer"
+PDF = "resume_checklist.pdf"
 RESUME_COPY = "PatExample_Resume_StaffEngineer_AcmeWidgets.docx"
 BASE_LINE = "Built the Quuxlate platform from scratch."
 CHECKLIST_TEXT = "## Lead with\n\n- the Quuxlate platform\n"
@@ -120,6 +122,12 @@ def gws(tmp_path, monkeypatch):
     monkeypatch.delenv("STUB_FAIL_IDS", raising=False)
     monkeypatch.delenv("STUB_FAIL_MODE", raising=False)
     return log
+
+
+@pytest.fixture(autouse=True)
+def pandoc(tmp_path, monkeypatch):
+    """A stub `pandoc` whose invocations are logged; returns the log's path."""
+    return install_pandoc(tmp_path, monkeypatch)
 
 
 @pytest.fixture
@@ -254,7 +262,12 @@ def test_an_open_apply_posting_gets_a_full_packet_and_a_tracker_row(
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
     folder = packets / PLAIN
-    assert entries(folder) == {"job_posting.md", RESUME_COPY, "resume_checklist.md"}
+    assert entries(folder) == {
+        "job_posting.md",
+        RESUME_COPY,
+        "resume_checklist.md",
+        PDF,
+    }
     assert (folder / "job_posting.md").read_text(encoding="utf-8") == JD
     assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
     checklist = (folder / "resume_checklist.md").read_text(encoding="utf-8")
@@ -422,6 +435,7 @@ def test_a_bare_directory_left_by_jsa_packet_is_completed_not_skipped(
         "job_posting.md",
         RESUME_COPY,
         "resume_checklist.md",
+        PDF,
     }
     assert column(gdb, posting_id, "added_to_tracker") == 1
 
@@ -438,6 +452,7 @@ def test_an_empty_directory_is_completed_with_the_job_posting_and_resume_copy(
         "job_posting.md",
         RESUME_COPY,
         "resume_checklist.md",
+        PDF,
     }
 
 
@@ -781,6 +796,7 @@ def test_a_failed_track_exits_non_zero_leaves_the_row_untracked_and_rolls_nothin
         "job_posting.md",
         RESUME_COPY,
         "resume_checklist.md",
+        PDF,
     }
 
 
@@ -893,6 +909,171 @@ def test_each_finished_row_is_appended_right_away_not_at_the_end(
     assert column(gdb, fast, "added_to_tracker") == 1
     assert column(gdb, slow, "added_to_tracker") == 1
     assert appended_rows(gws)[0][0] == fast
+
+
+# --- resume_checklist.pdf (issue #77) -----------------------------------------
+
+
+def test_the_checklist_is_rendered_to_a_pdf_with_pandoc_and_typst(
+    gdb, env, pandoc, monkeypatch, capsys
+):
+    _, packets = env
+    seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    folder = packets / PLAIN
+    [argv] = pandoc_calls(pandoc)
+    assert argv[0] == str(folder / "resume_checklist.md")
+    assert argv[argv.index("-o") + 1] == str(folder / PDF)
+    assert "--pdf-engine=typst" in argv
+    checklist = (folder / "resume_checklist.md").read_text(encoding="utf-8")
+    assert (folder / PDF).read_text(encoding="utf-8") == f"PDF OF: {checklist}"
+
+
+def test_the_pandoc_binary_is_the_one_named_by_jsa_pandoc_bin(
+    gdb, env, pandoc, tmp_path, monkeypatch, capsys
+):
+    _, packets = env
+    other = tmp_path / "other-pandoc"
+    other.write_text(
+        f"#!{sys.executable}\nimport sys\nopen(sys.argv[sys.argv.index('-o') + 1], 'w')"
+        ".write('FROM OTHER')\n",
+        encoding="utf-8",
+    )
+    other.chmod(0o755)
+    monkeypatch.setenv("JSA_PANDOC_BIN", str(other))
+    seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert (packets / PLAIN / PDF).read_text(encoding="utf-8") == "FROM OTHER"
+    assert pandoc_calls(pandoc) == []
+
+
+def test_a_pandoc_failure_flags_the_row_and_the_other_rows_continue(
+    gdb, env, pandoc, gws, tmp_path, monkeypatch, capsys
+):
+    _, packets = env
+    bad = seed(gdb, company="Bad Labs")
+    good = seed(gdb, company="Good Labs")
+    flaky = tmp_path / "flaky-pandoc"
+    flaky.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        "text = open(sys.argv[1], encoding='utf-8').read()\n"
+        "if 'Bad Labs' in sys.argv[1]:\n"
+        "    print('typst: boom', file=sys.stderr)\n"
+        "    sys.exit(1)\n"
+        "open(sys.argv[sys.argv.index('-o') + 1], 'w').write(text)\n",
+        encoding="utf-8",
+    )
+    flaky.chmod(0o755)
+    monkeypatch.setenv("JSA_PANDOC_BIN", str(flaky))
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert str(bad) in output
+    assert column(gdb, bad, "added_to_tracker") == 0
+    assert column(gdb, good, "added_to_tracker") == 1
+    assert PDF in entries(packets / "Good Labs - Staff Engineer")
+    assert PDF not in entries(packets / "Bad Labs - Staff Engineer")
+    assert [row[0] for row in appended_rows(gws)] == [good]
+
+
+def test_a_missing_pandoc_flags_the_row_like_any_failed_step(
+    gdb, env, gws, tmp_path, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    monkeypatch.setenv("JSA_PANDOC_BIN", str(tmp_path / "no-such-pandoc"))
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert str(posting_id) in output
+    assert column(gdb, posting_id, "added_to_tracker") == 0
+    assert not gws.exists()
+    assert PDF not in entries(packets / PLAIN)
+
+
+def test_a_rerun_after_a_pandoc_failure_renders_the_pdf_without_rewriting_the_checklist(
+    gdb, env, agent, pandoc, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    monkeypatch.setenv("PANDOC_FAIL", "1")
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    folder = packets / PLAIN
+    assert (folder / "resume_checklist.md").exists()
+    assert not (folder / PDF).exists()
+    monkeypatch.delenv("PANDOC_FAIL")
+    agent.calls.clear()
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert agent.calls == []
+    checklist = (folder / "resume_checklist.md").read_text(encoding="utf-8")
+    assert checklist.strip() == CHECKLIST_TEXT.strip()
+    assert (folder / PDF).read_text(encoding="utf-8") == f"PDF OF: {checklist}"
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_a_checklist_without_a_pdf_gets_one_and_the_checklist_is_left_alone(
+    gdb, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    (folder / "resume_checklist.md").write_text("MY OLD CHECKLIST", encoding="utf-8")
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert agent.calls == []
+    assert (folder / "resume_checklist.md").read_text(encoding="utf-8") == (
+        "MY OLD CHECKLIST"
+    )
+    assert (folder / PDF).read_text(encoding="utf-8") == "PDF OF: MY OLD CHECKLIST"
+
+
+def test_an_existing_pdf_is_not_rendered_again_on_a_rerun(
+    gdb, pandoc, monkeypatch, capsys
+):
+    seed(gdb)
+    jsa_generate(monkeypatch, capsys)
+    assert len(pandoc_calls(pandoc)) == 1
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert len(pandoc_calls(pandoc)) == 1
+
+
+def test_an_id_that_rewrites_the_checklist_renders_its_pdf_again(
+    gdb, env, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    (folder / "resume_checklist.md").write_text("MY OLD CHECKLIST", encoding="utf-8")
+    (folder / PDF).write_text("STALE PDF", encoding="utf-8")
+    code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
+    assert code == 0
+    checklist = (folder / "resume_checklist.md").read_text(encoding="utf-8")
+    assert checklist.strip() == CHECKLIST_TEXT.strip()
+    assert (folder / PDF).read_text(encoding="utf-8") == f"PDF OF: {checklist}"
+
+
+def test_a_failed_checklist_run_renders_no_pdf(
+    gdb, env, agent, pandoc, monkeypatch, capsys
+):
+    _, packets = env
+    seed(gdb)
+    agent.respond = lambda prompt: failed(result="overloaded")
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert pandoc_calls(pandoc) == []
+    assert PDF not in entries(packets / PLAIN)
+
+
+def test_a_dry_run_renders_no_pdf(gdb, pandoc, monkeypatch, capsys):
+    seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert pandoc_calls(pandoc) == []
 
 
 # --- --dry-run ----------------------------------------------------------------
