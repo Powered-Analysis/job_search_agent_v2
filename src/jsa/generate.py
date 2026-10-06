@@ -8,10 +8,14 @@ from pathlib import Path
 import httpx
 
 from jsa import db
-from jsa.checklist import assemble_checklist_prompt, run_checklist
+from jsa.checklist import (
+    assemble_checklist_prompt,
+    render_checklist_pdf,
+    run_checklist,
+)
 from jsa.config import generate_workers
 from jsa.errors import JsaError, one_line
-from jsa.packet import CHECKLIST, JOB_POSTING, ensure_head, packet_paths
+from jsa.packet import CHECKLIST, CHECKLIST_PDF, JOB_POSTING, ensure_head, packet_paths
 from jsa.profile import (
     AgentSettings,
     Config,
@@ -49,8 +53,11 @@ def build_packet(
     # PRD 04: `--id` (rewrite) refreshes `job_posting.md` from the row, as refetch relies on.
     ensure_head(directory, copy, job, resume, refresh_posting=rewrite)
     checklist = directory / CHECKLIST
-    # XC-10: an interrupted run resumes after a checklist it already wrote.
+    pdf = directory / CHECKLIST_PDF
+    # XC-10: an interrupted run resumes after a checklist it already wrote, even one whose PDF failed.
     if checklist.exists() and not rewrite:
+        if not pdf.exists():
+            render_checklist_pdf(checklist, pdf)
         return True
     job_description = _job_description(job, directory)
     if not (job_description or "").strip():
@@ -59,6 +66,7 @@ def build_packet(
         job.title, job.company, job_description, render_resume(copy)
     )
     checklist.write_text(run_checklist(prompt, settings) + "\n", encoding="utf-8")
+    render_checklist_pdf(checklist, pdf)
     return True
 
 

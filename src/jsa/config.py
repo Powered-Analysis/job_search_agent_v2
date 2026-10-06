@@ -51,6 +51,10 @@ def fly_bin() -> str:
     return os.environ.get("JSA_FLY_BIN") or "fly"
 
 
+def pandoc_bin() -> str:
+    return os.environ.get("JSA_PANDOC_BIN") or "pandoc"
+
+
 def generate_workers() -> int:
     raw = os.environ.get("JSA_GENERATE_WORKERS") or "3"
     try:
