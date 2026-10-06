@@ -28,6 +28,7 @@ from profile_helpers import (
 )
 
 from jsa import cli
+from jsa.deploy import BUILD_INPUTS
 
 # Logs argv to $STUB_LOG, answers a machine listing from $STUB_MACHINES, and fails any call whose
 # subcommand is named in $STUB_FAIL (exit 1). `machine update` fails its first $STUB_UPDATE_FAILS
@@ -955,6 +956,13 @@ def test_build_context_carries_what_the_dockerfile_copies(project, monkeypatch, 
     for source in dockerfile_copy_sources():
         assert (snapshot / source).exists(), source
     assert (snapshot / "src" / "jsa" / "cli.py").is_file()
+
+
+def test_every_dockerfile_copy_source_is_a_build_input():
+    missing = set(dockerfile_copy_sources()) - set(BUILD_INPUTS)
+    assert not missing, (
+        f"the Dockerfile copies {sorted(missing)}, which deploy never stages"
+    )
 
 
 def test_build_context_leaves_out_secrets_and_dev_files(project, monkeypatch, capsys):
