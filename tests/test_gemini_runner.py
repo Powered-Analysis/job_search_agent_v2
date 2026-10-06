@@ -1,9 +1,11 @@
 """`jsa search --agent gemini` (issue #9; PRD 01 "Gemini runner"; XC-9, XC-14).
 
 The Gemini client is replaced at its one point, `gemini.make_client`, with a scripted fake.
+The agent is pinned by the PRD, so the profile has no Gemini setting.
 """
 
 import logging
+import shutil
 import sys
 from types import SimpleNamespace
 
@@ -13,14 +15,12 @@ from conftest import drop_all_tables
 from profile_helpers import SEARCH_TOML, copy_example, write_search_toml
 from search_helpers import Boards, Jump, rows
 
-from jsa import cli, db, gemini
+from jsa import cli, db, gemini, runners
 from jsa.errors import JsaError
 from jsa.gemini import GeminiAgentRunner
-from jsa.profile import GeminiRunner as GeminiSettings
 from jsa.runners import Deadline, RunnerResult, WallClockExceeded
 
 AGENT = "deep-research-preview-04-2026"
-SETTINGS = GeminiSettings(agent=AGENT)
 KEY = "test-gemini-key"
 INTERACTION = "interaction-1"
 ANSWER = '{"postings": []}'
@@ -54,12 +54,12 @@ def created(event_id="e1"):
     }
 
 
-def thought(event_id):
+def thought(event_id, text="thinking"):
     return {
         "event_type": "step.delta",
         "event_id": event_id,
         "index": 0,
-        "delta": {"type": "thought_summary", "content": {"text": "thinking"}},
+        "delta": {"type": "thought_summary", "content": {"text": text}},
     }
 
 
@@ -111,18 +111,28 @@ class Gemini:
 
     `created` is the stream `interactions.create` returns; `reconnects` are the streams
     `interactions.get(..., stream=True)` returns, in turn; `reads` are what a plain
-    `interactions.get(id)` returns, in turn, the last one repeating.
+    `interactions.get(id)` returns, in turn, the last one repeating. `cancel_error`, when
+    set, is what `interactions.cancel` raises.
     """
 
     def __init__(self):
         self.created = [created("e1"), thought("e2"), completed("e3")]
         self.reconnects = []
         self.reads = [finished()]
+        self.cancel_error = None
         self.create_calls = []
         self.reconnect_calls = []
         self.read_calls = []
         self.read_kwargs = []
-        self.interactions = SimpleNamespace(create=self._create, get=self._get)
+        self.cancel_calls = []
+        self.interactions = SimpleNamespace(
+            create=self._create, get=self._get, cancel=self._cancel
+        )
+
+    def _cancel(self, interaction_id, **kwargs):
+        self.cancel_calls.append(interaction_id)
+        if self.cancel_error:
+            raise self.cancel_error
 
     def _create(self, **kwargs):
         self.create_calls.append(kwargs)
@@ -160,7 +170,7 @@ def fake(monkeypatch):
 
 
 def runner():
-    return GeminiAgentRunner(SETTINGS, sleep=lambda _seconds: None)
+    return GeminiAgentRunner(sleep=lambda _seconds: None)
 
 
 class Tick:
@@ -182,10 +192,11 @@ def tool_names(tools):
 # --- the request --------------------------------------------------------------------------
 
 
-def test_the_create_call_uses_the_configured_agent_in_the_background_and_streamed(fake):
+def test_the_create_call_uses_the_pinned_agent_in_the_background_and_streamed(fake):
     runner().run("find me roles")
     call = fake.create_call
-    assert call["agent"] == AGENT
+    assert call["agent"] == "deep-research-preview-04-2026"
+    assert "max" not in call["agent"]
     assert call["background"] is True
     assert call["stream"] is True
     assert call["input"] == "find me roles"
@@ -587,8 +598,258 @@ def test_the_runner_emits_a_heartbeat_at_most_every_five_seconds(
     fake.created.append(completed("e99"))
     caplog.set_level(logging.INFO, logger="jsa")
     runner().run("p")
-    traced = [r for r in caplog.records if r.name.startswith("jsa")]
+    # The thought summaries are logged as they arrive; only the heartbeat is rate-limited.
+    traced = [
+        r
+        for r in caplog.records
+        if r.name.startswith("jsa") and "thinking" not in r.getMessage()
+    ]
     assert 1 <= len(traced) <= clock.now / 5 + 3
+
+
+# --- the live trace -------------------------------------------------------------------------
+
+
+def gemini_lines(caplog):
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name.startswith("jsa") and r.levelno >= logging.INFO
+    ]
+
+
+def test_each_thought_summary_is_logged_as_it_arrives(fake, caplog):
+    caplog.set_level(logging.INFO, logger="jsa")
+    seen = []
+
+    def stream():
+        yield Wire(created("e1"))
+        yield Wire(thought("e2", "Searching Greenhouse boards"))
+        # Resumed only once the runner has handled the event above.
+        seen.append("Searching Greenhouse boards" in caplog.text)
+        yield Wire(thought("e3", "Checking the Ashby index"))
+        seen.append("Checking the Ashby index" in caplog.text)
+        yield Wire(completed("e4"))
+
+    fake.created = stream()
+    runner().run("p")
+    assert seen == [True, True]
+
+
+def test_a_thought_summary_is_clipped_to_one_line(fake, caplog):
+    caplog.set_level(logging.INFO, logger="jsa")
+    long_summary = "First line.\n\n" + "and then a very long account " * 100
+    fake.created = [created("e1"), thought("e2", long_summary), completed("e3")]
+    runner().run("p")
+    (line,) = [m for m in gemini_lines(caplog) if "First line." in m]
+    assert "\n" not in line
+    assert len(line) < len(long_summary) / 2
+    # The same clipping every runner's trace uses (convention 1).
+    assert runners.clip(long_summary) in line
+
+
+def test_a_short_thought_summary_is_logged_whole(fake, caplog):
+    caplog.set_level(logging.INFO, logger="jsa")
+    fake.created = [created("e1"), thought("e2", "Reading the index"), completed("e3")]
+    runner().run("p")
+    assert any("Reading the index" in m for m in gemini_lines(caplog))
+
+
+def test_a_thought_summary_after_a_reconnect_is_logged_too(fake, caplog):
+    caplog.set_level(logging.INFO, logger="jsa")
+    fake.created = [created("e1"), thought("e2", "before the drop")]
+    fake.reconnects = [[thought("e3", "after the drop"), completed("e4")]]
+    runner().run("p")
+    assert "before the drop" in caplog.text
+    assert "after the drop" in caplog.text
+
+
+def test_a_text_delta_is_not_logged_as_a_thought(fake, caplog):
+    caplog.set_level(logging.INFO, logger="jsa")
+    fake.created = [created("e1"), text_delta("the answer text", "e2"), completed("e3")]
+    runner().run("p")
+    assert "the answer text" not in caplog.text
+
+
+def test_the_interaction_id_is_logged_as_soon_as_the_stream_reports_it(fake, caplog):
+    caplog.set_level(logging.INFO, logger="jsa")
+    seen = []
+
+    def stream():
+        yield Wire(created("e1"))
+        seen.append(INTERACTION in caplog.text)
+        yield Wire(thought("e2"))
+        yield Wire(completed("e3"))
+
+    fake.created = stream()
+    runner().run("p")
+    assert seen == [True]
+
+
+def test_the_interaction_id_is_logged_even_when_the_run_dies_uncancelled(fake, caplog):
+    caplog.set_level(logging.INFO, logger="jsa")
+    fake.cancel_error = RuntimeError("cancel refused")
+    fake.created = drops([created("e1")], ValueError("not a transport problem"))
+    with pytest.raises(ValueError):
+        runner().run("p")
+    assert INTERACTION in caplog.text
+
+
+# --- ending the run ends Gemini's work (PRD 01 "Cancellation") ------------------------------
+
+
+def test_a_run_that_completes_cancels_nothing(fake):
+    runner().run("p")
+    assert fake.cancel_calls == []
+
+
+def test_a_run_that_completes_after_a_reconnect_cancels_nothing(fake):
+    fake.created = [created("e1"), thought("e2")]
+    fake.reconnects = [[completed("e3")]]
+    runner().run("p")
+    assert fake.cancel_calls == []
+
+
+def test_the_ceiling_cancels_the_interaction_and_still_raises(fake, monkeypatch):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Tick(1000)))
+    fake.created = [created("e1")]
+    fake.reconnects = [[thought(f"e{n}")] for n in range(2, 40)]
+    fake.reads = [{"id": INTERACTION, "status": "in_progress"}]
+    with pytest.raises(WallClockExceeded):
+        runner().run("p")
+    assert fake.cancel_calls == [INTERACTION]
+
+
+def test_the_ceiling_passing_mid_stream_cancels_the_interaction(fake, monkeypatch):
+    class Late:
+        now = 0.0
+
+        def __call__(self):
+            return self.now
+
+    clock = Late()
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, clock))
+
+    def stream():
+        yield Wire(created("e1"))
+        clock.now = 3601.0
+        yield Wire(thought("e2"))
+        yield Wire(completed("e3"))
+
+    fake.created = stream()
+    with pytest.raises(WallClockExceeded):
+        runner().run("p")
+    assert fake.cancel_calls == [INTERACTION]
+
+
+def test_an_error_event_on_a_running_interaction_cancels_it(fake):
+    fake.created = [
+        created("e1"),
+        {
+            "event_type": "error",
+            "event_id": "e2",
+            "error": {"message": "the agent fell over"},
+        },
+    ]
+    with pytest.raises(JsaError):
+        runner().run("p")
+    assert fake.cancel_calls == [INTERACTION]
+
+
+def test_an_unexpected_exception_cancels_the_interaction_and_propagates(fake):
+    def broken():
+        yield Wire(created("e1"))
+        raise ValueError("not a transport problem")
+
+    fake.created = broken()
+    with pytest.raises(ValueError, match="not a transport problem"):
+        runner().run("p")
+    assert fake.cancel_calls == [INTERACTION]
+
+
+def test_an_interrupt_cancels_the_interaction_and_propagates(fake):
+    def interrupted():
+        yield Wire(created("e1"))
+        yield Wire(thought("e2"))
+        raise KeyboardInterrupt
+
+    fake.created = interrupted()
+    with pytest.raises(KeyboardInterrupt):
+        runner().run("p")
+    assert fake.cancel_calls == [INTERACTION]
+
+
+def test_a_failure_while_reconnecting_cancels_the_interaction(fake):
+    fake.created = [created("e1"), thought("e2")]
+    fake.reconnects = [drops([thought("e3")], ValueError("not a transport problem"))]
+    with pytest.raises(ValueError):
+        runner().run("p")
+    assert fake.cancel_calls == [INTERACTION]
+
+
+def test_a_run_that_dies_before_any_interaction_exists_cancels_nothing(fake):
+    def broken():
+        raise ValueError("refused before it began")
+        yield
+
+    fake.created = broken()
+    with pytest.raises(ValueError, match="refused before it began"):
+        runner().run("p")
+    assert fake.cancel_calls == []
+
+
+def test_an_interaction_the_service_has_already_failed_is_not_cancelled(fake):
+    fake.created = [created("e1"), status("failed", "e2")]
+    with pytest.raises(JsaError):
+        runner().run("p")
+    assert fake.cancel_calls == []
+
+
+def test_a_run_is_cancelled_once_not_once_per_layer(fake):
+    fake.created = [
+        created("e1"),
+        {"event_type": "error", "event_id": "e2", "error": {"message": "boom"}},
+    ]
+    with pytest.raises(JsaError):
+        runner().run("p")
+    assert len(fake.cancel_calls) == 1
+
+
+def test_a_failed_cancel_is_logged_with_the_id_and_does_not_hide_the_original_error(
+    fake, caplog
+):
+    caplog.set_level(logging.INFO, logger="jsa")
+    fake.cancel_error = RuntimeError("cancel refused")
+    fake.created = [
+        created("e1"),
+        {
+            "event_type": "error",
+            "event_id": "e2",
+            "error": {"message": "the agent fell over"},
+        },
+    ]
+    with pytest.raises(JsaError, match="the agent fell over"):
+        runner().run("p")
+    assert fake.cancel_calls == [INTERACTION]
+    failed = [
+        r
+        for r in caplog.records
+        if INTERACTION in r.getMessage() and r.levelno >= logging.WARNING
+    ]
+    assert failed, "the failed cancel must be logged so it can be done by hand"
+
+
+def test_a_failed_cancel_after_the_ceiling_still_raises_the_ceiling(
+    fake, monkeypatch, caplog
+):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Tick(1000)))
+    fake.cancel_error = httpx.ConnectError("no route")
+    fake.created = [created("e1")]
+    fake.reconnects = [[thought(f"e{n}")] for n in range(2, 40)]
+    fake.reads = [{"id": INTERACTION, "status": "in_progress"}]
+    with pytest.raises(WallClockExceeded):
+        runner().run("p")
+    assert INTERACTION in caplog.text
 
 
 # --- the API key ----------------------------------------------------------------------------
@@ -678,17 +939,23 @@ def test_the_search_prompt_reaches_gemini_as_the_input(world, monkeypatch, capsy
     assert world.fake.create_call["agent"] == AGENT
 
 
-def test_the_agent_comes_from_the_profile_not_from_the_app(world, monkeypatch, capsys):
-    toml = world.profile / "search" / "search.toml"
-    toml.write_text(toml.read_text().replace(AGENT, "some-other-agent-id"))
+def test_the_agent_is_pinned_and_the_profile_has_no_say(world, monkeypatch, capsys):
     live = world.boards.job()
     world.fake.reads = [finished(posted(live))]
     code, _out, _err = jsa_search_gemini(monkeypatch, capsys)
     assert code == 0
-    assert world.fake.create_call["agent"] == "some-other-agent-id"
-    assert rows(world.url, "SELECT model FROM search_findings") == [
-        ("some-other-agent-id",)
-    ]
+    assert world.fake.create_call["agent"] == AGENT
+    assert rows(world.url, "SELECT model FROM search_findings") == [(AGENT,)]
+
+
+def test_the_example_profile_alone_runs_a_gemini_search(
+    world, monkeypatch, capsys, tmp_path
+):
+    shutil.rmtree(world.profile)
+    monkeypatch.setenv("JSA_PROFILE_DIR", str(copy_example(tmp_path / "fresh")))
+    code, _out, _err = jsa_search_gemini(monkeypatch, capsys)
+    assert code == 0
+    assert world.fake.create_call["agent"] == AGENT
 
 
 def test_a_gemini_search_with_no_postings_closes_ok_and_inserts_nothing(
@@ -782,16 +1049,34 @@ def test_the_cli_reports_a_missing_key_cleanly_before_any_call(
     assert rows(world.url, "SELECT COUNT(*) FROM postings") == [(0,)]
 
 
-def test_a_profile_without_the_gemini_table_fails_before_any_call_or_run_row(
+def test_a_profile_that_still_has_a_gemini_table_fails_before_any_call_or_run_row(
     world, monkeypatch, capsys
 ):
     toml = world.profile / "search" / "search.toml"
-    text = toml.read_text()
     toml.write_text(
-        text.replace("[runners.gemini]", "[runners.other]").replace(AGENT, "x")
+        toml.read_text().replace(
+            "[runners.claude]",
+            f'[runners.gemini]\nagent = "{AGENT}"\n\n[runners.claude]',
+        )
     )
     code, _out, err = jsa_search_gemini(monkeypatch, capsys)
     assert code != 0
     assert "search.toml" in err
     assert world.fake.create_calls == []
     assert rows(world.url, "SELECT COUNT(*) FROM search_runs") == [(0,)]
+
+
+def test_a_search_that_hits_the_ceiling_fails_the_run_and_cancels_the_interaction(
+    world, monkeypatch, capsys
+):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Tick(1000)))
+    world.fake.created = [created("e1")]
+    world.fake.reconnects = [[thought(f"e{n}")] for n in range(2, 40)]
+    world.fake.reads = [{"id": INTERACTION, "status": "in_progress"}]
+    code, _out, _err = jsa_search_gemini(monkeypatch, capsys)
+    assert code != 0
+    assert world.fake.cancel_calls == [INTERACTION]
+    assert [r[0] for r in rows(world.url, "SELECT outcome FROM search_runs")] == [
+        "failed"
+    ]
+    assert rows(world.url, "SELECT COUNT(*) FROM search_findings") == [(0,)]

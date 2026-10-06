@@ -88,16 +88,12 @@ def sse(events):
     )
 
 
-STEP_EVENTS = (
-    "response.reasoning.search_results",
-    "response.reasoning.fetch_url_results",
-)
-TIER = "flex"
+STEP_EVENT = "response.sandbox.results"
 
 
-def stream_for(text, *, model=MODEL, cost=COST, steps=2, deltas=(), tier=TIER):
-    events = [("response.created", {"response": {"model": "high"}})]
-    events += [(STEP_EVENTS[i % 2], {}) for i in range(steps)]
+def stream_for(text, *, model=MODEL, cost=COST, steps=2, deltas=()):
+    events = [("response.created", {"response": {"model": "xhigh"}})]
+    events += [(STEP_EVENT, {}) for _ in range(steps)]
     events += [("response.output_text.delta", {"delta": piece}) for piece in deltas]
     events += [
         ("response.output_text.done", {"text": text}),
@@ -106,7 +102,6 @@ def stream_for(text, *, model=MODEL, cost=COST, steps=2, deltas=(), tier=TIER):
             {
                 "response": {
                     "model": model,
-                    "service_tier": tier,
                     "usage": {"cost": {"total_cost": cost}},
                 }
             },
@@ -413,22 +408,18 @@ def test_an_unknown_agent_is_refused(world, monkeypatch, capsys):
 # --- the Perplexity request ------------------------------------------------------
 
 
-def test_request_body_pins_the_high_preset_on_flex_with_only_a_step_override():
+def test_request_body_pins_the_xhigh_preset_with_no_overrides():
     body = request_body("the assembled prompt")
-    assert body["preset"] == "high"
-    assert body["service_tier"] == "flex"
-    assert body["max_steps"] == 30
+    assert body["preset"] == "xhigh"
     assert body["input"] == "the assembled prompt"
     assert body["stream"] is True
-    for forbidden in ("model", "tools"):
+    for forbidden in ("model", "max_steps", "tools", "service_tier"):
         assert forbidden not in body
 
 
-def test_request_body_carries_nothing_beyond_the_preset_tier_step_cap_and_io():
+def test_request_body_carries_nothing_beyond_the_preset_and_io():
     assert set(request_body("p")) == {
         "preset",
-        "service_tier",
-        "max_steps",
         "input",
         "stream",
         "response_format",
@@ -464,13 +455,11 @@ def test_the_request_on_the_wire_is_an_authorised_streaming_post_to_the_agent_ap
     assert str(request.url) == "https://api.perplexity.ai/v1/agent"
     assert request.headers["authorization"] == "Bearer test-perplexity-key"
     body = json.loads(request.content)
-    assert body["preset"] == "high"
-    assert body["service_tier"] == "flex"
-    assert body["max_steps"] == 30
+    assert body["preset"] == "xhigh"
     assert body["stream"] is True
     assert body["response_format"]["type"] == "json_schema"
     assert body["input"].strip()
-    for forbidden in ("model", "tools"):
+    for forbidden in ("model", "max_steps", "tools", "service_tier"):
         assert forbidden not in body
 
 
@@ -537,47 +526,33 @@ def changed_values(before, after):
 
 
 @pytest.mark.parametrize("steps", [1, 2, 5])
-def test_fold_counts_one_research_step_per_search_or_fetch_result(steps):
-    events = [(STEP_EVENTS[i % 2], {}) for i in range(steps)]
+def test_fold_counts_one_sandbox_step_per_sandbox_results_event(steps):
+    events = [(STEP_EVENT, {}) for _ in range(steps)]
     assert changed_values(StreamState(), fold_events(events)) == [steps]
-
-
-@pytest.mark.parametrize("event", STEP_EVENTS)
-def test_each_kind_of_research_event_counts_as_a_step(event):
-    assert changed_values(StreamState(), fold_events([(event, {})])) == [1]
-
-
-def test_the_retired_sandbox_event_is_not_a_research_step():
-    assert fold_events([("response.sandbox.results", {})]) == StreamState()
-
-
-def test_the_completed_event_records_the_service_tier_perplexity_reports():
-    reported = fold_events(stream_for("x", tier="default"))
-    assert "default" in asdict(reported).values()
-    assert "flex" not in asdict(reported).values()
-
-
-def test_the_closing_line_reports_the_tier_and_the_research_steps(web, profile, caplog):
-    web.perplexity(answer_with([]), steps=3, tier="default")
-    caplog.set_level(logging.INFO, logger="jsa")
-    with make_client() as client:
-        PerplexityRunner(client).run("a prompt")
-    closing = [r.getMessage() for r in caplog.records if r.name.startswith("jsa")][-1]
-    assert "default" in closing
-    assert "3" in closing
 
 
 @pytest.mark.parametrize(
     "event",
     [
+        "response.reasoning.search_results",
+        "response.reasoning.fetch_url_results",
         "response.reasoning.started",
         "response.reasoning.search_queries",
         "response.fetch_url.started",
+        "response.sandbox.started",
         "response.created",
     ],
 )
-def test_events_other_than_search_and_fetch_results_are_not_research_steps(event):
+def test_events_other_than_sandbox_results_are_not_steps(event):
     assert changed_values(StreamState(), fold_events([(event, {})])) == []
+
+
+def test_the_completed_event_carries_no_service_tier_into_the_state():
+    completed = (
+        "response.completed",
+        {"response": {"model": MODEL, "service_tier": "default"}},
+    )
+    assert "default" not in asdict(fold_events([completed])).values()
 
 
 def test_a_completed_event_without_a_service_tier_still_closes_the_run(
@@ -596,28 +571,32 @@ def test_a_completed_event_without_a_service_tier_still_closes_the_run(
     assert result.model == MODEL
 
 
-def test_the_closing_line_counts_every_research_step(web, profile, caplog):
+def test_the_closing_line_counts_every_sandbox_step(web, profile, caplog):
     web.perplexity(answer_with([]), steps=41)
     caplog.set_level(logging.INFO, logger="jsa")
     with make_client() as client:
         PerplexityRunner(client).run("a prompt")
     closing = [r.getMessage() for r in caplog.records if r.name.startswith("jsa")][-1]
     assert "41" in closing
-    assert "flex" in closing
-    assert MODEL in closing
 
 
-def test_the_trace_never_mentions_the_retired_sandbox(
-    web, profile, monkeypatch, caplog
+def test_the_closing_line_does_not_count_the_old_search_and_fetch_events(
+    web, profile, caplog
 ):
-    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, Tick(1)))
-    web.perplexity(answer_with([]), steps=20, deltas=["x"] * 20)
+    web.routes[PERPLEXITY] = event_stream(
+        [
+            *[("response.reasoning.search_results", {})] * 7,
+            *[("response.reasoning.fetch_url_results", {})] * 7,
+            ("response.output_text.done", {"text": answer_with([])}),
+            ("response.completed", {"response": {"model": MODEL}}),
+        ]
+    )
     caplog.set_level(logging.INFO, logger="jsa")
     with make_client() as client:
         PerplexityRunner(client).run("a prompt")
-    traced = [r.getMessage() for r in caplog.records if r.name.startswith("jsa")]
-    assert len(traced) > 1
-    assert not any("sandbox" in line.lower() for line in traced)
+    closing = [r.getMessage() for r in caplog.records if r.name.startswith("jsa")][-1]
+    assert "7" not in closing
+    assert "14" not in closing
 
 
 def test_fold_ignores_events_it_does_not_know():
@@ -671,6 +650,122 @@ def test_the_runner_emits_a_heartbeat_at_most_every_five_seconds(
         PerplexityRunner(client).run("a prompt")
     traced = [r for r in caplog.records if r.name.startswith("jsa")]
     assert 1 <= len(traced) <= clock.now / 5 + 2
+
+
+# --- ending the run ends Perplexity's work (PRD 01 "Timeouts/limits") ------------------
+
+
+class Watched(httpx.SyncByteStream):
+    """A response body that serves one event per chunk and notes how much was read and whether it was closed."""
+
+    def __init__(self, events, on_chunk=lambda _n: None):
+        self.chunks = [sse([event]).encode() for event in events]
+        self.on_chunk = on_chunk
+        self.read = 0
+        self.closed = False
+
+    def __iter__(self):
+        for chunk in self.chunks:
+            self.read += 1
+            self.on_chunk(self.read)
+            yield chunk
+
+    def close(self):
+        self.closed = True
+
+
+def watched_stream(web, events, on_chunk=lambda _n: None):
+    body = Watched(events, on_chunk)
+    web.routes[PERPLEXITY] = httpx.Response(
+        200, stream=body, headers={"content-type": "text/event-stream"}
+    )
+    return body
+
+
+def test_a_run_that_finishes_leaves_no_stream_open(web, profile):
+    body = watched_stream(web, stream_for(answer_with([])))
+    with make_client() as client:
+        PerplexityRunner(client).run("a prompt")
+    assert body.closed
+
+
+@pytest.mark.parametrize("failure", ["response.failed", "error"])
+def test_a_failure_event_closes_the_stream_without_reading_on(web, profile, failure):
+    body = watched_stream(
+        web,
+        [
+            (STEP_EVENT, {}),
+            (failure, {"error": {"message": "the model fell over"}}),
+            *[(STEP_EVENT, {})] * 5,
+            ("response.output_text.done", {"text": answer_with([])}),
+        ],
+    )
+    with make_client() as client, pytest.raises(JsaError):
+        PerplexityRunner(client).run("a prompt")
+    assert body.closed
+    assert body.read < len(body.chunks)
+
+
+def test_a_run_past_the_ceiling_closes_the_stream_without_reading_on(
+    web, profile, monkeypatch
+):
+    class Late:
+        """In time until the stream's third event, past the ceiling after it."""
+
+        now = 0.0
+
+        def __call__(self):
+            return self.now
+
+    clock = Late()
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (3600, clock))
+
+    def pass_the_ceiling(chunk):
+        if chunk == 3:
+            clock.now = 3601.0
+
+    body = watched_stream(
+        web,
+        [(STEP_EVENT, {})] * 10 + stream_for(answer_with([])),
+        on_chunk=pass_the_ceiling,
+    )
+    with make_client() as client, pytest.raises(WallClockExceeded):
+        PerplexityRunner(client).run("a prompt")
+    assert body.closed
+    assert body.read < len(body.chunks)
+
+
+def test_a_stream_that_ends_without_an_answer_is_an_error_and_closed(web, profile):
+    body = watched_stream(web, [(STEP_EVENT, {}), (STEP_EVENT, {})])
+    with make_client() as client, pytest.raises(JsaError):
+        PerplexityRunner(client).run("a prompt")
+    assert body.closed
+
+
+def test_an_interrupt_while_reading_closes_the_stream(web, profile):
+    def interrupt(chunk):
+        if chunk == 2:
+            raise KeyboardInterrupt
+
+    body = watched_stream(
+        web, [(STEP_EVENT, {})] * 5 + stream_for("x"), on_chunk=interrupt
+    )
+    with make_client() as client, pytest.raises(KeyboardInterrupt):
+        PerplexityRunner(client).run("a prompt")
+    assert body.closed
+
+
+def test_a_cli_search_that_fails_mid_stream_closes_the_stream(
+    world, monkeypatch, capsys
+):
+    body = watched_stream(
+        world.web,
+        [(STEP_EVENT, {}), ("response.failed", {}), (STEP_EVENT, {})],
+    )
+    code, _out, _err = run(monkeypatch, capsys)
+    assert code != 0
+    assert body.closed
+    assert [r["outcome"] for r in search_runs(world.url)] == ["failed"]
 
 
 # --- the API key -----------------------------------------------------------------

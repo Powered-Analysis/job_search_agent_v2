@@ -30,9 +30,6 @@ tuesday = [
 model = "claude-opus-5-5"
 effort = "high"
 
-[runners.gemini]
-agent = "deep-research-preview-04-2026"
-
 [verification]
 mode = "strict"
 """

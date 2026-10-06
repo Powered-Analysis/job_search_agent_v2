@@ -2,6 +2,7 @@
 configuration" (XC-11, XC-14): the profile's two TOML files load into typed config."""
 
 import re
+import tomllib
 import zipfile
 from datetime import time
 from xml.etree import ElementTree
@@ -76,15 +77,10 @@ def test_the_example_search_toml_carries_the_prd_blocks_and_comments():
     text = (EXAMPLE_DIR / "search" / "search.toml").read_text(encoding="utf-8")
     for required in (
         "[runners.claude]",
-        "[runners.gemini]",
         "[verification]",
         "Any Claude model that accepts an effort setting will run",
         "We recommend an Opus model at effort",
-        "Any Gemini Deep Research agent ID",
-        '"deep-research-max-preview-04-2026"',
-        '"deep-research-preview-04-2026"',
-        "Both are previews: Google may rename or retire them.",
-        "Perplexity has no settings",
+        "Perplexity and Gemini have no settings",
         "Which postings the pipeline admits. Required.",
         '"strict"',
         '"best_effort"',
@@ -94,12 +90,17 @@ def test_the_example_search_toml_carries_the_prd_blocks_and_comments():
         assert required in text, required
 
 
-def test_the_example_search_toml_describes_the_perplexity_runner_as_high_on_flex():
+def test_the_example_search_toml_names_the_pinned_perplexity_preset_and_gemini_agent():
     text = (EXAMPLE_DIR / "search" / "search.toml").read_text(encoding="utf-8")
-    assert '"high"' in text
-    assert '"flex"' in text
-    assert "30-step" in text
-    assert "xhigh" not in text
+    assert '"xhigh"' in text
+    assert '"deep-research-preview-04-2026"' in text
+    for retired in ("flex", "30-step", "deep-research-max"):
+        assert retired not in text, retired
+
+
+def test_the_example_search_toml_has_no_gemini_runner_table():
+    text = (EXAMPLE_DIR / "search" / "search.toml").read_text(encoding="utf-8")
+    assert "gemini" not in tomllib.loads(text).get("runners", {})
 
 
 def test_the_example_config_toml_names_the_recommended_checklist_and_refine_models():
@@ -196,7 +197,6 @@ def test_a_valid_search_profile_loads_typed_values(profile):
     assert search.verification.mode == "strict"
     assert search.runners.claude.model == "claude-opus-5-5"
     assert search.runners.claude.effort == "high"
-    assert search.runners.gemini.agent == "deep-research-preview-04-2026"
 
 
 def test_each_weekday_keeps_its_searches_in_order(profile):
@@ -309,8 +309,10 @@ def test_packets_dir_can_be_set(profile, tmp_path):
             {'effort = "high"': 'effort = "high"\ntemperature = 1'}, id="runner"
         ),
         pytest.param(
-            {'agent = "deep-research-preview-04-2026"': 'agent = "x"\nmodel = "y"'},
-            id="gemini-runner",
+            {
+                "[runners.claude]": '[runners.gemini]\nagent = "deep-research-preview-04-2026"\n[runners.claude]'
+            },
+            id="gemini-runner-table",
         ),
         pytest.param(
             {"[runners.claude]": "[runners.perplexity]\nx = 1\n[runners.claude]"},
@@ -410,13 +412,19 @@ def test_a_scheduled_claude_without_its_runner_entry_raises_with_a_pointer(profi
     assert "profile.example/" in str(raised.value)
 
 
-def test_a_scheduled_gemini_without_its_runner_entry_raises(profile):
-    search_with(
+def test_a_scheduled_gemini_needs_no_runner_entry(profile):
+    write_search_toml(profile)
+    assert any(s.agent == "gemini" for s in load_search_config().schedule.tuesday)
+
+
+def test_a_gemini_only_schedule_needs_no_runners_at_all(profile):
+    write_search_toml(
         profile,
-        {'[runners.gemini]\nagent = "deep-research-preview-04-2026"\n': ""},
+        'timezone = "America/New_York"\nrun_at = "07:00"\n\n'
+        '[schedule]\nfriday = [{ agent = "gemini", window_hours = 24 }]\n\n'
+        '[verification]\nmode = "strict"\n',
     )
-    with pytest.raises(JsaError, match=r"search\.toml"):
-        load_search_config()
+    assert load_search_config().schedule.friday[0].agent == "gemini"
 
 
 def test_invalid_toml_raises_an_app_error_naming_the_file(profile):
@@ -444,10 +452,6 @@ def test_invalid_toml_raises_an_app_error_naming_the_file(profile):
         pytest.param({'effort = "high"': 'effort = "extreme"'}, id="bad-effort"),
         pytest.param({'effort = "high"': 'effort = ""'}, id="empty-effort"),
         pytest.param({'effort = "high"': 'effort = "HIGH"'}, id="effort-case"),
-        pytest.param(
-            {'agent = "deep-research-preview-04-2026"': 'agent = ""'},
-            id="empty-gemini-agent",
-        ),
         pytest.param({'mode = "strict"': 'mode = "lenient"'}, id="bad-mode"),
         pytest.param({'mode = "strict"': 'mode = ""'}, id="empty-mode"),
         pytest.param({'mode = "strict"': 'mode = "best-effort"'}, id="mode-hyphen"),
@@ -491,16 +495,6 @@ def test_both_verification_modes_are_accepted(profile, mode):
 def test_any_non_empty_model_string_is_accepted(profile, model):
     search_with(profile, {'model = "claude-opus-5-5"': f'model = "{model}"'})
     assert load_search_config().runners.claude.model == model
-
-
-@pytest.mark.parametrize(
-    "agent", ["deep-research-preview-04-2026", "deep-research-v9", "z"]
-)
-def test_any_non_empty_gemini_agent_string_is_accepted(profile, agent):
-    search_with(
-        profile, {'agent = "deep-research-preview-04-2026"': f'agent = "{agent}"'}
-    )
-    assert load_search_config().runners.gemini.agent == agent
 
 
 @pytest.mark.parametrize("window_hours", [1, 24, 72, 720])

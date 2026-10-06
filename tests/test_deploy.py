@@ -212,7 +212,11 @@ INVALID_SEARCH_TOML = {
     "no-verification-mode": SEARCH_TOML.split("[verification]")[0],
     "bad-verification-mode": broken('mode = "strict"', 'mode = "sloppy"'),
     "scheduled-runner-has-no-settings": broken(
-        '[runners.gemini]\nagent = "deep-research-preview-04-2026"\n', ""
+        '[runners.claude]\nmodel = "claude-opus-5-5"\neffort = "high"\n', ""
+    ),
+    "gemini-has-no-settings": broken(
+        "[runners.claude]",
+        '[runners.gemini]\nagent = "deep-research-preview-04-2026"\n\n[runners.claude]',
     ),
     "malformed-runner-setting": broken('effort = "high"', "effort = 7"),
     "unknown-runner-key": broken('effort = "high"', 'effort = "high"\nturbo = true'),
@@ -234,9 +238,7 @@ def test_model_ids_are_not_checked_against_a_list(fly, monkeypatch, capsys):
     profile, _ = fly
     set_search(
         profile,
-        broken('"claude-opus-5-5"', '"claude-future-model-9"').replace(
-            "deep-research-preview-04-2026", "deep-research-not-yet-invented"
-        ),
+        broken('"claude-opus-5-5"', '"claude-future-model-9"'),
     )
     code, _ = jsa_deploy(monkeypatch, capsys, "--dry-run")
     assert code == 0
@@ -1048,7 +1050,7 @@ def test_readme_walkthrough_is_ordered_from_fresh_clone_to_deploy():
         "jsa init-db",
         "fly auth login",
         "fly apps create",
-        "fly secrets set",
+        "fly secrets import",
         "--stage",
         "jsa deploy --smoke",
     ]
@@ -1058,6 +1060,23 @@ def test_readme_walkthrough_is_ordered_from_fresh_clone_to_deploy():
         positions.append(section.index(step))
     assert positions == sorted(positions)
     assert re.search(r"jsa deploy(?! --)", section[positions[-1] :])
+
+
+def test_readme_stages_only_the_five_cloud_keys_from_env():
+    # PRD 06 setup step 3: the cloud runs only search, so no other credential is piped in.
+    section = readme_walkthrough()
+    (filter_line,) = [
+        line for line in section.splitlines() if "TURSO_DATABASE_URL|" in line
+    ]
+    keys = set(re.findall(r"[A-Z][A-Z_]+(?=[|)])", filter_line))
+    assert keys == {
+        "TURSO_DATABASE_URL",
+        "TURSO_AUTH_TOKEN",
+        "JSA_SEARCH_ANTHROPIC_API_KEY",
+        "PERPLEXITY_API_KEY",
+        "GEMINI_API_KEY",
+    }
+    assert "fly secrets import --stage" in section
 
 
 @pytest.mark.parametrize(
