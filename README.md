@@ -143,6 +143,7 @@ fragments, seeded from `profile.example/` (step 4).
 |---|---|
 | `jsa review` | decide Apply or Skip on each undecided posting |
 | `jsa add <URL>` | add a posting you already want, decided Apply |
+| `jsa inbox` | the inbox machine's entrypoint: add each posting emailed to the jobs mailbox (needs `[inbox] senders` and `JSA_INBOX_GWS_CREDENTIALS`) |
 | `jsa generate` | build each Apply posting's packet with a resume checklist and an ATS redline, then track it |
 | `jsa packet`, `jsa track` | the two halves of `generate`, on their own |
 | `jsa refetch` | update stored postings, tracker titles, and packets from the employer's edits |

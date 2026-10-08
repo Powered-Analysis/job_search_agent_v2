@@ -202,6 +202,21 @@ def capture_jd(
         )
 
 
+def supply_jd(conn: Connection, posting_id: int, jd_markdown: str) -> None:
+    """Store a caller-supplied JD on a posting that has none; a stored JD is never replaced."""
+    conn.execute(
+        "UPDATE postings SET jd_markdown = ? WHERE id = ? AND jd_markdown IS NULL",
+        (jd_markdown, posting_id),
+    )
+
+
+def has_jd(conn: Connection, posting_id: int) -> bool:
+    rows = conn.execute(
+        "SELECT jd_markdown IS NOT NULL FROM postings WHERE id = ?", (posting_id,)
+    ).fetchall()
+    return bool(rows and rows[0][0])
+
+
 def record_finding(
     conn: Connection,
     *,
