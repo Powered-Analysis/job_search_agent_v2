@@ -6,10 +6,6 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
-from zipfile import BadZipFile
-
-import docx
-from docx.opc.exceptions import PackageNotFoundError
 
 from jsa import agent_loop
 from jsa.assemble import Slot, app_template, assemble
@@ -21,6 +17,7 @@ from jsa.redline_docx import (
     body_paragraph_texts,
     has_unresolved_changes,
 )
+from jsa.resume import load_resume
 
 MAX_FIND_WORDS = 6
 _PUNCTUATION = ".,;:!?()[]\"'"
@@ -235,10 +232,7 @@ def redline_resume(
 
     `edits_file` is written last, so it marks the step done (PRD 04, "Re-entry").
     """
-    try:
-        document = docx.Document(str(copy))
-    except (PackageNotFoundError, BadZipFile) as error:
-        raise JsaError(f"{copy} is not a readable .docx file: {error}") from error
+    document = load_resume(copy)
     if has_unresolved_changes(document):
         return None
     paragraphs = body_paragraph_texts(document)
