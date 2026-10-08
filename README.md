@@ -2,8 +2,8 @@
 
 A personal job-search pipeline. A scheduled cloud search finds postings that fit your profile and
 stores each one once in a hosted database. You decide Apply or Skip on each at the terminal. Each
-Apply becomes an application packet (the job description, a copy of your resume, and a checklist for
-revising it) and a row in your tracker Sheet. `jsa refine` learns from your decisions and proposes
+Apply becomes an application packet (the job description, a copy of your resume, a checklist for
+revising it, and an ATS redline of the resume's wording) and a row in your tracker Sheet. `jsa refine` learns from your decisions and proposes
 edits to your search profile.
 
 The product is specified in [`prds/`](prds/00-overview.md); start with `prds/00-overview.md`.
@@ -30,7 +30,7 @@ Do this once; step 3 puts the keys in `.env`.
   - `claude`: an Anthropic Console API key (`JSA_SEARCH_ANTHROPIC_API_KEY`);
   - `perplexity`: a Perplexity API key (`PERPLEXITY_API_KEY`);
   - `gemini`: a Google AI Studio key (`GEMINI_API_KEY`).
-- **Claude for the local commands** (`generate`'s resume checklist, `refine`): either
+- **Claude for the local commands** (`generate`'s resume checklist and redline, `refine`): either
   `claude setup-token` for an OAuth token (`CLAUDE_CODE_OAUTH_TOKEN`) or an Anthropic API key
   (`ANTHROPIC_API_KEY`). Set exactly one: the CLI prefers the API key, so with both set the OAuth
   login fails with a 401.
@@ -59,7 +59,7 @@ cp -r profile.example profile
 
 | File | What it holds |
 |---|---|
-| `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, and the model and effort for the resume checklist and refine |
+| `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, and the model and effort for the resume checklist, the ATS redline, and refine |
 | `profile/resume.docx` | your single base resume |
 | `profile/search/search.toml` | timezone, `run_at`, the weekly schedule, the Claude runner settings, and the verification mode |
 | `profile/search/*.md` | the six fragments that tell the search who you are and what you want |
@@ -128,7 +128,7 @@ Google OAuth (`gws auth login`) and Fly's login (`fly auth login`) stay on your 
 **Local tools:** `uv`; Google Chrome (`jsa review`); the `gws` CLI, signed in with `gws auth login`
 (while the OAuth consent screen is in testing status the token expires after 7 days; publish it, or
 sign in again when `jsa track` reports exit code 2); `flyctl` (`jsa deploy`); `pandoc` and `typst`
-(`jsa generate` renders each checklist to a PDF); the Claude Code CLI (the local Claude commands).
+(`jsa generate` renders each checklist to a PDF); Microsoft Word (reviewing the redline); the Claude Code CLI (the local Claude commands).
 
 **The profile:** `config.toml`, `resume.docx`, `search/search.toml`, and the six `search/*.md`
 fragments, seeded from `profile.example/` (step 4).
@@ -143,13 +143,18 @@ fragments, seeded from `profile.example/` (step 4).
 |---|---|
 | `jsa review` | decide Apply or Skip on each undecided posting |
 | `jsa add <URL>` | add a posting you already want, decided Apply |
-| `jsa generate` | build each Apply posting's packet with a resume checklist, then track it |
+| `jsa generate` | build each Apply posting's packet with a resume checklist and an ATS redline, then track it |
 | `jsa packet`, `jsa track` | the two halves of `generate`, on their own |
 | `jsa refetch` | update stored postings, tracker titles, and packets from the employer's edits |
 | `jsa refine` | propose search-profile edits learned from your decisions; resolve the conflict-marked copies in `profile/refine/`, then `jsa refine --accept` or `--reject` |
 | `jsa search --agent <agent> --window-hours <n>` | run one search by hand |
 
-After `jsa generate`, revise each packet's resume copy by hand against its checklist.
+After `jsa generate`, revise each packet's resume copy by hand against its checklist. Open the
+packet's `*_redline.docx` in Word to accept or reject each proposed wording change; every change
+carries a comment quoting the posting text behind it. Save the result over the resume copy to keep it.
+A redline is only written when at least one proposed change passes validation; `redline_edits.json`
+records every proposal and why any was dropped. To redline a revised resume again, delete the
+redline and run `jsa generate --id <id>`.
 
 ## Portability
 

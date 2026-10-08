@@ -4,12 +4,13 @@ import shutil
 from pathlib import Path
 
 from jsa import db
-from jsa.naming import packet_dir_name, resume_file_stem
+from jsa.naming import packet_dir_name, redline_file_name, resume_file_stem
 from jsa.profile import Config, base_resume, load_config
 
 JOB_POSTING = "job_posting.md"
 CHECKLIST = "resume_checklist.md"
 CHECKLIST_PDF = "resume_checklist.pdf"
+REDLINE_EDITS = "redline_edits.json"
 
 
 def packet_paths(config: Config, job: db.PacketJob) -> tuple[Path, Path]:
@@ -22,6 +23,11 @@ def packet_paths(config: Config, job: db.PacketJob) -> tuple[Path, Path]:
         / f"{resume_file_stem(config.candidate_name, job.title_slug, job.normalized_company)}.docx"
     )
     return directory, copy
+
+
+def redline_path(copy: Path) -> Path:
+    """The ATS redline beside the resume copy it is made from."""
+    return copy.with_name(redline_file_name(copy.stem))
 
 
 def ensure_head(

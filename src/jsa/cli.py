@@ -151,7 +151,7 @@ def main() -> None:
     packet.set_defaults(run=_packet)
     generate_command = commands.add_parser(
         "generate",
-        help="build each Apply posting's packet with a resume checklist, then track it",
+        help="build each Apply posting's packet with a resume checklist and an ATS redline, then track it",
     )
     generate_command.add_argument(
         "--id",

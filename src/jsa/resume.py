@@ -31,9 +31,12 @@ def render_document(document: Document) -> str:
     return "\n".join(_render_paragraph(p) for p in document.paragraphs)
 
 
-def render_resume(path: Path) -> str:
+def load_resume(path: Path) -> Document:
     try:
-        document = docx.Document(str(path))
+        return docx.Document(str(path))
     except (PackageNotFoundError, BadZipFile) as error:
         raise JsaError(f"{path} is not a readable .docx file: {error}") from error
-    return render_document(document)
+
+
+def render_resume(path: Path) -> str:
+    return render_document(load_resume(path))

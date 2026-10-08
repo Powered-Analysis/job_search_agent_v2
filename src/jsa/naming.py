@@ -51,3 +51,8 @@ def resume_file_stem(
 ) -> str:
     parts = [_path_safe(candidate_name or ""), "Resume", slug, normalized_company]
     return "_".join(part for part in parts if part).replace(" ", "")
+
+
+def redline_file_name(stem: str) -> str:
+    """The ATS redline's file name, beside the resume copy it is made from (PRD 04)."""
+    return f"{stem}_redline.docx"
