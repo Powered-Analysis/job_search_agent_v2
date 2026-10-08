@@ -120,3 +120,19 @@ def run_agent(
         env=env or {},
     )
     return asyncio.run(_drive(prompt, options, on_message))
+
+
+def run_single_turn(prompt: str, settings: AgentSettings, *, agent: str) -> str:
+    """The final text of a tool-less, single-turn run; an empty result raises."""
+    result = run_agent(
+        prompt,
+        settings,
+        # No tools: these agents read untrusted posting text and have nothing to act with.
+        tools=[],
+        max_turns=1,
+        permission_mode="dontAsk",
+    )
+    text = result.text.strip()
+    if not text:
+        raise JsaError(f"the {agent} agent returned no text")
+    return text

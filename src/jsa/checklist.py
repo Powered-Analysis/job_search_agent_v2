@@ -24,18 +24,7 @@ def assemble_checklist_prompt(
 
 
 def run_checklist(prompt: str, settings: AgentSettings) -> str:
-    result = agent_loop.run_agent(
-        prompt,
-        settings,
-        # No tools: the checklist reads untrusted posting text and has nothing to act with.
-        tools=[],
-        max_turns=1,
-        permission_mode="dontAsk",
-    )
-    text = result.text.strip()
-    if not text:
-        raise JsaError("the checklist agent returned no text")
-    return text
+    return agent_loop.run_single_turn(prompt, settings, agent="checklist")
 
 
 def render_checklist_pdf(checklist: Path, pdf: Path) -> None:

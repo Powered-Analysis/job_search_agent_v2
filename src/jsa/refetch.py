@@ -10,13 +10,13 @@ from jsa.ats import resolve_ats
 from jsa.capture import Capture, CaptureError, capture_posting
 from jsa.errors import JsaError, one_line
 from jsa.generate import build_packet
-from jsa.packet import JOB_POSTING, packet_paths
+from jsa.packet import JOB_POSTING, packet_paths, redline_path
 from jsa.profile import (
-    AgentSettings,
     Config,
+    PacketAgents,
     base_resume,
-    checklist_settings,
     load_config,
+    packet_agents,
     tracker_spreadsheet_id,
 )
 
@@ -52,14 +52,21 @@ def _rename_packet(
     """Move the packet to its new names; returns why nothing was renamed when a name is taken."""
     if _taken(new_directory, old_directory):
         return f"{new_directory} already exists"
-    renamed_copy = old_directory / new_copy.name
-    copy_moves = new_copy.name != old_copy.name
-    if copy_moves and _taken(renamed_copy, old_copy):
-        return f"{renamed_copy} already exists"
-    # The copy moves first: if the folder rename then fails, the user's edits still sit under the name
+    # The resume copy and its redline hold the user's work and move together, never rewritten.
+    old_redline, new_redline = redline_path(old_copy), redline_path(new_copy)
+    moves = [
+        (old_copy, old_directory / new_copy.name),
+        (old_redline, old_directory / new_redline.name),
+    ]
+    moves = [(source, target) for source, target in moves if source.name != target.name]
+    for source, target in moves:
+        if _taken(target, source):
+            return f"{target} already exists"
+    # The files move first: if the folder rename then fails, the user's edits still sit under the names
     # the regenerated packet would look for, and nothing is ever copied over them.
-    if copy_moves and old_copy.exists():
-        old_copy.rename(renamed_copy)
+    for source, target in moves:
+        if source.exists():
+            source.rename(target)
     if new_directory != old_directory:
         old_directory.rename(new_directory)
     return None
@@ -118,7 +125,7 @@ def _refresh_packet(
     old_copy: Path,
     config: Config,
     resume: Path,
-    settings: AgentSettings,
+    agents: PacketAgents,
 ) -> str | None:
     """Rename and regenerate the packet in place; returns what needs a hand fix, if anything."""
     new_directory, new_copy = packet_paths(config, fresh)
@@ -130,7 +137,7 @@ def _refresh_packet(
                 f"to match the new title, then run `jsa generate --id {fresh.id}`"
             )
         # PRD 04: exactly `jsa generate --id`, which keeps the resume copy and rewrites the rest.
-        if not build_packet(fresh, config, resume, settings, rewrite=True):
+        if not build_packet(fresh, config, resume, agents, rewrite=True):
             return (
                 f"no job description to assess; fill in {new_directory / JOB_POSTING}, "
                 f"then run `jsa generate --id {fresh.id}`"
@@ -164,7 +171,7 @@ def _reconcile(
     spreadsheet_id: str,
     config: Config,
     resume: Path,
-    settings: AgentSettings,
+    agents: PacketAgents,
     *,
     dry_run: bool,
 ) -> list[str]:
@@ -227,7 +234,7 @@ def _reconcile(
         and drift
         and (
             problem := _refresh_packet(
-                fresh, old_directory, old_copy, config, resume, settings
+                fresh, old_directory, old_copy, config, resume, agents
             )
         )
     ):
@@ -246,7 +253,7 @@ def refetch(
     resume = base_resume()
     spreadsheet_id = tracker_spreadsheet_id()
     config = load_config()
-    settings = checklist_settings(config)
+    agents = packet_agents(config)
     default_scope = posting_id is None and not every_row
     index = _read_sheet(spreadsheet_id, required=default_scope)
     with closing(db.connect()) as conn:
@@ -267,7 +274,7 @@ def refetch(
             spreadsheet_id,
             config,
             resume,
-            settings,
+            agents,
             dry_run=dry_run,
         )
         for fix in fixes:

@@ -30,7 +30,7 @@ model=$(cfg '.live_checks.claude_model')
 effort=$(cfg '.live_checks.claude_effort')
 set_key search/search.toml runners.claude model "$model"
 set_key search/search.toml runners.claude effort "$effort"
-for agent in checklist refine; do
+for agent in checklist redline refine; do
   set_key config.toml "agents.$agent" model "$model"
   set_key config.toml "agents.$agent" effort "$effort"
 done

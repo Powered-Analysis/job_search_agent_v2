@@ -5,7 +5,7 @@ import re
 import tomllib
 from datetime import date, time
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, NamedTuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -130,6 +130,7 @@ class FlyConfig(BaseModel):
 class AgentsConfig(BaseModel):
     model_config = _STRICT
     checklist: AgentSettings | None = None
+    redline: AgentSettings | None = None
     refine: AgentSettings | None = None
 
 
@@ -237,6 +238,21 @@ def fly_settings(config: Config) -> FlyConfig:
 
 def checklist_settings(config: Config) -> AgentSettings:
     return _agent_settings(config, "checklist")
+
+
+def redline_settings(config: Config) -> AgentSettings:
+    return _agent_settings(config, "redline")
+
+
+class PacketAgents(NamedTuple):
+    """The two agents `jsa generate` runs on each packet."""
+
+    checklist: AgentSettings
+    redline: AgentSettings
+
+
+def packet_agents(config: Config) -> PacketAgents:
+    return PacketAgents(checklist_settings(config), redline_settings(config))
 
 
 def refine_settings(config: Config) -> AgentSettings:

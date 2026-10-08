@@ -1,4 +1,4 @@
-"""`jsa generate` (PRD 04 "Resume checklist"): re-check, build the packet, write the checklist, track the row."""
+"""`jsa generate` (PRD 04 "Resume checklist", "ATS redline"): re-check, build the packet, write the checklist and the redline, track the row."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
@@ -15,16 +15,26 @@ from jsa.checklist import (
 )
 from jsa.config import generate_workers
 from jsa.errors import JsaError, one_line
-from jsa.packet import CHECKLIST, CHECKLIST_PDF, JOB_POSTING, ensure_head, packet_paths
+from jsa.packet import (
+    CHECKLIST,
+    CHECKLIST_PDF,
+    JOB_POSTING,
+    REDLINE_EDITS,
+    ensure_head,
+    packet_paths,
+    redline_path,
+)
 from jsa.profile import (
     AgentSettings,
     Config,
+    PacketAgents,
     base_resume,
-    checklist_settings,
     load_config,
     load_search_config,
+    packet_agents,
     tracker_spreadsheet_id,
 )
+from jsa.redline import redline_resume
 from jsa.resume import render_resume
 from jsa.tracker import append_tracked
 from jsa.verify import CLOSED_OUTCOMES, Verifier, recheck
@@ -40,36 +50,84 @@ def _job_description(job: db.PacketJob, directory: Path) -> str | None:
         return None
 
 
+def _build_checklist(
+    job_description: str,
+    copy: Path,
+    directory: Path,
+    job: db.PacketJob,
+    settings: AgentSettings,
+) -> None:
+    prompt = assemble_checklist_prompt(
+        job.title, job.company, job_description, render_resume(copy)
+    )
+    text = run_checklist(prompt, settings)
+    pdf = directory / CHECKLIST_PDF
+    # A failed render must not leave the old checklist's PDF beside the new checklist.
+    pdf.unlink(missing_ok=True)
+    (directory / CHECKLIST).write_text(text + "\n", encoding="utf-8")
+    render_checklist_pdf(directory / CHECKLIST, pdf)
+
+
+def _build_redline(
+    job_description: str,
+    job: db.PacketJob,
+    directory: Path,
+    copy: Path,
+    settings: AgentSettings,
+) -> None:
+    result = redline_resume(
+        copy,
+        redline_path(copy),
+        directory / REDLINE_EDITS,
+        job_description,
+        settings,
+    )
+    if result is None:
+        print(
+            f"warning: posting {job.id}: the resume copy has unresolved tracked changes, "
+            "so it was not redlined; accept or reject them, then run "
+            f"`jsa generate --id {job.id}`"
+        )
+    else:
+        print(
+            f"redline: posting {job.id}: {result.applied} applied, {result.dropped} dropped"
+        )
+
+
 def build_packet(
     job: db.PacketJob,
     config: Config,
     resume: Path,
-    settings: AgentSettings,
+    agents: PacketAgents,
     *,
     rewrite: bool,
 ) -> bool:
-    """Complete the packet and its checklist; False when it must stay untracked for lack of a JD."""
+    """Complete the packet, its checklist, and its redline; False when it must stay untracked for lack of a JD."""
     directory, copy = packet_paths(config, job)
     # PRD 04: `--id` (rewrite) refreshes `job_posting.md` from the row, as refetch relies on.
     ensure_head(directory, copy, job, resume, refresh_posting=rewrite)
     checklist = directory / CHECKLIST
     pdf = directory / CHECKLIST_PDF
-    # XC-10: an interrupted run resumes after a checklist it already wrote, even one whose PDF failed.
-    if checklist.exists() and not rewrite:
+    redline = redline_path(copy)
+    # XC-10: an interrupted run resumes after the steps it already finished, even a checklist whose PDF failed.
+    need_checklist = rewrite or not checklist.exists()
+    # PRD 04: a redline the user may be reviewing is never replaced by a refresh.
+    need_redline = (
+        not redline.exists() if rewrite else not (directory / REDLINE_EDITS).exists()
+    )
+    if not need_checklist and not need_redline:
         if not pdf.exists():
             render_checklist_pdf(checklist, pdf)
         return True
     job_description = _job_description(job, directory)
     if not (job_description or "").strip():
         return False
-    prompt = assemble_checklist_prompt(
-        job.title, job.company, job_description, render_resume(copy)
-    )
-    text = run_checklist(prompt, settings)
-    # A failed render must not leave the old checklist's PDF beside the new checklist.
-    pdf.unlink(missing_ok=True)
-    checklist.write_text(text + "\n", encoding="utf-8")
-    render_checklist_pdf(checklist, pdf)
+    if need_checklist:
+        _build_checklist(job_description, copy, directory, job, agents.checklist)
+    elif not pdf.exists():
+        render_checklist_pdf(checklist, pdf)
+    if need_redline:
+        _build_redline(job_description, job, directory, copy, agents.redline)
     return True
 
 
@@ -95,7 +153,7 @@ def generate(client: httpx.Client, posting_id: int | None, *, dry_run: bool) -> 
     resume = base_resume()
     spreadsheet_id = tracker_spreadsheet_id()
     config = load_config()
-    settings = checklist_settings(config)
+    agents = packet_agents(config)
     workers = generate_workers()
     conn = db.connect()
     queue = db.packet_queue(conn, posting_id)
@@ -120,7 +178,7 @@ def generate(client: httpx.Client, posting_id: int | None, *, dry_run: bool) -> 
                 job,
                 config,
                 resume,
-                settings,
+                agents,
                 rewrite=posting_id is not None,
             ): job
             for job in queue
