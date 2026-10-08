@@ -24,6 +24,7 @@ from test_generate import (
     CONFIG,
     LONG_AGO,
     PDF,
+    REDLINE_EDITS,
     Agent,
     column,
     edit_copy,
@@ -568,6 +569,7 @@ def test_a_retitled_row_with_a_packet_is_renamed_and_regenerated_in_place(
         "job_posting.md",
         "resume_checklist.md",
         PDF,
+        REDLINE_EDITS,
         "notes.txt",
         NEW_COPY,
     }
@@ -582,10 +584,13 @@ def test_the_refreshed_checklist_assesses_the_users_revised_copy_and_the_new_pos
     employer(web, rdb, posting_id)
     set_sheet(gws, (posting_id, ""))
     refetch(monkeypatch, capsys)
-    [prompt] = agent.prompts
+    [prompt] = agent.checklist_prompts
     assert REVISION in prompt
     assert NEW_TITLE in prompt and NEW_JD in prompt
     assert OLD_JD not in prompt
+    [redline_prompt] = agent.redline_prompts
+    assert REVISION in redline_prompt
+    assert NEW_JD in redline_prompt and OLD_JD not in redline_prompt
 
 
 def test_a_description_only_change_regenerates_without_renaming(
@@ -604,7 +609,8 @@ def test_a_description_only_change_regenerates_without_renaming(
     assert NEW_JD in (folder / "job_posting.md").read_text(encoding="utf-8")
     checklist = (folder / "resume_checklist.md").read_text(encoding="utf-8")
     assert checklist.strip() == CHECKLIST_TEXT.strip()
-    assert len(agent.calls) == 1
+    assert len(agent.checklist_calls) == 1
+    assert len(agent.redline_calls) == 1
     assert (folder / PDF).read_text(encoding="utf-8") == f"PDF OF: {checklist}"
     assert title_updates(gws) == []
 
@@ -690,6 +696,69 @@ def test_a_taken_directory_name_blocks_the_rename_and_flags_the_row(
     for name in before[folder]:
         assert (folder / name).exists()
     assert (folder / "notes.txt").read_bytes() == before[folder]["notes.txt"]
+
+
+REDLINE_DOC = OLD_COPY.replace(".docx", "_redline.docx")
+NEW_REDLINE_DOC = NEW_COPY.replace(".docx", "_redline.docx")
+
+
+def test_a_retitle_renames_an_existing_redline_with_the_copy_and_leaves_it_untouched(
+    rdb, web, gws, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    (folder / REDLINE_DOC).write_bytes(b"MY REVIEW IN PROGRESS")
+    (folder / REDLINE_EDITS).write_text("MY RECORD", encoding="utf-8")
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    renamed = packets / NEW_DIR
+    assert (renamed / NEW_REDLINE_DOC).read_bytes() == b"MY REVIEW IN PROGRESS"
+    assert not (renamed / REDLINE_DOC).exists()
+    assert (renamed / REDLINE_EDITS).read_text(encoding="utf-8") == "MY RECORD"
+    assert agent.redline_calls == []
+    assert len(agent.checklist_calls) == 1
+    checklist = (renamed / "resume_checklist.md").read_text(encoding="utf-8")
+    assert checklist.strip() == CHECKLIST_TEXT.strip()
+
+
+def test_a_description_only_change_leaves_an_existing_redline_alone(
+    rdb, web, gws, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    (folder / REDLINE_DOC).write_bytes(b"MY REVIEW IN PROGRESS")
+    (folder / REDLINE_EDITS).write_text("MY RECORD", encoding="utf-8")
+    employer(web, rdb, posting_id, title=OLD_TITLE, location=OLD_LOCATION)
+    set_sheet(gws, (posting_id, ""))
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert (folder / REDLINE_DOC).read_bytes() == b"MY REVIEW IN PROGRESS"
+    assert (folder / REDLINE_EDITS).read_text(encoding="utf-8") == "MY RECORD"
+    assert agent.redline_calls == []
+    assert len(agent.checklist_calls) == 1
+
+
+def test_a_taken_redline_file_name_blocks_the_rename_and_flags_the_row(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    (folder / REDLINE_DOC).write_bytes(b"MY REVIEW IN PROGRESS")
+    squatter = b"a different file at the new redline name"
+    (folder / NEW_REDLINE_DOC).write_bytes(squatter)
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert flagged(code, output, posting_id)
+    assert {path.name for path in packets.iterdir()} == {OLD_DIR}
+    assert (folder / REDLINE_DOC).read_bytes() == b"MY REVIEW IN PROGRESS"
+    assert (folder / NEW_REDLINE_DOC).read_bytes() == squatter
+    assert (folder / "notes.txt").exists()
 
 
 def test_a_taken_resume_file_name_blocks_the_rename_and_flags_the_row(
