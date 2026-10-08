@@ -201,4 +201,9 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 
 -----
 #### Outstanding Questions
-- None open.
+- **A cross-packet record of redline edits (deferred; nothing in this PRD depends on it, and nothing is built for it).**
+  - **What it would be for:** the same posting term keeps being substituted across many packets. The user then changes the base resume once, rather than having it redlined in every packet.
+  - **Why it's deferred:** no consumer exists yet (convention 6), and each packet's `redline_edits.json` already keeps the full record of what was proposed, so deferring loses nothing while packet directories are kept.
+  - **What would decide it:** the owner scans `redline_edits.json` across 15–20 packets for recurring substitutions. If they recur, the record needs two decisions:
+    - **Where it lives:** a Turso table would put resume fragments (`find`, `replace`) in the hosted DB, which `XC-11` currently forbids. The alternative is storing only the posting-side terms and their counts.
+    - **What it captures:** whether it records the user's accepted or rejected outcomes, which today exist only in Word.
