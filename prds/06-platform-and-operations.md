@@ -97,7 +97,7 @@ profile/
   config.toml             local   candidate_name (optional), tracker_spreadsheet_id,
                                   packets_dir (default ~/Documents/Job Applications),
                                   [fly] app + region,
-                                  [agents.checklist|refine] model + effort   (XC-14)
+                                  [agents.checklist|redline|refine] model + effort   (XC-14)
   resume.docx             local   the single base resume                    (PRD 04)
   search/                 SHIPS IN THE FLY IMAGE
     search.toml                 timezone; run_at; [schedule] weekday → ordered (agent, window_hours);
@@ -119,7 +119,7 @@ profile/
 - Local `.env`: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `PERPLEXITY_API_KEY` (if used), `GEMINI_API_KEY` (if used), `JSA_SEARCH_ANTHROPIC_API_KEY` (if used), one of `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`.
 - Fly secrets (`--stage`): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `PERPLEXITY_API_KEY` (if used), `GEMINI_API_KEY` (if used), `JSA_SEARCH_ANTHROPIC_API_KEY` (if used).
 
-*Local tools:* Google Chrome (review); the `gws` CLI + `gws auth login` (Sheets — note the testing-status OAuth 7-day token expiry until the consent screen is published); `flyctl` + `fly auth login` (deploy); `uv`; the Claude Code CLI (for local Claude-driven commands).
+*Local tools:* Google Chrome (review); Microsoft Word (redline review); the `gws` CLI + `gws auth login` (Sheets — note the testing-status OAuth 7-day token expiry until the consent screen is published); `flyctl` + `fly auth login` (deploy); `uv`; the Claude Code CLI (for local Claude-driven commands).
 
 *The profile the user seeds (`XC-11`)* — `cp -r profile.example profile`, then replace the fictional candidate: `config.toml`; the six search fragments and `search.toml`; `resume.docx` (the single base resume). No app prompt needs an edit.
 
