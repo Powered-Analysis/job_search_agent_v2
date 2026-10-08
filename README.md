@@ -84,8 +84,7 @@ from `.env`. The cloud runs search alone, so only these five keys go, never your
 credential or machine-local overrides. The `=.` skips any key you left empty:
 
 ```sh
-grep -E '^(TURSO_DATABASE_URL|TURSO_AUTH_TOKEN|JSA_SEARCH_ANTHROPIC_API_KEY|PERPLEXITY_API_KEY|GEMINI_API_KEY)=.' .env \
-  | fly secrets import --stage -a <app>
+grep -E '^(TURSO_DATABASE_URL|TURSO_AUTH_TOKEN|JSA_SEARCH_ANTHROPIC_API_KEY|PERPLEXITY_API_KEY|GEMINI_API_KEY)=.' .env | fly secrets import --stage -a <app>
 ```
 
 `jsa deploy` never sets secrets; this step is always yours.
