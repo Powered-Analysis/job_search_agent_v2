@@ -663,7 +663,7 @@ def test_the_first_url_of_several_is_the_posting(db_url, conn, gmail, web, monke
     assert posting(conn, second) is None
 
 
-def test_a_supplied_description_is_stored_when_capture_gave_none_and_the_message_stays(
+def test_a_supplied_description_is_stored_when_capture_gave_none_and_the_message_is_archived(
     db_url, conn, gmail, web, monkeypatch
 ):
     url = bare_posting(web)
@@ -672,10 +672,9 @@ def test_a_supplied_description_is_stored_when_capture_gave_none_and_the_message
     row = posting(conn, url)
     assert row["decision"] == "Apply"
     assert row["jd_markdown"] == DESCRIPTION
-    # Left in the Inbox, unlabeled, for the packet build that follows.
-    assert gmail.in_inbox("m1")
-    assert gmail.outcome_labels("m1") == []
-    assert gmail.calls_for("m1", "modify") == []
+    # The build has no gws or Claude here, so it fails (#88 criterion 6) and the posting stays untracked.
+    assert not gmail.in_inbox("m1")
+    assert gmail.outcome_labels("m1") == ["jsa/failed"]
 
 
 def test_text_shorter_than_500_characters_is_not_a_description(
@@ -711,8 +710,8 @@ def test_a_supplied_description_fills_in_a_stored_posting_that_has_none(
     run_inbox(monkeypatch)
     assert count(conn, "postings", url) == 1
     assert posting(conn, url)["jd_markdown"] == DESCRIPTION
-    assert gmail.in_inbox("second")
-    assert gmail.outcome_labels("second") == []
+    assert not gmail.in_inbox("second")
+    assert gmail.outcome_labels("second") == ["jsa/failed"]
 
 
 def test_a_stored_description_is_never_replaced_by_a_supplied_one(
@@ -795,14 +794,18 @@ def test_a_message_whose_labeling_failed_is_processed_again_and_finds_the_postin
     assert count(conn, "postings", url) == 1
 
 
-def test_a_message_left_unlabeled_for_the_next_stage_is_reprocessed_safely(
+def test_a_message_requeued_after_a_failed_build_is_reprocessed_safely(
     db_url, conn, gmail, web, monkeypatch
 ):
     url = ats_posting(web)
     gmail.add("m1", 1000, f"{url}\n")
     run_inbox(monkeypatch)
+    assert not gmail.in_inbox("m1")
+    assert gmail.outcome_labels("m1") == ["jsa/failed"]
+    gmail.requeue("m1")
     run_inbox(monkeypatch)
-    assert gmail.in_inbox("m1")
+    assert not gmail.in_inbox("m1")
+    assert gmail.outcome_labels("m1") == ["jsa/failed"]
     assert count(conn, "postings", url) == 1
     assert posting(conn, url)["decision"] == "Apply"
 
