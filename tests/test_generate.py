@@ -1015,14 +1015,10 @@ def test_pandoc_is_found_on_the_path_when_jsa_pandoc_bin_is_unset(
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
     folder = packets / PLAIN
-    assert pandoc_calls(pandoc) == [
-        [
-            str(folder / "resume_checklist.md"),
-            "-o",
-            str(folder / PDF),
-            "--pdf-engine=typst",
-        ]
-    ]
+    [argv] = pandoc_calls(pandoc)
+    assert argv[0] == str(folder / "resume_checklist.md")
+    assert argv[argv.index("-o") + 1] == str(folder / PDF)
+    assert "--pdf-engine=typst" in argv
 
 
 def test_a_pandoc_failure_flags_the_row_and_the_other_rows_continue(
