@@ -127,6 +127,15 @@ class FlyConfig(BaseModel):
     region: NonEmptyStr
 
 
+class InboxConfig(BaseModel):
+    """`[inbox]`: the jobs mailbox's senders, and (for deploy and packets) its app and Drive folder."""
+
+    model_config = _STRICT
+    senders: Annotated[list[NonEmptyStr], Field(min_length=1)]
+    app: NonEmptyStr | None = None
+    drive_folder_id: NonEmptyStr | None = None
+
+
 class AgentsConfig(BaseModel):
     model_config = _STRICT
     checklist: AgentSettings | None = None
@@ -145,6 +154,7 @@ class Config(BaseModel):
         Path("~/Documents/Job Applications"), validate_default=True
     )
     fly: FlyConfig | None = None
+    inbox: InboxConfig | None = None
     agents: AgentsConfig = AgentsConfig()
 
     @field_validator("packets_dir")
@@ -234,6 +244,15 @@ def fly_settings(config: Config) -> FlyConfig:
             f"{profile_dir() / 'config.toml'} has no [fly] table. {_pointer('config.toml')}"
         )
     return config.fly
+
+
+def inbox_settings(config: Config) -> InboxConfig:
+    """The `[inbox]` table `jsa inbox` reads; a missing table raises before any mail is read."""
+    if config.inbox is None:
+        raise JsaError(
+            f"{profile_dir() / 'config.toml'} has no [inbox] table. {_pointer('config.toml')}"
+        )
+    return config.inbox
 
 
 def checklist_settings(config: Config) -> AgentSettings:

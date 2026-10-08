@@ -1,17 +1,26 @@
 import argparse
 import logging
 import sys
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import date
 
-from jsa import db
-from jsa.add import add_posting
+from jsa import db, prompts
+from jsa.add import (
+    NO_PACKET_JD,
+    AddOutcome,
+    Derived,
+    MissingFieldsError,
+    add_posting,
+    require_fields,
+)
 from jsa.config import load_environment
 from jsa.cron import cron
 from jsa.deploy import deploy
 from jsa.errors import JsaError
 from jsa.generate import generate
 from jsa.http import make_client
+from jsa.inbox import inbox
 from jsa.packet import build_packets
 from jsa.refetch import refetch
 from jsa.refine import accept, refine, reject
@@ -24,16 +33,60 @@ def _init_db(args: argparse.Namespace) -> None:
     db.connect().close()
 
 
+def _confirm(label: str, derived: str | None) -> str:
+    while not (value := prompts.ask(label, derived or "").strip()):
+        pass
+    return value
+
+
+def _add_fields(args: argparse.Namespace) -> Callable[[Derived], tuple[str, str]]:
+    """Company and title for `jsa add`: the flags, else the derived values, confirmed unless --no-input."""
+
+    def fields(derived: Derived) -> tuple[str, str]:
+        if derived.capture_failure:
+            print(f"Capture failed: {derived.capture_failure}")
+        if args.no_input:
+            try:
+                return require_fields(
+                    args.company or derived.company, args.title or derived.title
+                )
+            except MissingFieldsError as error:
+                flags = " and ".join(f"--{name}" for name in error.missing)
+                raise JsaError(f"{error}; pass {flags} or drop --no-input") from None
+        return (
+            args.company or _confirm("Company", derived.company),
+            args.title or _confirm("Title", derived.title),
+        )
+
+    return fields
+
+
+def _print_added(outcome: AddOutcome) -> None:
+    if outcome.kind == "already_apply":
+        print(f"Posting {outcome.posting_id}: already Apply; no change.")
+    elif outcome.kind == "promoted":
+        previous = outcome.previous_decision or "undecided"
+        print(f"Posting {outcome.posting_id}: {previous} → Apply")
+    else:
+        message = f"Added posting {outcome.posting_id}: {outcome.company} — {outcome.title} (Apply)"
+        print(message if outcome.has_jd else f"{message}; {NO_PACKET_JD}")
+
+
 def _add(args: argparse.Namespace) -> None:
     with make_client() as client:
-        add_posting(
-            client,
-            args.url,
-            company=args.company,
-            title=args.title,
-            date_posted=args.date_posted,
-            no_input=args.no_input,
+        _print_added(
+            add_posting(
+                client,
+                args.url,
+                date_posted=args.date_posted,
+                fields=_add_fields(args),
+            )
         )
+
+
+def _inbox(args: argparse.Namespace) -> None:
+    with make_client() as client:
+        inbox(client)
 
 
 def _review(args: argparse.Namespace) -> None:
@@ -136,6 +189,10 @@ def main() -> None:
         help="accept derived values without prompting",
     )
     add.set_defaults(run=_add)
+    commands.add_parser(
+        "inbox",
+        help="the inbox machine's entrypoint: add each posting emailed to the jobs mailbox",
+    ).set_defaults(run=_inbox)
     commands.add_parser(
         "review", help="decide Apply or Skip on each undecided posting"
     ).set_defaults(run=_review)

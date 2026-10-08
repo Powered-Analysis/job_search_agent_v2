@@ -14,6 +14,10 @@ tracker_spreadsheet_id = "replace-with-your-sheet-id"
 app    = "jsa-example"
 region = "iad"
 
+# The jobs mailbox you email postings to; only these senders (with DMARC passing) are read.
+# [inbox]
+# senders = ["jordan.example@example.com"]
+
 # Any Claude model that accepts an effort setting will run; the app keeps no list.
 # Recommended: claude-fable-5-1 at "medium" for the resume checklist.
 [agents.checklist]

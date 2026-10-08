@@ -43,6 +43,16 @@ def search_anthropic_api_key() -> str | None:
     return os.environ.get("JSA_SEARCH_ANTHROPIC_API_KEY") or None
 
 
+def inbox_gws_credentials() -> str:
+    """The jobs mailbox's exported `gws` credential (XC-1); inbox app only, so validated only by `jsa inbox`."""
+    credential = os.environ.get("JSA_INBOX_GWS_CREDENTIALS")
+    if not credential:
+        raise JsaError(
+            "JSA_INBOX_GWS_CREDENTIALS is not set. Add it to .env (see .env.example)."
+        )
+    return credential
+
+
 def gws_bin() -> str:
     return os.environ.get("JSA_GWS_BIN") or "gws"
 

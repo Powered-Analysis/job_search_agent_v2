@@ -1,14 +1,12 @@
 """The Google Sheet tracker (PRD 04 "Tracker write"): build a row, append it through `gws`."""
 
-import json
 from datetime import date, datetime
 from typing import NamedTuple
 
 from jsa import db
-from jsa.config import gws_bin
 from jsa.errors import JsaError
+from jsa.gws import run_gws
 from jsa.profile import load_search_config, tracker_spreadsheet_id
-from jsa.tools import run_tool
 
 TAB = "Applications"
 _FORMULA_STARTS = ("=", "+", "-", "@")
@@ -42,26 +40,7 @@ def tracker_row(
 
 def _gws(method: str, params: dict, body: dict | None = None) -> object:
     """Run one `gws sheets spreadsheets values` call and return its parsed JSON, raising on any failure."""
-    command = [
-        gws_bin(),
-        "sheets",
-        "spreadsheets",
-        "values",
-        method,
-        "--params",
-        json.dumps(params),
-    ]
-    if body is not None:
-        command += ["--json", json.dumps(body)]
-    result = run_tool(command)
-    if result.returncode != 0:
-        detail = (result.stderr.strip() or result.stdout.strip()).partition("\n")[0]
-        hint = " (re-run `gws auth login`)" if result.returncode == 2 else ""
-        raise JsaError(f"gws exited {result.returncode}{hint}: {detail}")
-    try:
-        return json.loads(result.stdout)
-    except ValueError:
-        raise JsaError("gws output was not JSON") from None
+    return run_gws(("sheets", "spreadsheets", "values", method), params, body)
 
 
 def append_row(spreadsheet_id: str, row: list[str | int]) -> None:

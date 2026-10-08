@@ -6,10 +6,15 @@ from jsa.errors import JsaError
 
 
 def run_tool(
-    command: list[str], *, capture: bool = True
+    command: list[str], *, capture: bool = True, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    """Run `command` to completion; without `capture`, its output goes straight to the terminal."""
+    """Run `command` to completion; without `capture`, its output goes straight to the terminal.
+
+    `env` replaces the inherited environment when given.
+    """
     try:
-        return subprocess.run(command, capture_output=capture, text=True, check=False)
+        return subprocess.run(
+            command, capture_output=capture, text=True, check=False, env=env
+        )
     except OSError as error:
         raise JsaError(f"could not run {command[0]}: {error}") from error
