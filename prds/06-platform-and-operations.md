@@ -80,6 +80,7 @@ How the system runs: the **cloud/local split** (only Steps 1–2 run headless in
 | `packet [--id/--dry-run]` | 4 head | local | no |
 | `generate [--id/--dry-run]` | 4 | local | no |
 | `track [--id/--dry-run]` | 5 | local | no |
+| `redline prompt\|apply <packet dir>` | 4 (driven by `/redline`) | local | no |
 | `refine [--dry-run/--accept/--reject]` | learn | local | no |
 | `deploy [--dry-run/--smoke]` | ops | local | ships the image |
 
@@ -119,7 +120,7 @@ profile/
 - Local `.env`: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `PERPLEXITY_API_KEY` (if used), `GEMINI_API_KEY` (if used), `JSA_SEARCH_ANTHROPIC_API_KEY` (if used), one of `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`.
 - Fly secrets (`--stage`): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `PERPLEXITY_API_KEY` (if used), `GEMINI_API_KEY` (if used), `JSA_SEARCH_ANTHROPIC_API_KEY` (if used).
 
-*Local tools:* Google Chrome (review); the `gws` CLI + `gws auth login` (Sheets — note the testing-status OAuth 7-day token expiry until the consent screen is published); `flyctl` + `fly auth login` (deploy); `uv`; the Claude Code CLI (for local Claude-driven commands).
+*Local tools:* Google Chrome (review); Microsoft Word (redline review, optional); the `gws` CLI + `gws auth login` (Sheets — note the testing-status OAuth 7-day token expiry until the consent screen is published); `flyctl` + `fly auth login` (deploy); `uv`; the Claude Code CLI (for local Claude-driven commands).
 
 *The profile the user seeds (`XC-11`)* — `cp -r profile.example profile`, then replace the fictional candidate: `config.toml`; the six search fragments and `search.toml`; `resume.docx` (the single base resume). No app prompt needs an edit.
 
