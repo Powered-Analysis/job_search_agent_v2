@@ -64,10 +64,11 @@ How the system runs: the **cloud/local split** (the search and the email side do
 4. **Inbox (optional; without `[inbox]` no inbox is deployed):**
    - Create a Gmail account used for nothing but the jobs mailbox.
    - In the Google Cloud project `gws` uses, publish the OAuth consent screen to production. In testing status Google expires its tokens after 7 days, which would silently stop the hourly inbox.
-   - Authorize `gws` twice and export each credential: as the jobs mailbox, with Gmail's modify scope only; and as the owner, with Sheets and Drive's per-app file scope (`drive.file`) only.
-   - With the owner's credential, create the Drive packets folder with `gws` (the per-app scope reaches only folders the app created). Move existing packets into it through Drive for Desktop, and set `packets_dir` to its local path.
+   - Authorize `gws` twice and export each credential: as the jobs mailbox, with Gmail's modify scope only; and as the owner, with Drive's per-app file scope (`drive.file`) only, which also lets the Sheets API write the files the app created.
+   - With the owner's credential, create the Drive packets folder with `gws` (the per-app scope reaches only files the app created). Move existing packets into it through Drive for Desktop, and set `packets_dir` to its local path.
+   - With the same credential, copy the tracker Sheet with `gws` (a copy keeps its formatting and its Status dropdown), and set `tracker_spreadsheet_id` to the copy.
    - `fly apps create <inbox app>`; set `[inbox] app`, `senders`, and `drive_folder_id` in `profile/config.toml`.
-   - Stage the inbox app's secrets with `fly secrets import --stage -a <inbox app>`: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, one Claude credential (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, never both), `JSA_GWS_CREDENTIALS` (the owner's export), and `JSA_INBOX_GWS_CREDENTIALS` (the jobs mailbox's). The README carries the exact commands.
+   - Stage the inbox app's secrets with `fly secrets import --stage -a <inbox app>`: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, one Claude credential (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, never both; an `ANTHROPIC_API_KEY` from a Console workspace with a monthly spend limit is recommended, because it caps what a forged email could cost), `JSA_GWS_CREDENTIALS` (the owner's export), and `JSA_INBOX_GWS_CREDENTIALS` (the jobs mailbox's). The README carries the exact commands.
 5. **Smoke test:** `jsa deploy --smoke` (runs one ungated `jsa cron` on a throwaway machine, exits).
 6. **Schedule:** `jsa deploy` (creates the `hourly` machines on first run; the search machine self-gates to `search.toml`).
 7. **Updates:** `jsa deploy` again, after any code change, an accepted refine proposal (PRD 05), or a change to `config.toml` or `resume.docx` the inbox should use.
@@ -102,7 +103,7 @@ How the system runs: the **cloud/local split** (the search and the email side do
 
 *Environment — secrets and machine-local settings only* (every one listed, commented, in `.env.example`):
 - **Required everywhere:** `TURSO_DATABASE_URL` (raises if unset). `TURSO_AUTH_TOKEN` required for hosted Turso (omit for a `file:` dev URL).
-- **Command-specific:** `PERPLEXITY_API_KEY` / `GEMINI_API_KEY` (their runners' searches; validated lazily so other commands run without them); `JSA_SEARCH_ANTHROPIC_API_KEY` (production Claude searches; unset in development, where the runner uses the inherited credential); for the local Claude commands and the inbox's packets, `CLAUDE_CODE_OAUTH_TOKEN` *or* `ANTHROPIC_API_KEY` (the user's choice; read by the SDK's CLI from the inherited env — not by the app's config); on the inbox app only, `JSA_GWS_CREDENTIALS` (the owner's exported `gws` credential, for Sheets and Drive; unset locally, where `gws` uses its own login) and `JSA_INBOX_GWS_CREDENTIALS` (the jobs mailbox's, for Gmail).
+- **Command-specific:** `PERPLEXITY_API_KEY` / `GEMINI_API_KEY` (their runners' searches; validated lazily so other commands run without them); `JSA_SEARCH_ANTHROPIC_API_KEY` (production Claude searches; unset in development, where the runner uses the inherited credential); for the local Claude commands and the inbox's packets, `CLAUDE_CODE_OAUTH_TOKEN` *or* `ANTHROPIC_API_KEY` (the user's choice; read by the SDK's CLI from the inherited env — not by the app's config); on the inbox app only, `JSA_GWS_CREDENTIALS` (the owner's exported `gws` credential, for the tracker and the packets folder; unset locally, where `gws` uses its own login) and `JSA_INBOX_GWS_CREDENTIALS` (the jobs mailbox's, for Gmail).
 - **Optional overrides (default):** `JSA_PROFILE_DIR` (`./profile`), `JSA_GWS_BIN` (`gws`), `JSA_FLY_BIN` (`fly`), `JSA_PANDOC_BIN` (`pandoc`), `JSA_GENERATE_WORKERS` (3).
 
 *The profile — everything about the user* (gitignored in full; `profile.example/` is committed with the identical shape and a fictional candidate):
@@ -139,13 +140,13 @@ profile/
 - Fly secrets on the search app (`--stage`): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `PERPLEXITY_API_KEY` (if used), `GEMINI_API_KEY` (if used), `JSA_SEARCH_ANTHROPIC_API_KEY` (if used).
 - Fly secrets on the inbox app (`--stage`, if used): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, one of `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`, `JSA_GWS_CREDENTIALS`, `JSA_INBOX_GWS_CREDENTIALS`.
 
-*Local tools:* Google Chrome (review); Microsoft Word (redline review); the `gws` CLI + `gws auth login` (Sheets — note the testing-status OAuth 7-day token expiry until the consent screen is published); `flyctl` + `fly auth login` (deploy); `uv`; the Claude Code CLI (for local Claude-driven commands); Google Drive for Desktop (with the inbox: `packets_dir` mirrors the Drive packets folder).
+*Local tools:* Google Chrome (review); Microsoft Word (redline review); the `gws` CLI + `gws auth login` (Sheets — note the testing-status OAuth 7-day token expiry until the consent screen is published); `flyctl` + `fly auth login` (deploy); `uv`; the Claude Code CLI (for local Claude-driven commands); `pandoc` and `typst` (`generate`'s checklist PDF); Google Drive for Desktop (with the inbox: `packets_dir` mirrors the Drive packets folder).
 
 *The profile the user seeds (`XC-11`)* — `cp -r profile.example profile`, then replace the fictional candidate: `config.toml`; the six search fragments and `search.toml`; `resume.docx` (the single base resume). No app prompt needs an edit.
 
 *Outside the profile:* the Google Sheet (Applications tab, A:H header, and the Status dropdown / data-validation applied to all of column H, so appended rows can never run past the pre-formatted range).
 
-*One-time commands:* `uv run jsa init-db`; with the inbox, creating the Drive packets folder with `gws`; `jsa deploy`.
+*One-time commands:* `uv run jsa init-db`; with the inbox, creating the Drive packets folder and copying the tracker with `gws`; `jsa deploy`.
 
 -----
 #### User Experience
@@ -179,7 +180,7 @@ profile/
 - **Claude auth is inherited, except for search (`XC-1`):** the local Claude commands' spawned CLI reads the user's credential from the inherited environment, which is why it is not on `Config`. The Claude search runner alone overrides it with `JSA_SEARCH_ANTHROPIC_API_KEY` (PRD 01), when that key is set, so every production search run, cloud or hand, bills to an API key; development leaves it unset and inherits like the rest.
 - **`turso_serverless` over HTTP (`XC-2`, PRD 02)** is what makes the same DB reachable identically from Fly and locally.
 - **No inbound surface:** both machines only make outbound calls. The jobs mailbox is the inbox machine's queue, so there is no endpoint, token, or run table to secure.
-- **Two Google credentials, each scoped to its job:** a credential that can read a mailbox can read password resets. So the inbox reads a mailbox used for nothing else, and the owner's credential carries only Sheets and the app's own Drive files.
+- **Two Google credentials, each scoped to its job:** a credential that can read a mailbox can read password resets. So the inbox reads a mailbox used for nothing else, and the owner's credential reaches only the files the app created: the packets folder and the tracker.
 - **Inputs are re-asserted, not synced:** `config.toml` and `resume.docx` reach the inbox machine only through `jsa deploy`, as its image and schedule do; no sync process runs.
 
 -----
