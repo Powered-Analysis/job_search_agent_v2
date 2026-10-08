@@ -128,7 +128,7 @@ One hosted libSQL (Turso) database is the single source of truth for job-posting
 - Consumers: PRD 01 (insert, JD capture, findings, the search-run log, cron claim, marking closed), PRD 03 (review reads/writes, marking closed, the health line's reads), PRD 04 (tracker/packet queues, refetch, `mark_tracked`), PRD 05 (refinement scope + run recording).
 
 **User inputs / manual setup this subsystem requires** (consolidated in PRD 06):
-- A **Turso** account and database; `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` set locally (`.env`) and as Fly secrets.
+- A **Turso** account and database; `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` set locally (`.env`) and as Fly secrets on each Fly app (PRD 06).
 - Run `jsa init-db` once against the target database (also implicitly ensured by every command).
 
 -----

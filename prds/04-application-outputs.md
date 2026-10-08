@@ -1,7 +1,7 @@
 # Application Outputs
 #### tl;dr
 
-What an Apply decision turns into: a per-job **application packet** on disk (`{packets_dir}/{company} - {title}`) holding the job description, a **working copy of the user's single base resume**, and a **resume checklist** — an agent's assessment of the packet's resume against the posting, read as a hiring manager would read it, written to guide the user's own revision — plus a row appended to the **Google Sheet tracker**. The app never revises the resume: revision is the user's. Its one hand on the resume's text is the **ATS redline**, a copy of the packet's resume that proposes wording changes as Word tracked changes, each traced to a verbatim quote from the posting, for the user to accept or reject one by one. It also owns **refetch**, which reconciles stored postings against their ATS record when a req is edited under a stable URL. This spec covers PRD Steps 4–5 plus reconciliation.
+What an Apply decision turns into: a per-job **application packet** on disk (`{packets_dir}/{company} - {title}`) holding the job description, a **working copy of the user's single base resume**, and a **resume checklist** — an agent's assessment of the packet's resume against the posting, read as a hiring manager would read it, written to guide the user's own revision — plus a row appended to the **Google Sheet tracker**. The app never revises the resume: revision is the user's. Its one hand on the resume's text is the **ATS redline**, a copy of the packet's resume that proposes wording changes as Word tracked changes, each traced to a verbatim quote from the posting, for the user to accept or reject one by one. A posting that arrives through the email side door (PRD 03) has its packet built on the inbox machine and delivered to the same folder through Google Drive (`XC-1`). It also owns **refetch**, which reconciles stored postings against their ATS record when a req is edited under a stable URL. This spec covers PRD Steps 4–5 plus reconciliation.
 
 ------
 #### Goals
@@ -14,6 +14,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **ATS wording, traced to the posting:** an ATS matches the posting's literal terms, and a resume can name the same thing in different words. The redline closes that gap and nothing else. It is about ATS matching, never positioning or qualifications. Every change it proposes cites the posting text that motivates it and leaves what the bullet claims unchanged. A change lands only when the user accepts it.
 - **The tracker is a faithful, non-destructive projection:** appends never break the Status dropdown or shift its data-validation ranges (`XC-4`).
 - **Idempotent outputs:** `added_to_tracker` is the single completion guard, so re-runs never double-build or double-append (`XC-10`).
+- **One home for packets:** with the inbox in use, `packets_dir` is the Drive for Desktop mirror of a Google Drive folder, so a packet built locally and one built on the inbox machine land in the same place.
 - **Drift never silently strands a stale packet, and never destroys revision work:** when an employer edits a req, refetch reconciles the DB and refreshes the affected packet in place.
 
 ##### User Goals
@@ -63,6 +64,8 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Queue:** the packet queue (PRD 02). Unlike `jsa packet`, generate **ensures** (re-enters) a bare directory (`XC-10`), completing the packet head before writing the checklist.
 - **Assesses the packet's resume copy, never the base:** the checklist always reads `{resume_file_stem}.docx` as it currently stands in the packet. On a first run that copy is identical to the base; on a refresh (`--id`, refetch) it is the user's revision in progress.
 - **Agent:** the Claude Agent SDK, headless, **`model` and `effort` from `[agents.checklist]` in `profile/config.toml`** (`XC-14`; example default `claude-fable-5-1` at `medium`), no tools at all, a single turn, run through the shared agent loop (`XC-12`), so an API error result raises with the real HTTP status. Its final text is written to the packet as `resume_checklist.md`; an empty result raises.
+- **Rendered to PDF:** `resume_checklist.md` is also rendered to `resume_checklist.pdf` with `pandoc` (`JSA_PANDOC_BIN`) through Typst. A rewritten checklist first removes the old PDF, so a failed render never leaves a stale PDF beside a new checklist, and an existing checklist missing its PDF gets one on the next run.
+- **Raw blocks disabled (P0):** pandoc reads the checklist as Markdown with raw blocks off. The checklist is model output over untrusted posting text, and a raw Typst block could read a file from the machine into the PDF.
 - **What the checklist is:** an assessment of the resume against this posting, from the hiring manager's seat (which strengths to lead with, which requirements it leaves unmet or under-evidenced, and what to revise), for the user to work through by hand. Its content, structure, and standards live in the prompt template; this spec owns its inputs, its output, and its boundary: it advises, and nothing in the app applies it.
 - **Prompt (`XC-13`):** the app's checklist template, assembled with the slots below. It has no profile slots: the template is candidate-agnostic (`XC-11`), and the posting and the resume are its only inputs, by design.
 
@@ -132,6 +135,14 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Idempotency & safety (P0):** eligibility is the tracker queue (`Apply AND added_to_tracker = 0`, PRD 02); the append **raises on any ambiguity** (non-zero `gws` exit, unparseable output, a response reporting no updated row) because optimistically flagging on exit 0 would drop a job from the tracker permanently. Rows are appended one at a time so one failure cannot strand the rest; a row is marked tracked only after a confirmed append.
 - **Projection reads and writes:** rewriting a row's Title cell (`C{row}`, used by refetch); reading the tracker index (`postings.id → {row number, Date Applied}`, skipping non-integer ID cells); authority never flows Sheet→DB (`XC-4`).
 
+**Packets built on the inbox machine (Priority: P0)** — the email side door's continuation (PRD 03), for one posting that has a description.
+- **The same build, for one posting:** exactly what `jsa generate --id` does for it — packet head, checklist and its PDF, redline — through the same implementation, into a temporary directory on the machine. There is no liveness re-check, because the user vouched for the posting by sending it, as with `--id` (`XC-5`).
+- **Delivered to Drive before tracking (P0):** the packet folder is uploaded through `gws`, with the owner's credential, into the Drive packets folder (`[inbox] drive_folder_id`), under the folder and file names a local build would use ("Packet directory" above). Files are uploaded as they are and never converted to Google Docs format, so the resume copy and the redline stay the exact `.docx` files, tracked changes and comments included. The tracker row is appended only after every file is confirmed uploaded, so a tracked row always has its packet. Upload planning (which file goes to which folder, under which name) is pure (`XC-9`).
+- **An upload never clobbers (P0):** a retry finds the posting's folder if an earlier attempt created it, uploads only the files missing from it, and never replaces or deletes a file there, because the user may already have opened it.
+- **Never rebuilt:** a posting already tracked gets nothing built or uploaded (`XC-10`). Refreshing a tracked packet stays local: `jsa generate --id` or refetch.
+- **A failure leaves it untracked:** a failed build or upload leaves the posting in the tracker queue. The user's next local `jsa generate` finishes it in the mirrored folder, or re-queuing the email retries it.
+- **Drive scope:** the owner's credential reaches only the files and folders the app created (Drive's per-app `drive.file` scope). So the packets folder is created once with `gws` at setup (PRD 06), and everything the inbox writes lands inside it. The same scope covers the tracker: with the inbox in use, the tracker is a copy the app made with `gws` at setup, so the credential carries no Sheets scope and can't reach the user's other spreadsheets.
+
 **Reconciliation (Priority: P1)**
 - **Scope (default):** `Apply` rows that are **absent from the Sheet OR have a blank Date Applied** — the ones where drift could still change the user's next action. The Sheet index read is *fatal* in the default scope (guessing defeats it) and best-effort under `--id`/`--all` (where it only enables Title propagation). `--all` widens to every row; `--id` targets one unconditionally.
 - **Re-apply the insert rule:** re-read the ATS record (off the four, the posting page's `JobPosting` data, PRD 01); the ATS-canonical title wins and `title_slug` is re-derived (PRD 02's JD capture), except on a `manual` row, whose title is the one the user confirmed at add (PRD 03).
@@ -143,7 +154,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 #### User Experience
 
 **Entry Point & First-Time Experience**
-- `jsa packet [--id] [--dry-run]`, `jsa generate [--id] [--dry-run]`, `jsa track [--id] [--dry-run]`, `jsa refetch [--id] [--all] [--dry-run]` (all local).
+- `jsa packet [--id] [--dry-run]`, `jsa generate [--id] [--dry-run]`, `jsa track [--id] [--dry-run]`, `jsa refetch [--id] [--all] [--dry-run]` (all local; the inbox machine builds and tracks one emailed posting at a time, above).
 - First-time setup (the base resume, `gws` OAuth, the Sheet) is owned by PRD 06.
 - Dry-runs preview the queue/paths/rows, make no model call, and write nothing.
 
@@ -173,10 +184,12 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Redline output isn't a JSON edit array:** raised like an agent error; the row is flagged `failed` and stays in the queue, and re-entry resumes at the redline.
 - **Resume copy with unresolved tracked changes:** redline skipped with a warning; the row is still tracked.
 - **Redline already present on `--id` or a refetch refresh:** left untouched with its `redline_edits.json`; the checklist still refreshes.
+- **An emailed posting with a description:** built and tracked on the inbox machine; its packet appears locally through Drive for Desktop.
+- **The same posting built locally and on the inbox machine at the same moment:** an accepted race, since the inbox wakes hourly and the user is usually away when emailing. Drive may then hold a duplicate file and the Sheet a duplicate row, both visible and fixable by hand.
 
 -----
 #### Technical Considerations
-- **Local-only (`XC-1`):** needs the local disk, the local profile, and the `gws` OAuth token; never runs in the cloud.
+- **Where it runs (`XC-1`):** `packet`, `generate`, `track`, and `refetch` run locally, on the local disk, the local profile, and the local `gws` login. The inbox machine runs one emailed posting's build and track, with `config.toml` and `resume.docx` as machine files and its own `gws` credential (PRD 06).
 - **Deterministic core, agentic shell (`XC-9`):** resume rendering, resume file naming, and tracker row building are pure; the checklist is one agentic call whose output is advisory, so a non-reproducible checklist never makes the packet itself non-reproducible.
 - **The redline's guarantees live in code, not in the agent (`XC-9`):** validation, the plain-text paragraph rendering, and the tracked-change writing are pure and tested without a model. The proposals themselves are judged by the owner on real packets.
 - **Completion guard is `added_to_tracker`, not directory-exists (`XC-10`):** `jsa generate` must re-enter a bare directory.
@@ -188,15 +201,17 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **`python-docx`** (approved) — reads the packet's resume copy for rendering. It also writes the redline: comments through its comments API, and tracked changes through the XML it exposes, so no other library is needed.
 - **Microsoft Word** — where the user reviews the redline.
 - **Claude Agent SDK** (the profile's checklist and redline models), tool-less; Claude auth inherited from the environment (PRD 06).
-- **Google Sheets** via the local **`gws` CLI** (`JSA_GWS_BIN`), which holds the Google OAuth token locally.
+- **Google Sheets** via the **`gws` CLI** (`JSA_GWS_BIN`): the local `gws` login, or the owner's exported credential on the inbox machine.
+- **Google Drive** via `gws`, with the owner's credential (the inbox machine's packet delivery); locally, **Google Drive for Desktop** mirrors the packets folder at `packets_dir`.
 - **The four ATS fetchers and the `JobPosting` fallback** (PRD 01) — refetch capture.
 - **Turso** (PRD 02).
 
 **User inputs / manual setup this subsystem requires** (consolidated in PRD 06; all local-only profile content, `XC-11`):
 - **`profile/resume.docx`** — the single base resume every packet starts from.
 - **`gws` CLI + Google OAuth** (`gws auth login`) for Sheet writes; note the testing-status OAuth 7-day token expiry until the consent screen is published.
-- **The tracker Google Sheet** with an `Applications` tab, an A:H header, and a Status dropdown / data-validation already set up; its id as **`tracker_spreadsheet_id`** in `profile/config.toml` (no code default).
+- **The tracker Google Sheet** (with the inbox in use, the copy made with `gws`, PRD 06) with an `Applications` tab, an A:H header, and a Status dropdown / data-validation already set up; its id as **`tracker_spreadsheet_id`** in `profile/config.toml` (no code default).
 - **`candidate_name`** (the resume file-name prefix) in `profile/config.toml`, optional.
+- With the inbox in use: the Drive packets folder, created with `gws`, its id as `[inbox] drive_folder_id`, and `packets_dir` set to its Drive for Desktop path.
 - **Microsoft Word** (redline review).
 
 -----
