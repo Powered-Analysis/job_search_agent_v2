@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -30,13 +30,12 @@ from jsa.profile import (
     PacketAgents,
     base_resume,
     load_config,
-    load_search_config,
     packet_agents,
     tracker_spreadsheet_id,
 )
 from jsa.redline import redline_resume
 from jsa.resume import render_resume
-from jsa.tracker import append_tracked
+from jsa.tracker import append_tracked, today
 from jsa.verify import CLOSED_OUTCOMES, Verifier, recheck
 
 
@@ -142,11 +141,11 @@ def _still_open(
     return open_jobs
 
 
-def _track(spreadsheet_id: str, today: date, posting_id: int) -> None:
+def track_posting(spreadsheet_id: str, added: date, posting_id: int) -> None:
     # A fresh connection: the server drops one left idle through the checklist runs.
     with closing(db.connect()) as conn:
         for entry in db.tracker_queue(conn, posting_id):
-            append_tracked(conn, spreadsheet_id, today, entry)
+            append_tracked(conn, spreadsheet_id, added, entry)
 
 
 def generate(client: httpx.Client, posting_id: int | None, *, dry_run: bool) -> None:
@@ -169,7 +168,7 @@ def generate(client: httpx.Client, posting_id: int | None, *, dry_run: bool) -> 
     if not queue:
         print("No postings awaiting a packet.")
         return
-    today = datetime.now(load_search_config().tz).date()
+    added = today()
     failures = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
@@ -194,7 +193,7 @@ def generate(client: httpx.Client, posting_id: int | None, *, dry_run: bool) -> 
                         f"`jsa generate --id {job.id}`"
                     )
                     continue
-                _track(spreadsheet_id, today, job.id)
+                track_posting(spreadsheet_id, added, job.id)
             except (JsaError, OSError) as error:
                 print(f"failed: posting {job.id}: {one_line(error)}")
                 failures.append(job.id)

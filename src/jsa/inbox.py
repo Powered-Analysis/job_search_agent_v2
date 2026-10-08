@@ -6,17 +6,32 @@ import email.policy
 import email.utils
 import logging
 import re
+import tempfile
 from collections.abc import Callable, Collection, Sequence
+from contextlib import closing
+from pathlib import Path
 from typing import NamedTuple
 
 import httpx
 from bs4 import BeautifulSoup
 
+from jsa import db
 from jsa.add import AggregatorUrlError, MissingFieldsError, add_posting
 from jsa.config import inbox_gws_credentials
+from jsa.drive import deliver_packet
 from jsa.errors import JsaError
+from jsa.generate import build_packet, track_posting
 from jsa.gws import run_gws
-from jsa.profile import inbox_settings, load_config
+from jsa.packet import packet_paths
+from jsa.profile import (
+    base_resume,
+    inbox_drive_folder,
+    inbox_settings,
+    load_config,
+    packet_agents,
+    tracker_spreadsheet_id,
+)
+from jsa.tracker import today
 
 log = logging.getLogger(__name__)
 
@@ -161,14 +176,41 @@ class Mailbox:
         )
 
 
+def _deliver(posting_id: int, *, has_jd: bool) -> str:
+    """Build the posting's packet, upload it, then append its tracker row; the outcome label.
+
+    The same build as `jsa generate --id` (no liveness re-check, XC-5), in a temporary directory.
+    A posting already tracked is left alone (XC-10).
+    """
+    with closing(db.connect()) as conn:
+        if not db.tracker_queue(conn, posting_id):
+            return TRACKED
+        if not has_jd:
+            return NEEDS_JD
+        [job] = db.packet_queue(conn, posting_id)
+    config = load_config()
+    # Checked before the slow build: the tracker row waits on the upload.
+    spreadsheet_id = tracker_spreadsheet_id()
+    drive_folder_id = inbox_drive_folder(config)
+    agents = packet_agents(config)
+    resume = base_resume()
+    with tempfile.TemporaryDirectory() as scratch:
+        built = config.model_copy(update={"packets_dir": Path(scratch)})
+        if not build_packet(job, built, resume, agents, rewrite=True):
+            return NEEDS_JD
+        deliver_packet(drive_folder_id, packet_paths(built, job)[0])
+    track_posting(spreadsheet_id, today(), posting_id)
+    return TRACKED
+
+
 def _process(
     client: httpx.Client,
     mailbox: Mailbox,
     message_id: str,
     headers: Headers | None,
     senders: Collection[str],
-) -> str | None:
-    """The outcome label for one message, or None to leave it in the Inbox."""
+) -> str:
+    """The outcome label for one message."""
     if headers is None:
         raise JsaError("could not read the message's headers")
     if not sender_allowed(headers, senders):
@@ -185,7 +227,7 @@ def _process(
     except MissingFieldsError:
         return NEEDS_FIELDS
     log.info("message %s: posting %s is Apply", message_id, outcome.posting_id)
-    return None if outcome.has_jd else NEEDS_JD
+    return _deliver(outcome.posting_id, has_jd=outcome.has_jd)
 
 
 def _safe[Result](
@@ -212,6 +254,5 @@ def inbox(client: httpx.Client) -> None:
         label = _safe(
             message_id, FAILED, _process, client, mailbox, message_id, headers, senders
         )
-        if label:
-            _safe(message_id, None, mailbox.label_and_archive, message_id, label)
-            log.info("message %s: %s", message_id, label)
+        _safe(message_id, None, mailbox.label_and_archive, message_id, label)
+        log.info("message %s: %s", message_id, label)
