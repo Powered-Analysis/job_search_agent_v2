@@ -1,13 +1,13 @@
 # Application Outputs
 #### tl;dr
 
-What an Apply decision turns into: a per-job **application packet** on disk (`{packets_dir}/{company} - {title}`) holding the job description, a **working copy of the user's single base resume**, and a **resume checklist** — an agent's assessment of the packet's resume against the posting, read as a hiring manager would read it, written to guide the user's own revision — plus a row appended to the **Google Sheet tracker**. The app never revises the resume: revision is the user's. Its one hand on the resume's text is the **ATS redline** (`/redline`), an interactive pass the user runs in Claude Code that proposes wording changes as Word tracked changes, each traced to a verbatim quote from the posting, for the user to accept or reject one by one. It also owns **refetch**, which reconciles stored postings against their ATS record when a req is edited under a stable URL. This spec covers PRD Steps 4–5 plus reconciliation.
+What an Apply decision turns into: a per-job **application packet** on disk (`{packets_dir}/{company} - {title}`) holding the job description, a **working copy of the user's single base resume**, and a **resume checklist** — an agent's assessment of the packet's resume against the posting, read as a hiring manager would read it, written to guide the user's own revision — plus a row appended to the **Google Sheet tracker**. The app never revises the resume: revision is the user's. Its one hand on the resume's text is the **ATS redline**, a copy of the packet's resume that proposes wording changes as Word tracked changes, each traced to a verbatim quote from the posting, for the user to accept or reject one by one. It also owns **refetch**, which reconciles stored postings against their ATS record when a req is edited under a stable URL. This spec covers PRD Steps 4–5 plus reconciliation.
 
 ------
 #### Goals
 
 ##### Business Goals
-- **One command from decision to revision-ready:** `jsa generate` takes an Apply row to a finished packet (JD, resume copy, checklist) and a tracker row, on a bounded worker pool.
+- **One command from decision to revision-ready:** `jsa generate` takes an Apply row to a finished packet (JD, resume copy, checklist, redline) and a tracker row, on a bounded worker pool.
 - **A human revises; the agent advises.** An agent tailoring a resume from a job description alone lacks the context to do it without visibly overfitting to the posting. So the agent's output is a checklist for the user's manual revision, and the app never revises the resume.
 - **One base resume:** every packet starts from the same file, `profile/resume.docx`. No step chooses between resumes.
 - **The checklist sees what a hiring manager sees:** the posting and the resume, nothing else. No profile context reaches it, so a strength the resume does not state on its face reads as absent, exactly as it would to the reader it is written for.
@@ -56,7 +56,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - Creates `{packets_dir}/{normalized_company} - {title_slug}` (`packets_dir` from `profile/config.toml`, default `~/Documents/Job Applications`; name from PRD 01's naming fields), writes `job_posting.md` from `jd_markdown`, and copies the base resume in as `{resume_file_stem}.docx`, the user's working copy. File names are `{candidate_name}_Resume_{title_slug}_{normalized_company}` with spaces removed (pure; `candidate_name` from `profile/config.toml`); the candidate prefix is omitted when the key is unset.
 - **Name collisions:** two postings can share a normalized company and title slug (two reqs for the same role). The lowest-id posting gets the plain directory name, and each other's directory name gets ` ({id})` appended, so a posting never re-enters another posting's packet. The rule reads only the DB, so every command and refresh derives the same name.
 - **Never overwrites the resume copy:** an existing file at that path is left alone, since it may hold the user's edits.
-- Standalone `jsa packet` **skips a posting whose directory already exists** (never clobbered) and writes no checklist; a `NULL`-JD row still gets its directory and resume copy (no `job_posting.md`). Queue: the packet queue (PRD 02; `--id` waives the tracker condition, never Apply).
+- Standalone `jsa packet` **skips a posting whose directory already exists** (never clobbered) and writes no checklist or redline; a `NULL`-JD row still gets its directory and resume copy (no `job_posting.md`). Queue: the packet queue (PRD 02; `--id` waives the tracker condition, never Apply).
 
 **Resume checklist (Step 4) (Priority: P0)**
 - **Re-check before building (P0, `XC-5`):** each queued row gets PRD 01's liveness re-check before anything is built. A closed one is marked closed and gets no packet, checklist, or tracker row; generate reports how many Apply postings closed since they were decided. `--id` builds a closed posting anyway.
@@ -75,7 +75,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Re-entry:** the queue path writes the checklist only when the packet lacks one, so a run interrupted after the checklist resumes at the tracker append. `--id` and a refetch refresh always rewrite it, against the resume copy's current contents.
 - **Concurrency & seam:** a bounded worker pool (`JSA_GENERATE_WORKERS`, default 3) with tracker appends serialized; each finished row is appended to the tracker right away, exactly as `jsa track --id` would (the Step 4→5 seam). A failed generate or track is flagged and exits non-zero; never a rollback.
 
-**ATS redline (`/redline`) (Priority: P1)**
+**ATS redline (Step 4) (Priority: P1)**
 - **Boundary (P0 whenever the redline exists):** the redline aligns the resume's wording with the posting's literal terms, and does nothing else. Every edit it proposes is:
   - **traced:** it cites verbatim posting text that motivates it;
   - **meaning-preserving:** the bullet claims exactly what it claimed before;
@@ -92,18 +92,15 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
   - changing an employer, title, date, or number;
   - deleting content;
   - any edit made for style.
-- **Interactive, not headless:** a proposal needs judgment the user can question and steer as it happens. So the redline runs in the user's own Claude Code session, outside `jsa generate` and `jsa packet`, on that session's model (`XC-14`). It isn't a headless run, so the shared agent loop (`XC-12`) doesn't apply. It reads only the packet directory, and touches no DB row, tracker row, or checklist.
-- **Flow: Claude proposes, code validates and writes, and Word is where the user reviews.**
-  1. **Entry:** the user runs `/redline <packet dir>`. This is a Claude Code skill shipped at `.claude/skills/redline/SKILL.md`. Only the user can invoke it (`disable-model-invocation: true`), so no agent working in this repository runs it on its own. The skill only drives the steps below; the prompt is the app's template (`XC-13`).
-  2. **Prompt:** `jsa redline prompt <packet dir>` prints the assembled redline prompt. Before any proposal, it refuses a packet with no `job_posting.md`, a resume copy that holds unresolved tracked changes, or an existing redline.
-  3. **Propose:** Claude follows that prompt and writes its edits to `redline_edits.json` in the packet. The file is a JSON array of `{paragraph, find, replace, jd_quote, why_same_meaning}` objects, rewritten on each run and kept beside the redline as the record of what was proposed.
-  4. **Validate and write:** `jsa redline apply <packet dir>` checks every edit against the rules below. It is **all-or-nothing**. If any edit fails, it writes no document, exits non-zero, and names each failing edit and its reason. Claude then corrects a mechanical slip (a mis-copied quote or `find`) or drops the edit, never loosens an edit to make it pass, and tells the user what it dropped and why. When every edit passes, `apply` writes the redline and opens it. An empty list writes nothing and says there was nothing to align.
-  5. **Review:** the user accepts or rejects each change in Word and keeps the result by saving it, for example over the working copy. The app never does that step.
+- **Part of `jsa generate`:** each row that gets a checklist then gets a redline from the same worker, before its tracker append. The redline reads the same resume copy as the checklist and works independently of it; neither sees the other's output. `jsa packet` writes neither.
+- **Why it can run headless:** the user's judgment is applied where the redline is reviewed, in Word, one change at a time. Proposing the edits needs no conversation, and the validator below holds the guarantees that matter. So the redline is a batch step like the checklist, not an interactive session.
+- **Agent:** the Claude Agent SDK, headless, **`model` and `effort` from `[agents.redline]` in `profile/config.toml`** (`XC-14`; example default `claude-fable-5-1` at `medium`), no tools at all, a single turn, run through the shared agent loop (`XC-12`). Its final text is a JSON array of `{paragraph, find, replace, jd_quote, why_same_meaning}` objects. An empty result, or text that isn't such an array, raises.
+- **Invalid edits are dropped, never repaired:** every proposed edit is checked against the rules below. An edit that fails is left out of the redline; the app never adjusts an edit to make it pass. Every proposed edit, with its validation result (`null`, or the reason it was dropped), is written to the packet as `redline_edits.json`, the record of what was proposed. Generate's report gives each row's applied and dropped counts.
 - **Validation (pure, `XC-9`):** a *word* is a whitespace-separated token with leading and trailing `.,;:!?()[]"'` stripped, compared case-insensitively. An edit passes only when all of these hold:
   - `paragraph` is the index of a body paragraph in the resume copy;
   - `find` occurs exactly once in that paragraph's plain text;
-  - no two edits in the same paragraph overlap;
-  - `jd_quote` is a substring of `job_posting.md`, once runs of whitespace in both are collapsed to one space, with no other normalization;
+  - it doesn't overlap an earlier-listed edit that passed in the same paragraph;
+  - `jd_quote` is a substring of the job description, once runs of whitespace in both are collapsed to one space, with no other normalization;
   - **every word the edit inserts appears in its `jd_quote` or in its `find`.** The inserted words are the ones a word-level diff of `find` against `replace` marks as new. This puts traceability in code: an edit can only bring in the posting's own words;
   - `replace` is non-empty and differs from `find`. A pure deletion removes content;
   - `find` and `replace` contain the same digit-bearing words, so no number changes;
@@ -111,18 +108,21 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
   - `why_same_meaning` is non-empty.
 
   *What code can't check is meaning.* A swap worded entirely from the posting can still shift a claim (e.g. "SQL" → "PostgreSQL"). That judgment rests on the template's rules and on the user's accept or reject. The comment beside each change puts the evidence in front of the user at the moment they decide.
-- **The redline document:** a copy of the packet's resume copy, named `{resume_file_stem}_redline.docx` (the name is defined once beside `resume_file_stem`).
+- **The redline document:** written when at least one edit passes. It is a copy of the packet's resume copy, named `{resume_file_stem}_redline.docx` (the name is defined once beside `resume_file_stem`).
   - **Changes:** each edit is a native Word tracked change that deletes and inserts only the words that differ. The author is `Claude (ATS)`, and the date is the time of the run.
   - **Comments:** each change carries a Word comment that quotes the `jd_quote` and gives the `why_same_meaning`.
   - **Formatting:** inserted text takes the run formatting of the text it replaces, and every paragraph and run the edits don't touch is unchanged. So rejecting every change gives back the resume copy's text exactly, and accepting every change gives that text with the edits applied.
-  - **Opening:** `apply` opens the redline in Microsoft Word through macOS `open`, the same way review opens Chrome (PRD 03). A failure to open is ignored, since the path is printed.
-- **Never touches the working copy:** the redline reads `{resume_file_stem}.docx` as it currently stands, never `profile/resume.docx`, so it composes with the user's own revision. It never writes to the resume copy, and never overwrites an existing redline, since the user may be partway through reviewing it. The user deletes the redline to ask for a fresh one.
+  - **Review:** generate doesn't open it, because it runs over a batch of rows on a worker pool. The user opens it in Word, accepts or rejects each change, and keeps the result by saving it, for example over the working copy. The app never does that step.
+- **Never touches the working copy:** the redline reads `{resume_file_stem}.docx` as it currently stands, never `profile/resume.docx`, and never writes to it.
+- **Never review blind:** a row that gets no checklist for want of a JD gets no redline either.
+- **Re-entry:** `redline_edits.json` marks the redline step done, since a run with no valid edits writes no document. The queue path runs the redline only when the packet lacks that file, so a run interrupted after the redline resumes at the tracker append. `--id` and a refetch refresh rerun it against the resume copy's current contents, **unless a redline document already exists**: the user may be partway through reviewing it, so it and its `redline_edits.json` are left untouched. To get a fresh redline of a revised resume, the user deletes the redline and runs `jsa generate --id`.
+- **Unresolved tracked changes in the resume copy:** the redline is skipped for that row, with a warning, and the row continues to its tracker append. The copy's paragraph text is ambiguous until the user accepts or rejects those changes, and that is the user's state to fix, not a failure.
 - **Text in scope:** the body paragraphs, the same ones the checklist sees ("Base resume"). Text in tables, headers, footers, and text boxes isn't redlined.
 - **Prompt (`XC-13`):** the app's redline template. It is candidate-agnostic and has no profile slots. It states the boundary, the allowed and forbidden edits above, and the edit list's output contract.
 
   | Slot | Source | Required | Precedence |
   |---|---|---|---|
-  | `{{JOB_DESCRIPTION}}` | the packet's `job_posting.md` | yes | The only evidence an edit may cite. |
+  | `{{JOB_DESCRIPTION}}` | the posting row (or a hand-filled `job_posting.md`), as for the checklist | — | The only evidence an edit may cite. |
   | `{{RESUME_PARAGRAPHS}}` | the resume copy's body paragraphs as plain text, each prefixed with its index; empty paragraphs are omitted but keep their indices (rendering is pure, beside "Base resume") | yes | The text under edit. Edits address it by index. |
 
 **Tracker write (Step 5) (Priority: P0)**
@@ -144,16 +144,16 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 
 **Entry Point & First-Time Experience**
 - `jsa packet [--id] [--dry-run]`, `jsa generate [--id] [--dry-run]`, `jsa track [--id] [--dry-run]`, `jsa refetch [--id] [--all] [--dry-run]` (all local).
-- `/redline <packet dir>` in an interactive Claude Code session opened in this repository, which drives `jsa redline prompt` and `jsa redline apply` (local). First-time setup (the base resume, `gws` OAuth, the Sheet) is owned by PRD 06.
+- First-time setup (the base resume, `gws` OAuth, the Sheet) is owned by PRD 06.
 - Dry-runs preview the queue/paths/rows, make no model call, and write nothing.
 
 **Core Experience (`jsa generate`)**
 1. For each Apply+untracked row still open after the re-check: ensure the packet directory, `job_posting.md`, and the resume copy.
 2. Assemble the checklist prompt with the JD and the text of the packet's resume copy.
 3. Run the single-turn agent; write `resume_checklist.md`.
-4. Append the tracker row via `jsa track --id`.
-5. The user works through the checklist, revising the resume copy by hand.
-6. Optionally, the user runs `/redline` on the packet and accepts or rejects its ATS wording changes in Word.
+4. Assemble the redline prompt, run its single-turn agent, validate its edits, and write `redline_edits.json` and, when any edit passes, the redline.
+5. Append the tracker row via `jsa track --id`.
+6. The user reviews the redline in Word, accepting or rejecting each change, and works through the checklist, revising the resume copy by hand.
 
 **Edge Cases**
 - **`NULL` JD, no hand-filled `job_posting.md`:** packet head only, no checklist, flagged; the row stays queued (never reviewed blind).
@@ -168,28 +168,26 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Two postings with the same company and title:** the later one's packet directory carries ` ({id})`; neither touches the other's files.
 - **A title or company beginning with `=`, `+`, `-`, or `@`:** written to the Sheet as literal text, never as a formula.
 - **Standalone `jsa packet` on an existing directory:** skipped, never clobbered.
-- **Redline on a packet with no `job_posting.md`:** refused before any proposal, because an edit can't be traced to text that isn't there.
-- **Redline on a resume copy with unresolved tracked changes:** refused. Its paragraph text is ambiguous until the user accepts or rejects those changes.
-- **Redline already present:** refused. The user deletes it to get a fresh one.
-- **Any invalid edit in `redline_edits.json`:** no document is written. Each failing edit is named with its reason.
-- **No edit has posting text behind it:** an empty edit list. Nothing is written, and the session says so.
-- **Microsoft Word missing or failing to open:** ignored. The redline's path is printed.
+- **Redline proposes an invalid edit:** the edit is dropped and recorded in `redline_edits.json` with its reason; the valid ones are still written.
+- **Redline has no valid edit:** no redline document; `redline_edits.json` is still written, so re-entry doesn't rerun it.
+- **Redline output isn't a JSON edit array:** raised like an agent error; the row is flagged `failed` and stays in the queue, and re-entry resumes at the redline.
+- **Resume copy with unresolved tracked changes:** redline skipped with a warning; the row is still tracked.
+- **Redline already present on `--id` or a refetch refresh:** left untouched with its `redline_edits.json`; the checklist still refreshes.
 
 -----
 #### Technical Considerations
 - **Local-only (`XC-1`):** needs the local disk, the local profile, and the `gws` OAuth token; never runs in the cloud.
 - **Deterministic core, agentic shell (`XC-9`):** resume rendering, resume file naming, and tracker row building are pure; the checklist is one agentic call whose output is advisory, so a non-reproducible checklist never makes the packet itself non-reproducible.
-- **The redline's guarantees live in code, its judgment in the session (`XC-9`):** validation, prompt assembly, the plain-text paragraph rendering, and the tracked-change writing are pure and tested without a model. The proposals themselves are judged by the owner on real packets.
+- **The redline's guarantees live in code, not in the agent (`XC-9`):** validation, the plain-text paragraph rendering, and the tracked-change writing are pure and tested without a model. The proposals themselves are judged by the owner on real packets.
 - **Completion guard is `added_to_tracker`, not directory-exists (`XC-10`):** `jsa generate` must re-enter a bare directory.
 - **`gws` ambiguity is fatal by design:** optimistic flagging would permanently drop a job.
-- **Cost:** one model call per Apply row (plus one per `--id` or refetch refresh), sized by the JD and the resume; a single turn, no iteration. A redline costs the user's interactive session one proposal, plus one correction turn when `apply` rejects an edit.
+- **Cost:** two model calls per Apply row, the checklist and the redline (plus the same per `--id` or refetch refresh, less the redline when one already exists), each sized by the JD and the resume; a single turn each, no iteration.
 
 -----
 #### Integration Points
 - **`python-docx`** (approved) — reads the packet's resume copy for rendering. It also writes the redline: comments through its comments API, and tracked changes through the XML it exposes, so no other library is needed.
-- **Claude Code** (interactive) — runs the `/redline` skill.
-- **Microsoft Word** via the macOS `open` command (the redline).
-- **Claude Agent SDK** (the profile's checklist model), tool-less; Claude auth inherited from the environment (PRD 06).
+- **Microsoft Word** — where the user reviews the redline.
+- **Claude Agent SDK** (the profile's checklist and redline models), tool-less; Claude auth inherited from the environment (PRD 06).
 - **Google Sheets** via the local **`gws` CLI** (`JSA_GWS_BIN`), which holds the Google OAuth token locally.
 - **The four ATS fetchers and the `JobPosting` fallback** (PRD 01) — refetch capture.
 - **Turso** (PRD 02).
@@ -199,7 +197,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **`gws` CLI + Google OAuth** (`gws auth login`) for Sheet writes; note the testing-status OAuth 7-day token expiry until the consent screen is published.
 - **The tracker Google Sheet** with an `Applications` tab, an A:H header, and a Status dropdown / data-validation already set up; its id as **`tracker_spreadsheet_id`** in `profile/config.toml` (no code default).
 - **`candidate_name`** (the resume file-name prefix) in `profile/config.toml`, optional.
-- **Microsoft Word** (redline review), optional.
+- **Microsoft Word** (redline review).
 
 -----
 #### Outstanding Questions
