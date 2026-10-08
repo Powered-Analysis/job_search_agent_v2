@@ -5,12 +5,14 @@ documented seams: HTTP at the transport, Claude at `agent_loop.query`, and `gws`
 reached through `JSA_GWS_BIN`. The profile and the packets directory are temporary directories.
 """
 
+import json
 import os
 import re
 import sys
 import threading
 import time
 import uuid
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +21,7 @@ import httpx
 import pytest
 from claude_agent_sdk import ResultMessage
 from conftest import drop_all_tables
+from docx.oxml import parse_xml
 from pandoc_helpers import install_pandoc, pandoc_calls
 from profile_helpers import copy_example, write_config_toml
 from test_claude_runner import result_message
@@ -43,11 +46,33 @@ packets_dir = "{packets}"
 [agents.checklist]
 model = "claude-sonnet-5-5"
 effort = "low"
+
+[agents.redline]
+model = "claude-opus-5-5"
+effort = "medium"
 """
+REDLINE_MODEL = "claude-opus-5-5"
+REDLINE_EDITS = "redline_edits.json"
+# One edit the validator drops (no such paragraph): a well-formed, non-empty redline result.
+REDLINE_JSON = json.dumps(
+    [
+        {
+            "paragraph": 99,
+            "find": "nothing here",
+            "replace": "nothing there",
+            "jd_quote": "Frobnicator platform",
+            "why_same_meaning": "the same thing",
+        }
+    ]
+)
 
 
 class Agent:
-    """Stands in for the SDK's `query`; `respond` maps a prompt to the result message the run ends with."""
+    """Stands in for the SDK's `query`.
+
+    `respond` maps a checklist prompt, and `respond_redline` a redline prompt, to the result message
+    the run ends with. The two agents are told apart by the model each is configured with.
+    """
 
     def __init__(self):
         self.calls = []
@@ -55,6 +80,7 @@ class Agent:
         self.in_flight = 0
         self.peak = 0
         self.respond = lambda prompt: result_message(result=CHECKLIST_TEXT)
+        self.respond_redline = lambda prompt: result_message(result=REDLINE_JSON)
 
     async def query(self, *, prompt, options=None, **_ignored):
         with self.lock:
@@ -62,7 +88,10 @@ class Agent:
             self.in_flight += 1
             self.peak = max(self.peak, self.in_flight)
         try:
-            message = self.respond(prompt)
+            respond = (
+                self.respond_redline if options.model == REDLINE_MODEL else self.respond
+            )
+            message = respond(prompt)
         finally:
             with self.lock:
                 self.in_flight -= 1
@@ -71,6 +100,22 @@ class Agent:
     @property
     def prompts(self):
         return [call.prompt for call in self.calls]
+
+    @property
+    def checklist_calls(self):
+        return [call for call in self.calls if call.options.model != REDLINE_MODEL]
+
+    @property
+    def redline_calls(self):
+        return [call for call in self.calls if call.options.model == REDLINE_MODEL]
+
+    @property
+    def checklist_prompts(self):
+        return [call.prompt for call in self.checklist_calls]
+
+    @property
+    def redline_prompts(self):
+        return [call.prompt for call in self.redline_calls]
 
 
 def failed(**fields) -> ResultMessage:
@@ -268,6 +313,7 @@ def test_an_open_apply_posting_gets_a_full_packet_and_a_tracker_row(
         RESUME_COPY,
         "resume_checklist.md",
         PDF,
+        REDLINE_EDITS,
     }
     assert (folder / "job_posting.md").read_text(encoding="utf-8") == JD
     assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
@@ -437,6 +483,7 @@ def test_a_bare_directory_left_by_jsa_packet_is_completed_not_skipped(
         RESUME_COPY,
         "resume_checklist.md",
         PDF,
+        REDLINE_EDITS,
     }
     assert column(gdb, posting_id, "added_to_tracker") == 1
 
@@ -454,6 +501,7 @@ def test_an_empty_directory_is_completed_with_the_job_posting_and_resume_copy(
         RESUME_COPY,
         "resume_checklist.md",
         PDF,
+        REDLINE_EDITS,
     }
 
 
@@ -470,7 +518,8 @@ def test_the_queue_path_keeps_an_existing_checklist_and_goes_on_to_track(
     assert (folder / "resume_checklist.md").read_text(encoding="utf-8") == (
         "MY OLD CHECKLIST"
     )
-    assert agent.calls == []
+    assert agent.checklist_calls == []
+    assert len(agent.redline_calls) == 1
     assert len(calls(gws)) == 1
     assert column(gdb, posting_id, "added_to_tracker") == 1
 
@@ -483,7 +532,7 @@ def test_an_id_rewrites_an_existing_checklist(gdb, env, agent, monkeypatch, caps
     (folder / "resume_checklist.md").write_text("MY OLD CHECKLIST", encoding="utf-8")
     code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
     assert code == 0
-    assert len(agent.calls) == 1
+    assert len(agent.checklist_calls) == 1
     text = (folder / "resume_checklist.md").read_text(encoding="utf-8")
     assert text.strip() == CHECKLIST_TEXT.strip()
 
@@ -526,8 +575,8 @@ def test_an_id_overwrites_the_job_posting_with_the_stored_description(
     code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
     assert code == 0
     assert (folder / "job_posting.md").read_text(encoding="utf-8") == JD
-    assert "Frobnicator" in agent.prompts[0]
-    assert "stale text" not in agent.prompts[0]
+    assert "Frobnicator" in agent.checklist_prompts[0]
+    assert "stale text" not in agent.checklist_prompts[0]
 
 
 def test_an_id_on_a_null_description_never_overwrites_a_hand_filled_file(
@@ -545,7 +594,7 @@ def test_an_id_on_a_null_description_never_overwrites_a_hand_filled_file(
     assert (folder / "job_posting.md").read_text(encoding="utf-8") == (
         "Zebrafish wrangler duties"
     )
-    assert "Zebrafish wrangler duties" in agent.prompts[0]
+    assert "Zebrafish wrangler duties" in agent.checklist_prompts[0]
 
 
 # --- never review blind -------------------------------------------------------
@@ -584,7 +633,7 @@ def test_a_hand_filled_job_posting_is_the_jd_and_is_left_unchanged(
     )
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
-    assert "Zebrafish wrangler duties" in agent.prompts[0]
+    assert "Zebrafish wrangler duties" in agent.checklist_prompts[0]
     assert (folder / "job_posting.md").read_text(encoding="utf-8") == (
         "Zebrafish wrangler duties"
     )
@@ -613,7 +662,7 @@ def test_the_prompt_holds_the_posting_and_the_rendered_resume_and_no_markers(
 ):
     seed(gdb)
     jsa_generate(monkeypatch, capsys)
-    (prompt,) = agent.prompts
+    (prompt,) = agent.checklist_prompts
     assert "Staff Engineer" in prompt
     assert "Acme" in prompt
     assert "Build the Frobnicator platform." in prompt
@@ -628,7 +677,7 @@ def test_the_prompt_carries_no_other_profile_content(
     profile, _ = env
     seed(gdb)
     jsa_generate(monkeypatch, capsys)
-    (prompt,) = agent.prompts
+    (prompt,) = agent.checklist_prompts
     for path in (profile / "search").glob("*.md"):
         for line in path.read_text(encoding="utf-8").splitlines():
             if len(line.strip()) > 30:
@@ -658,7 +707,7 @@ def test_the_shared_loop_is_called_with_the_checklist_settings_no_tools_and_one_
 ):
     seed(gdb)
     jsa_generate(monkeypatch, capsys)
-    (call,) = agent.calls
+    (call,) = agent.checklist_calls
     assert call.options.model == "claude-sonnet-5-5"
     assert call.options.effort == "low"
     assert call.options.tools == []
@@ -669,7 +718,7 @@ def test_the_shared_loop_is_called_with_the_checklist_settings_no_tools_and_one_
 def test_the_checklist_run_loads_no_settings_files(gdb, agent, monkeypatch, capsys):
     seed(gdb)
     jsa_generate(monkeypatch, capsys)
-    (call,) = agent.calls
+    (call,) = agent.checklist_calls
     assert call.options.setting_sources == []
 
 
@@ -683,7 +732,7 @@ def test_the_agent_is_given_the_edited_copy_on_an_id_not_the_base(
     agent.calls.clear()
     code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
     assert code == 0
-    (prompt,) = agent.prompts
+    (prompt,) = agent.checklist_prompts
     assert "REVISED: led the Zorblax migration" in prompt
     assert BASE_LINE in prompt
 
@@ -699,7 +748,7 @@ def test_the_base_resume_changing_later_does_not_reach_an_existing_copys_checkli
     document.save(profile / "resume.docx")
     agent.calls.clear()
     jsa_generate(monkeypatch, capsys, "--id", posting_id)
-    (prompt,) = agent.prompts
+    (prompt,) = agent.checklist_prompts
     assert "BASE ONLY" not in prompt
     assert BASE_LINE in prompt
 
@@ -728,7 +777,7 @@ def test_a_deleted_resume_copy_is_restored_from_the_base_before_assessing(
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
     assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
-    assert BASE_LINE in agent.prompts[0]
+    assert BASE_LINE in agent.checklist_prompts[0]
 
 
 # --- failures -----------------------------------------------------------------
@@ -798,6 +847,7 @@ def test_a_failed_track_exits_non_zero_leaves_the_row_untracked_and_rolls_nothin
         RESUME_COPY,
         "resume_checklist.md",
         PDF,
+        REDLINE_EDITS,
     }
 
 
@@ -853,7 +903,9 @@ def test_no_more_than_the_configured_number_of_runs_are_in_flight(
     agent.respond = respond
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
-    assert len(agent.calls) == 7
+    assert len(agent.checklist_calls) == 7
+    assert len(agent.redline_calls) == 7
+    assert len(agent.calls) == 14
     assert agent.peak <= limit
     assert all(column(gdb, i, "added_to_tracker") == 1 for i in ids)
 
@@ -1030,7 +1082,7 @@ def test_a_rerun_after_a_pandoc_failure_renders_the_pdf_without_rewriting_the_ch
     agent.calls.clear()
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
-    assert agent.calls == []
+    assert agent.checklist_calls == []
     checklist = (folder / "resume_checklist.md").read_text(encoding="utf-8")
     assert checklist.strip() == CHECKLIST_TEXT.strip()
     assert (folder / PDF).read_text(encoding="utf-8") == f"PDF OF: {checklist}"
@@ -1047,7 +1099,8 @@ def test_a_checklist_without_a_pdf_gets_one_and_the_checklist_is_left_alone(
     (folder / "resume_checklist.md").write_text("MY OLD CHECKLIST", encoding="utf-8")
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
-    assert agent.calls == []
+    assert agent.checklist_calls == []
+    assert len(agent.redline_calls) == 1
     assert (folder / "resume_checklist.md").read_text(encoding="utf-8") == (
         "MY OLD CHECKLIST"
     )
@@ -1163,6 +1216,13 @@ def _break_checklist_table(profile, state):
     )
 
 
+def _break_redline_table(profile, state):
+    packets = profile.parent / "packets"
+    write_config_toml(
+        profile, CONFIG.format(packets=packets).split("[agents.redline]")[0]
+    )
+
+
 @pytest.mark.parametrize(
     "breaker, state",
     [
@@ -1171,6 +1231,7 @@ def _break_checklist_table(profile, state):
         (_break_tracker_id, "missing"),
         (_break_tracker_id, "empty"),
         (_break_checklist_table, "missing"),
+        (_break_redline_table, "missing"),
     ],
     ids=[
         "resume-missing",
@@ -1178,6 +1239,7 @@ def _break_checklist_table(profile, state):
         "tracker-id-missing",
         "tracker-id-empty",
         "checklist-agent-missing",
+        "redline-agent-missing",
     ],
 )
 def test_a_missing_requirement_fails_before_any_row_is_processed(
@@ -1214,3 +1276,327 @@ def test_the_command_is_registered_with_id_and_dry_run(monkeypatch, capsys):
     assert stopped.value.code == 0
     output = capsys.readouterr().out
     assert "--id" in output and "--dry-run" in output
+
+
+# --- the ATS redline (issue #82; PRD 04 "ATS redline") ------------------------
+
+QUUX_JD = "# Staff Engineer\n\nOwn the Quuxlate system end to end.\n"
+QUUX_EDIT = {
+    "paragraph": 1,
+    "find": "Quuxlate platform",
+    "replace": "Quuxlate system",
+    "jd_quote": "Quuxlate system",
+    "why_same_meaning": "WHY-SAME-MEANING-MARKER",
+}
+REDLINE_DOC = RESUME_COPY.replace(".docx", "_redline.docx")
+
+
+def redline_reply(*edits):
+    return lambda prompt: result_message(result=json.dumps(list(edits)))
+
+
+def proposed(folder):
+    return json.loads((folder / REDLINE_EDITS).read_text(encoding="utf-8"))
+
+
+def test_each_row_gets_a_checklist_then_a_redline_before_its_tracker_append(
+    gdb, agent, gws, monkeypatch, capsys
+):
+    seed(gdb)
+    log_at_redline = []
+
+    def respond_redline(prompt):
+        log_at_redline.append(gws.exists())
+        return result_message(result=REDLINE_JSON)
+
+    agent.respond_redline = respond_redline
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert [call.options.model for call in agent.calls] == [
+        "claude-sonnet-5-5",
+        REDLINE_MODEL,
+    ]
+    assert log_at_redline == [False]
+    assert gws.exists()
+
+
+def test_the_redline_run_uses_the_redline_settings_no_tools_one_turn_and_no_settings_files(
+    gdb, agent, monkeypatch, capsys
+):
+    seed(gdb)
+    jsa_generate(monkeypatch, capsys)
+    (call,) = agent.redline_calls
+    assert call.options.model == REDLINE_MODEL
+    assert call.options.effort == "medium"
+    assert call.options.tools == []
+    assert not call.options.allowed_tools
+    assert call.options.max_turns == 1
+    assert call.options.setting_sources == []
+
+
+def test_the_redline_prompt_holds_the_posting_and_the_indexed_resume_paragraphs(
+    gdb, agent, monkeypatch, capsys
+):
+    seed(gdb)
+    jsa_generate(monkeypatch, capsys)
+    (prompt,) = agent.redline_prompts
+    assert "Build the Frobnicator platform." in prompt
+    assert "Riley Resumeperson" in prompt
+    assert BASE_LINE in prompt
+    assert "{{" not in prompt and "}}" not in prompt
+    for private in ("Pat Example", "Jordan Example", "sheet-123"):
+        assert private not in prompt
+
+
+def test_the_redline_and_the_checklist_do_not_see_each_others_output(
+    gdb, agent, monkeypatch, capsys
+):
+    seed(gdb)
+    agent.respond = lambda prompt: result_message(result="CHECKLIST-ONLY-MARKER")
+    agent.respond_redline = lambda prompt: result_message(
+        result=REDLINE_JSON.replace("nothing here", "REDLINE-ONLY-MARKER")
+    )
+    jsa_generate(monkeypatch, capsys)
+    assert "REDLINE-ONLY-MARKER" not in agent.checklist_prompts[0]
+    assert "CHECKLIST-ONLY-MARKER" not in agent.redline_prompts[0]
+
+
+def test_every_proposed_edit_is_recorded_with_its_validation_result(
+    gdb, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    seed(gdb)
+    agent.respond_redline = redline_reply(
+        {**QUUX_EDIT, "paragraph": 99}, {**QUUX_EDIT, "why_same_meaning": ""}
+    )
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    records = proposed(packets / PLAIN)
+    assert len(records) == 2
+    assert all(record["validation"] for record in records)
+    assert not (packets / PLAIN / REDLINE_DOC).exists()
+
+
+def test_a_run_with_no_valid_edit_writes_the_record_but_no_redline_document(
+    gdb, env, gws, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert REDLINE_EDITS in entries(packets / PLAIN)
+    assert REDLINE_DOC not in entries(packets / PLAIN)
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_a_valid_edit_becomes_a_tracked_change_with_a_comment_in_a_copy(
+    gdb, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    seed(gdb, jd=QUUX_JD)
+    agent.respond_redline = redline_reply(QUUX_EDIT)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    folder = packets / PLAIN
+    (record,) = proposed(folder)
+    assert record["validation"] is None
+    assert REDLINE_DOC in entries(folder)
+    with zipfile.ZipFile(folder / REDLINE_DOC) as archive:
+        body = archive.read("word/document.xml").decode("utf-8")
+        comments = archive.read("word/comments.xml").decode("utf-8")
+    assert "<w:ins " in body and "<w:del " in body
+    assert "Claude (ATS)" in body
+    assert "Quuxlate system" in comments and "WHY-SAME-MEANING-MARKER" in comments
+
+
+def test_the_redline_never_touches_the_resume_copy(
+    gdb, env, agent, monkeypatch, capsys
+):
+    profile, packets = env
+    seed(gdb, jd=QUUX_JD)
+    agent.respond_redline = redline_reply(QUUX_EDIT)
+    jsa_generate(monkeypatch, capsys)
+    copy = packets / PLAIN / RESUME_COPY
+    assert copy.read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (profile / "resume.docx").read_bytes() == copy.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["not json at all", '{"paragraph": 1}', "", "   \n"],
+    ids=["prose", "object", "empty", "blank"],
+)
+def test_a_redline_result_that_is_not_an_edit_array_flags_the_row_and_exits_non_zero(
+    gdb, env, agent, gws, text, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    agent.respond_redline = lambda prompt: result_message(result=text)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert str(posting_id) in output
+    assert not gws.exists()
+    assert column(gdb, posting_id, "added_to_tracker") == 0
+    assert REDLINE_EDITS not in entries(packets / PLAIN)
+
+
+def test_a_failed_redline_run_flags_the_row_and_keeps_the_checklist(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    agent.respond_redline = lambda prompt: failed(
+        api_error_status=529, result="overloaded"
+    )
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert "529" in output
+    assert not gws.exists()
+    assert column(gdb, posting_id, "added_to_tracker") == 0
+    assert "resume_checklist.md" in entries(packets / PLAIN)
+
+
+def test_a_failed_redline_on_one_row_does_not_stop_the_others(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    bad = seed(gdb, company="Bad Labs", jd="# Role\n\nBAD-JD-MARKER\n")
+    good = seed(gdb, company="Good Labs")
+    agent.respond_redline = lambda prompt: (
+        failed(result="overloaded")
+        if "BAD-JD-MARKER" in prompt
+        else result_message(result=REDLINE_JSON)
+    )
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert str(bad) in output
+    assert column(gdb, bad, "added_to_tracker") == 0
+    assert column(gdb, good, "added_to_tracker") == 1
+
+
+def test_a_rerun_after_a_failed_redline_writes_no_second_checklist_and_resumes(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    agent.respond_redline = lambda prompt: result_message(result="nope")
+    jsa_generate(monkeypatch, capsys)
+    agent.respond_redline = lambda prompt: result_message(result=REDLINE_JSON)
+    agent.calls.clear()
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert agent.checklist_calls == []
+    assert len(agent.redline_calls) == 1
+    assert REDLINE_EDITS in entries(packets / PLAIN)
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_the_queue_path_skips_the_redline_when_the_record_exists(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    (folder / "resume_checklist.md").write_text("MY OLD CHECKLIST", encoding="utf-8")
+    (folder / REDLINE_EDITS).write_text("[]", encoding="utf-8")
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert agent.calls == []
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_an_id_reruns_both_steps_when_no_redline_document_exists(
+    gdb, agent, monkeypatch, capsys
+):
+    posting_id = seed(gdb)
+    jsa_generate(monkeypatch, capsys)
+    agent.calls.clear()
+    code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
+    assert code == 0
+    assert len(agent.checklist_calls) == 1
+    assert len(agent.redline_calls) == 1
+
+
+def test_an_id_leaves_an_existing_redline_and_its_record_alone_but_rewrites_the_checklist(
+    gdb, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    (folder / REDLINE_DOC).write_bytes(b"MY REVIEW IN PROGRESS")
+    (folder / REDLINE_EDITS).write_text("MY RECORD", encoding="utf-8")
+    code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
+    assert code == 0
+    assert len(agent.checklist_calls) == 1
+    assert agent.redline_calls == []
+    assert (folder / REDLINE_DOC).read_bytes() == b"MY REVIEW IN PROGRESS"
+    assert (folder / REDLINE_EDITS).read_text(encoding="utf-8") == "MY RECORD"
+    checklist = (folder / "resume_checklist.md").read_text(encoding="utf-8")
+    assert checklist.strip() == CHECKLIST_TEXT.strip()
+
+
+def test_the_redline_reads_the_resume_copy_as_it_stands_on_an_id(
+    gdb, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    jsa_generate(monkeypatch, capsys)
+    edit_copy(packets / PLAIN / RESUME_COPY, "REVISED: led the Zorblax migration")
+    agent.calls.clear()
+    jsa_generate(monkeypatch, capsys, "--id", posting_id)
+    (prompt,) = agent.redline_prompts
+    assert "REVISED: led the Zorblax migration" in prompt
+
+
+def test_a_blind_row_gets_no_redline(gdb, env, agent, monkeypatch, capsys):
+    _, packets = env
+    seed(gdb, jd=None)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert agent.calls == []
+    assert REDLINE_EDITS not in entries(packets / "Acme Widgets - Staff Engineer")
+
+
+def test_jsa_packet_writes_no_redline_and_makes_no_model_call(
+    gdb, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    seed(gdb)
+    jsa(monkeypatch, capsys, "packet")
+    assert agent.calls == []
+    assert REDLINE_EDITS not in entries(packets / PLAIN)
+    assert REDLINE_DOC not in entries(packets / PLAIN)
+
+
+def test_a_dry_run_makes_no_redline_call(gdb, env, agent, monkeypatch, capsys):
+    _, packets = env
+    seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert agent.calls == []
+    assert entries(packets) == set()
+
+
+def test_a_resume_copy_with_unresolved_tracked_changes_is_not_redlined_and_the_row_is_tracked(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    copy = folder / RESUME_COPY
+    document = docx.Document()
+    paragraph = document.add_paragraph("Built the ")
+    tracked = parse_xml(
+        '<w:ins xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        ' w:id="901" w:author="Someone" w:date="2026-01-01T00:00:00Z">'
+        "<w:r><w:t>Quuxlate platform</w:t></w:r></w:ins>"
+    )
+    paragraph._p.append(tracked)
+    document.save(copy)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert "warning" in output.lower()
+    assert REDLINE_DOC not in entries(folder)
+    assert column(gdb, posting_id, "added_to_tracker") == 1
