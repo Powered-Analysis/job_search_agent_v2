@@ -36,7 +36,8 @@ from jsa.deploy import BUILD_INPUTS
 # listing for an app whose name ends in `-inbox` answers $STUB_INBOX_MACHINES when that is set. `machine update` fails its first $STUB_UPDATE_FAILS
 # attempts, and `machine run` its first $STUB_RUN_FAILS, as a registry that hasn't caught up with the push would. When $STUB_SNAPSHOT is set, a
 # `deploy` call copies its build context (the directory named in its arguments, else its working
-# directory) there, since the app may delete the context once the build returns.
+# directory) there, since the app may delete the context once the build returns. When $STUB_RUN_CREATES_ON is N, the Nth `machine run`
+# fails after creating an `hourly` machine, as a launch that times out waiting for the machine to start would; later listings of that app show it.
 STUB = """\
 #!{python}
 import json, os, shutil, sys
@@ -54,6 +55,10 @@ if words[:1] and words[0] in os.environ.get("STUB_FAIL", "").split(","):
 app = next((argv[i + 1] for i in range(len(argv) - 1) if argv[i] == "-a"), "")
 if words[:2] == ["secrets", "list"]:
     print(os.environ.get("STUB_SECRETS", "[]"))
+    sys.exit(0)
+created = os.environ["STUB_LOG"] + ".created"
+if ("list" in words or "ls" in words) and os.path.exists(created) and open(created).read() == app:
+    print(json.dumps([{{"id": "created", "state": "started", "config": {{"schedule": "hourly"}}}}]))
     sys.exit(0)
 if "list" in words or "ls" in words:
     inbox_machines = os.environ.get("STUB_INBOX_MACHINES")
@@ -73,6 +78,10 @@ if "run" in words:
     counter = os.environ["STUB_LOG"] + ".runs"
     seen = int(open(counter).read()) if os.path.exists(counter) else 0
     open(counter, "w").write(str(seen + 1))
+    if seen + 1 == int(os.environ.get("STUB_RUN_CREATES_ON", "0")):
+        open(created, "w").write(app)
+        print("Error: timed out waiting for the machine to start", file=sys.stderr)
+        sys.exit(1)
     if seen < int(os.environ.get("STUB_RUN_FAILS", "0")):
         print("Error: failed to get manifest: manifest unknown", file=sys.stderr)
         sys.exit(1)
@@ -102,6 +111,7 @@ def fly(tmp_path, monkeypatch):
         "STUB_SECRETS",
         "STUB_UPDATE_FAILS",
         "STUB_RUN_FAILS",
+        "STUB_RUN_CREATES_ON",
         "STUB_SNAPSHOT",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -741,6 +751,72 @@ def test_create_retries_while_the_registry_catches_up(fly, monkeypatch, capsys):
         assert "--rm" not in run
     assert len(pick(all_calls, "deploy")) == 1
     assert pick_machine(all_calls, "update") == []
+
+
+@pytest.mark.parametrize("creating_attempt", [1, 2], ids=["first", "second"])
+def test_a_create_that_left_a_machine_behind_is_not_retried(
+    fly, monkeypatch, capsys, creating_attempt
+):
+    _, log = fly
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    monkeypatch.setenv("STUB_RUN_FAILS", "1000")
+    monkeypatch.setenv("STUB_RUN_CREATES_ON", str(creating_attempt))
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code != 0
+    assert "Traceback" not in output
+    all_calls = calls(log)
+    assert len(pick_machine(all_calls, "run")) == creating_attempt
+    assert pick_machine(all_calls, "update") == []
+
+
+def test_a_create_that_left_a_machine_behind_exits_with_the_failed_command(
+    fly, monkeypatch, capsys
+):
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    monkeypatch.setenv("STUB_RUN_CREATES_ON", "1")
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code != 0
+    assert "machine run" in output
+    assert "Traceback" not in output
+
+
+def test_the_next_deploy_after_a_create_that_left_a_machine_behind_updates_it(
+    fly, monkeypatch, capsys
+):
+    _, log = fly
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    monkeypatch.setenv("STUB_RUN_CREATES_ON", "1")
+    assert jsa_deploy(monkeypatch, capsys)[0] != 0
+    log.unlink()
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.delenv("STUB_RUN_CREATES_ON")
+    Path(str(log) + ".created").unlink()
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    assert len(pick_machine(calls(log), "update")) == 1
+    assert pick_machine(calls(log), "run") == []
+
+
+def test_create_retries_past_machines_that_are_not_hourly(fly, monkeypatch, capsys):
+    _, log = fly
+    monkeypatch.setenv("STUB_MACHINES", machines(None, "daily"))
+    monkeypatch.setenv("STUB_RUN_FAILS", "2")
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    assert len(pick_machine(calls(log), "run")) == 3
+
+
+def test_smoke_retries_even_when_the_failed_attempt_left_a_machine_behind(
+    fly, monkeypatch, capsys
+):
+    _, log = fly
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    monkeypatch.setenv("STUB_RUN_CREATES_ON", "1")
+    code, _ = jsa_deploy(monkeypatch, capsys, "--smoke")
+    assert code == 0
+    runs = pick_machine(calls(log), "run")
+    assert len(runs) == 2
+    assert all("--rm" in run for run in runs)
 
 
 def test_smoke_retries_while_the_registry_catches_up(fly, monkeypatch, capsys):
@@ -1547,6 +1623,19 @@ def test_inbox_create_retries_while_the_registry_catches_up(inbox, monkeypatch, 
     runs = pick_machine(on_app(calls(log), INBOX_APP), "run")
     assert len(runs) == 3
     assert all(has_flag(run, "--entrypoint", "jsa inbox") for run in runs)
+
+
+def test_an_inbox_create_that_left_a_machine_behind_is_not_retried(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv("STUB_INBOX_MACHINES", machines())
+    monkeypatch.setenv("STUB_RUN_CREATES_ON", "1")
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code != 0
+    assert "Traceback" not in output
+    assert len(pick_machine(on_app(calls(log), INBOX_APP), "run")) == 1
 
 
 def test_inbox_update_retries_while_the_registry_catches_up(inbox, monkeypatch, capsys):
