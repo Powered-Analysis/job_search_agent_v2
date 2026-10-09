@@ -3,7 +3,7 @@
 import json
 import shutil
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, time
 from itertools import pairwise
 from pathlib import Path
@@ -218,14 +218,22 @@ def _fly(args: Sequence[str], app: str, *, capture: bool = False) -> str:
     return result.stdout or ""
 
 
-def _launch(args: Sequence[str], app: str) -> None:
-    """A `fly` call that starts the pushed image, retried for registry lag (PRD 06)."""
+def _launch(
+    args: Sequence[str],
+    app: str,
+    *,
+    may_retry: Callable[[], bool] = lambda: True,
+) -> None:
+    """A `fly` call that starts the pushed image, retried for registry lag (PRD 06).
+
+    `may_retry` is asked after each failure: a failed call can leave work behind, and a retry must not repeat it.
+    """
     for attempt in range(1, LAUNCH_ATTEMPTS + 1):
         try:
             _fly(args, app)
             return
         except JsaError:
-            if attempt == LAUNCH_ATTEMPTS:
+            if attempt == LAUNCH_ATTEMPTS or not may_retry():
                 raise
             sleep(LAUNCH_RETRY_SECONDS)
 
@@ -309,6 +317,8 @@ def _swap_in(
                 *files,
             ],
             app,
+            # `machine run` can fail after it created the machine, such as on a slow start; a retry would add a second one.
+            may_retry=lambda: not _scheduled_machines(app),
         )
         print(f"Created the {SCHEDULE} machine from {image} in {app}.")
         return
