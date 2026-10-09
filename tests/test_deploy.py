@@ -32,7 +32,8 @@ from jsa import cli
 from jsa.deploy import BUILD_INPUTS
 
 # Logs argv to $STUB_LOG, answers a machine listing from $STUB_MACHINES, and fails any call whose
-# subcommand is named in $STUB_FAIL (exit 1). `machine update` fails its first $STUB_UPDATE_FAILS
+# subcommand is named in $STUB_FAIL (exit 1). `secrets list` answers $STUB_SECRETS, and a machine
+# listing for an app whose name ends in `-inbox` answers $STUB_INBOX_MACHINES when that is set. `machine update` fails its first $STUB_UPDATE_FAILS
 # attempts, and `machine run` its first $STUB_RUN_FAILS, as a registry that hasn't caught up with the push would. When $STUB_SNAPSHOT is set, a
 # `deploy` call copies its build context (the directory named in its arguments, else its working
 # directory) there, since the app may delete the context once the build returns.
@@ -50,8 +51,16 @@ if "STUB_SNAPSHOT" in os.environ and words[:1] == ["deploy"]:
 if words[:1] and words[0] in os.environ.get("STUB_FAIL", "").split(","):
     print("boom", file=sys.stderr)
     sys.exit(1)
+app = next((argv[i + 1] for i in range(len(argv) - 1) if argv[i] == "-a"), "")
+if words[:2] == ["secrets", "list"]:
+    print(os.environ.get("STUB_SECRETS", "[]"))
+    sys.exit(0)
 if "list" in words or "ls" in words:
-    print(os.environ.get("STUB_MACHINES", "[]"))
+    inbox_machines = os.environ.get("STUB_INBOX_MACHINES")
+    if app.endswith("-inbox") and inbox_machines is not None:
+        print(inbox_machines)
+    else:
+        print(os.environ.get("STUB_MACHINES", "[]"))
     sys.exit(0)
 if "update" in words:
     counter = os.environ["STUB_LOG"] + ".updates"
@@ -89,6 +98,8 @@ def fly(tmp_path, monkeypatch):
     for name in (
         "STUB_FAIL",
         "STUB_MACHINES",
+        "STUB_INBOX_MACHINES",
+        "STUB_SECRETS",
         "STUB_UPDATE_FAILS",
         "STUB_RUN_FAILS",
         "STUB_SNAPSHOT",
@@ -1373,3 +1384,423 @@ def test_env_example_holds_no_real_looking_secrets():
         match = re.match(r"([A-Z_]+)=(.+)", line)
         if match:
             assert not re.search(r"sk-|eyJ|AIza", match.group(2))
+
+
+# --- the inbox machine (issue #89; PRD 06 "Deployment sequence" step 4, "`jsa deploy`" steps 1 and 4) ---
+
+INBOX_APP = "jsa-example-inbox"
+INBOX_REQUIRED_SECRETS = (
+    "TURSO_DATABASE_URL",
+    "TURSO_AUTH_TOKEN",
+    "JSA_GWS_CREDENTIALS",
+    "JSA_INBOX_GWS_CREDENTIALS",
+)
+CLAUDE_CREDENTIALS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+
+
+def secrets_json(*names: str) -> str:
+    return json.dumps([{"name": name} for name in names])
+
+
+def edit_config(profile: Path, old: str, new: str = "", *, pattern: bool = False):
+    path = profile / "config.toml"
+    text = path.read_text(encoding="utf-8")
+    edited = (
+        re.sub(old, new, text, flags=re.MULTILINE)
+        if pattern
+        else text.replace(old, new)
+    )
+    assert edited != text, old
+    path.write_text(edited, encoding="utf-8")
+
+
+@pytest.fixture
+def inbox(fly, monkeypatch):
+    """The `fly` fixture with `[inbox]` set, and the inbox app holding every secret it needs."""
+    profile, log = fly
+    edit_config(
+        profile,
+        r"^# (?=\[inbox\]|app\s+=|senders\s+=|drive_folder_id\s+=)",
+        pattern=True,
+    )
+    monkeypatch.setenv(
+        "STUB_SECRETS", secrets_json(*INBOX_REQUIRED_SECRETS, CLAUDE_CREDENTIALS[0])
+    )
+    return profile, log
+
+
+def on_app(all_calls: list[list[str]], app: str) -> list[list[str]]:
+    return [
+        argv
+        for argv in all_calls
+        if has_flag(argv, "-a", app) or f"--app={app}" in argv
+    ]
+
+
+def machine_files(argv: list[str]) -> dict[str, str]:
+    """Target path in the machine -> local source, from every `--file-local` option."""
+    values = []
+    for index, arg in enumerate(argv):
+        if arg == "--file-local" and index + 1 < len(argv):
+            values.append(argv[index + 1])
+        elif arg.startswith("--file-local="):
+            values.append(arg.partition("=")[2])
+    return dict(value.split("=", 1) for value in values)
+
+
+def launched_nothing(all_calls: list[list[str]]) -> bool:
+    return (
+        not pick(all_calls, "deploy")
+        and not pick_machine(all_calls, "run")
+        and not pick_machine(all_calls, "update")
+    )
+
+
+@pytest.mark.parametrize("tool", ["gws", "pandoc", "typst"])
+def test_image_adds_each_inbox_tool_at_a_pinned_version(tool):
+    text = (REPO_ROOT / "Dockerfile").read_text()
+    assert tool in text
+    assert re.search(rf"{tool}\S*\s*[=-]\s*v?\d+\.\d+", text, re.IGNORECASE), tool
+    assert "latest" not in text.lower()
+
+
+@pytest.mark.parametrize("existing", [(), ("hourly",)], ids=["create", "update"])
+def test_inbox_machine_runs_jsa_inbox_with_its_files_in_the_inbox_app(
+    inbox, monkeypatch, capsys, existing
+):
+    profile, log = inbox
+    monkeypatch.setenv("STUB_MACHINES", machines(*existing))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    all_calls = calls(log)
+    verb = "update" if existing else "run"
+    (build,) = pick(all_calls, "deploy")
+    (launch,) = pick_machine(on_app(all_calls, INBOX_APP), verb)
+    assert has_flag(launch, "--entrypoint", "jsa inbox")
+    assert has_flag(launch, "--schedule", "hourly")
+    assert has_flag(launch, "--vm-memory", "1024")
+    assert "--rm" not in launch
+    assert any(label_of(build) in arg for arg in launch)
+    files = machine_files(launch)
+    assert {Path(target).name: source for target, source in files.items()} == {
+        "config.toml": str(profile / "config.toml"),
+        "resume.docx": str(profile / "resume.docx"),
+    }
+    assert all(Path(target).is_absolute() for target in files)
+    assert all(Path(target).parent.name == "profile" for target in files)
+    # The search machine is swapped as before: no entrypoint override, no machine files.
+    (search,) = pick_machine(on_app(all_calls, "jsa-example"), verb)
+    assert "--entrypoint" not in search
+    assert not any(arg.startswith("--entrypoint=") for arg in search)
+    assert machine_files(search) == {}
+
+
+def test_each_app_is_swapped_by_its_own_hourly_machine(inbox, monkeypatch, capsys):
+    _, log = inbox
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    monkeypatch.setenv("STUB_INBOX_MACHINES", machines(None, "hourly"))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    all_calls = calls(log)
+    assert len(pick_machine(on_app(all_calls, "jsa-example"), "run")) == 1
+    assert pick_machine(on_app(all_calls, "jsa-example"), "update") == []
+    (update,) = pick_machine(on_app(all_calls, INBOX_APP), "update")
+    assert "m1" in update
+    assert "m0" not in update
+    assert pick_machine(on_app(all_calls, INBOX_APP), "run") == []
+
+
+def test_inbox_machines_without_the_hourly_schedule_do_not_count(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv("STUB_INBOX_MACHINES", machines(None, "daily"))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    inbox_calls = on_app(calls(log), INBOX_APP)
+    assert len(pick_machine(inbox_calls, "run")) == 1
+    assert pick_machine(inbox_calls, "update") == []
+
+
+def test_more_than_one_hourly_inbox_machine_is_an_error_and_changes_none(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv("STUB_INBOX_MACHINES", machines("hourly", "hourly"))
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code != 0
+    assert "m0" in output and "m1" in output
+    inbox_calls = on_app(calls(log), INBOX_APP)
+    assert pick_machine(inbox_calls, "run") == []
+    assert pick_machine(inbox_calls, "update") == []
+
+
+def test_inbox_create_retries_while_the_registry_catches_up(inbox, monkeypatch, capsys):
+    _, log = inbox
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv("STUB_INBOX_MACHINES", machines())
+    monkeypatch.setenv("STUB_RUN_FAILS", "2")
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    runs = pick_machine(on_app(calls(log), INBOX_APP), "run")
+    assert len(runs) == 3
+    assert all(has_flag(run, "--entrypoint", "jsa inbox") for run in runs)
+
+
+def test_inbox_update_retries_while_the_registry_catches_up(inbox, monkeypatch, capsys):
+    _, log = inbox
+    monkeypatch.setenv("STUB_MACHINES", machines())
+    monkeypatch.setenv("STUB_INBOX_MACHINES", machines("hourly"))
+    monkeypatch.setenv("STUB_UPDATE_FAILS", "2")
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    updates = pick_machine(on_app(calls(log), INBOX_APP), "update")
+    assert len(updates) == 3
+    assert all(machine_files(update) for update in updates)
+
+
+@pytest.mark.parametrize("existing", [(), ("hourly",)], ids=["create", "update"])
+def test_config_and_resume_never_enter_the_build_context(
+    inbox, monkeypatch, capsys, tmp_path, existing
+):
+    profile, _ = inbox
+    snapshot = tmp_path / "context"
+    monkeypatch.setenv("STUB_SNAPSHOT", str(snapshot))
+    monkeypatch.setenv("STUB_MACHINES", machines(*existing))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    staged = tree(snapshot)
+    assert staged
+    resume = (profile / "resume.docx").read_bytes()
+    config = (profile / "config.toml").read_bytes()
+    assert not [
+        name for name in staged if Path(name).name in ("resume.docx", "config.toml")
+    ]
+    assert resume not in staged.values()
+    assert config not in staged.values()
+
+
+# --- validation before building ---
+
+
+def assert_aborted_before_building(code: int, all_calls: list[list[str]]) -> None:
+    assert code != 0
+    assert launched_nothing(all_calls)
+
+
+@pytest.mark.parametrize(
+    "flags", [(), ("--dry-run",), ("--smoke",)], ids=["deploy", "dry-run", "smoke"]
+)
+def test_a_missing_resume_aborts_before_building(inbox, monkeypatch, capsys, flags):
+    profile, log = inbox
+    (profile / "resume.docx").unlink()
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert_aborted_before_building(code, calls(log))
+    assert "resume.docx" in output
+
+
+def test_an_empty_resume_aborts_before_building(inbox, monkeypatch, capsys):
+    profile, log = inbox
+    (profile / "resume.docx").write_bytes(b"")
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+    assert "resume.docx" in output
+
+
+INBOX_PROFILE_BREAKS = {
+    "tracker_spreadsheet_id": (
+        r"^tracker_spreadsheet_id\s*=.*\n",
+        "tracker_spreadsheet_id",
+    ),
+    "checklist": (r"^\[agents\.checklist\]\n(?:(?![\[#]).+\n)*", "checklist"),
+    "redline": (r"^\[agents\.redline\]\n(?:(?![\[#]).+\n)*", "redline"),
+    "inbox_app": (r'^app\s*=\s*"jsa-example-inbox"\n', "app"),
+    "drive_folder_id": (r"^drive_folder_id\s*=.*\n", "drive_folder_id"),
+    "senders": (r"^senders\s*=.*\n", "senders"),
+}
+
+
+@pytest.mark.parametrize("name", list(INBOX_PROFILE_BREAKS))
+@pytest.mark.parametrize("flags", [(), ("--dry-run",)], ids=["deploy", "dry-run"])
+def test_a_missing_inbox_profile_value_aborts_before_building(
+    inbox, monkeypatch, capsys, name, flags
+):
+    profile, log = inbox
+    pattern, mention = INBOX_PROFILE_BREAKS[name]
+    edit_config(profile, pattern, pattern=True)
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert_aborted_before_building(code, calls(log))
+    assert mention in output
+    assert "config.toml" in output
+
+
+def test_an_unknown_inbox_key_raises_at_load(inbox, monkeypatch, capsys):
+    profile, log = inbox
+    edit_config(profile, r"^senders\s*=", 'colour = "blue"\nsenders =', pattern=True)
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert_aborted_before_building(code, calls(log))
+    assert "colour" in output
+    assert "config.toml" in output
+
+
+@pytest.mark.parametrize("missing", INBOX_REQUIRED_SECRETS)
+@pytest.mark.parametrize(
+    "flags", [(), ("--dry-run",), ("--smoke",)], ids=["deploy", "dry-run", "smoke"]
+)
+def test_a_missing_inbox_secret_aborts_naming_it(
+    inbox, monkeypatch, capsys, missing, flags
+):
+    _, log = inbox
+    held = [name for name in INBOX_REQUIRED_SECRETS if name != missing]
+    monkeypatch.setenv("STUB_SECRETS", secrets_json(*held, CLAUDE_CREDENTIALS[0]))
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert_aborted_before_building(code, calls(log))
+    assert missing in output
+
+
+def test_an_inbox_app_with_no_claude_credential_aborts(inbox, monkeypatch, capsys):
+    _, log = inbox
+    monkeypatch.setenv("STUB_SECRETS", secrets_json(*INBOX_REQUIRED_SECRETS))
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+    assert all(name in output for name in CLAUDE_CREDENTIALS)
+
+
+def test_every_missing_inbox_secret_is_named(inbox, monkeypatch, capsys):
+    monkeypatch.setenv("STUB_SECRETS", "[]")
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code != 0
+    assert all(name in output for name in INBOX_REQUIRED_SECRETS)
+
+
+@pytest.mark.parametrize("credential", CLAUDE_CREDENTIALS)
+def test_either_claude_credential_satisfies_the_inbox_check(
+    inbox, monkeypatch, capsys, credential
+):
+    _, log = inbox
+    monkeypatch.setenv(
+        "STUB_SECRETS", secrets_json(*INBOX_REQUIRED_SECRETS, credential)
+    )
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    assert pick(calls(log), "deploy")
+
+
+def test_an_unreadable_secret_listing_aborts_before_building(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    monkeypatch.setenv("STUB_FAIL", "secrets")
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+
+
+def test_the_inbox_secrets_are_read_from_the_inbox_app_and_never_set(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    for flags in ((), ("--smoke",), ("--dry-run",)):
+        assert jsa_deploy(monkeypatch, capsys, *flags)[0] == 0
+    secret_calls = [
+        argv for argv in calls(log) if any(a.startswith("secret") for a in argv)
+    ]
+    assert secret_calls
+    for argv in secret_calls:
+        assert "list" in argv
+        assert not {"set", "import", "unset"} & set(argv)
+        assert has_flag(argv, "-a", INBOX_APP) or f"--app={INBOX_APP}" in argv
+
+
+def test_inbox_validation_happens_before_the_build_even_when_only_a_secret_is_missing(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    monkeypatch.setenv("STUB_SECRETS", "[]")
+    jsa_deploy(monkeypatch, capsys)
+    all_calls = calls(log)
+    assert pick(all_calls, "deploy") == []
+
+
+# --- --dry-run and --smoke ---
+
+
+def test_dry_run_lists_the_inbox_machine_files_after_the_image_files(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert launched_nothing(calls(log))
+    assert INBOX_APP in output
+    last_image_file = max(output.index(path) for path in shipped_search_files(profile))
+    assert output.index("config.toml") > last_image_file
+    assert output.index("resume.docx") > last_image_file
+
+
+def shipped_search_files(profile: Path) -> list[str]:
+    return [
+        path.relative_to(profile).as_posix()
+        for path in sorted((profile / "search").rglob("*"))
+        if path.is_file()
+    ]
+
+
+def test_dry_run_without_inbox_lists_neither_machine_file(fly, monkeypatch, capsys):
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert "resume.docx" not in output
+    assert "config.toml" not in output
+
+
+def test_smoke_leaves_both_scheduled_machines_alone(inbox, monkeypatch, capsys):
+    _, log = inbox
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv("STUB_INBOX_MACHINES", machines("hourly"))
+    code, _ = jsa_deploy(monkeypatch, capsys, "--smoke")
+    assert code == 0
+    all_calls = calls(log)
+    assert pick_machine(all_calls, "update") == []
+    runs = pick_machine(all_calls, "run")
+    assert len(runs) == 1
+    assert "--rm" in runs[0]
+    assert on_app(runs, INBOX_APP) == []
+    assert not machine_files(runs[0])
+
+
+# --- without [inbox], deploy is as before ---
+
+
+def test_without_inbox_deploy_touches_only_the_search_app(fly, monkeypatch, capsys):
+    _, log = fly
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    all_calls = calls(log)
+    assert on_app(all_calls, "jsa-example") == all_calls
+    assert not any(a.startswith("secret") for argv in all_calls for a in argv)
+    assert len(pick_machine(all_calls, "update")) == 1
+    (update,) = pick_machine(all_calls, "update")
+    assert machine_files(update) == {}
+    assert "--entrypoint" not in update
+    assert "inbox" not in output.lower()
+
+
+# --- README ---
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "consent screen",
+        "drive.file",
+        "<inbox app>",
+        "drive_folder_id",
+        "JSA_INBOX_GWS_CREDENTIALS",
+        "JSA_GWS_CREDENTIALS",
+    ],
+)
+def test_readme_walkthrough_covers_the_inbox_setup(item):
+    assert item in readme_walkthrough()

@@ -542,19 +542,25 @@ def test_a_posting_is_not_marked_as_amending_the_first_time(rdb, monkeypatch, ca
     assert "(amending)" not in output
 
 
-def test_after_the_last_posting_the_last_entry_is_offered_once_more(
+def test_deciding_the_last_posting_ends_the_session_without_a_further_prompt(
     rdb, monkeypatch, capsys
 ):
     company = name()
     url = seed(rdb, company, order=1)
-    _, output = jsa_review(monkeypatch, capsys, ["a", "", "s", "changed my mind", "q"])
-    assert output.count(company) == 2
-    assert "(amending)" in output
-    assert row(rdb, url)["decision"] == "Skip"
-    assert row(rdb, url)["feedback"] == "changed my mind"
+    stdin = Script(["a", "", "s", "changed my mind"])
+    monkeypatch.setattr(sys, "argv", ["jsa", "review"])
+    monkeypatch.setattr(sys, "stdin", stdin)
+    cli.main()
+    output = capsys.readouterr().out
+    assert output.count(company) == 1
+    assert "(amending)" not in output
+    assert row(rdb, url)["decision"] == "Apply"
+    assert stdin.lines == ["s", "changed my mind"]
 
 
-def test_the_final_pass_is_offered_only_once(rdb, monkeypatch, capsys):
+def test_the_last_posting_is_shown_once_and_later_stdin_lines_stay_unread(
+    rdb, monkeypatch, capsys
+):
     company = name()
     url = seed(rdb, company, order=1)
     stdin = Script(["a", "", "", "", "never read"])
@@ -562,9 +568,9 @@ def test_the_final_pass_is_offered_only_once(rdb, monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", stdin)
     cli.main()
     output = capsys.readouterr().out
-    assert output.count(company) == 2
+    assert output.count(company) == 1
     assert row(rdb, url)["decision"] == "Apply"
-    assert stdin.lines == ["never read"]
+    assert stdin.lines == ["", "", "never read"]
 
 
 # --- quitting -----------------------------------------------------------------
