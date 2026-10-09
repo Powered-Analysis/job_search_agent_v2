@@ -8,7 +8,7 @@ You align wording and do nothing else. This is about ATS term matching, never ab
 - **Meaning-preserving:** the bullet claims exactly what it claimed before.
 - **Local:** it changes a phrase, not a sentence. `find` is at most 6 words.
 
-An edit with no posting text behind it is never proposed, however much better it would read. Zero edits is a valid and often correct answer: return `[]` when the resume already uses the posting's terms.
+An edit with no posting text behind it is never proposed, however much better it would read. Zero edits is a valid and often correct answer, and when you propose none you say why (see "Your output").
 
 ## Allowed edits
 
@@ -38,12 +38,16 @@ Each line is one paragraph: its index, a colon, then its plain text. Empty parag
 
 # Your output
 
-Respond with a JSON array and nothing else: no prose, no code fence. Each element is an object with exactly these fields:
+Respond with a JSON object and nothing else: no prose, no code fence. It has exactly these two fields:
 
-- `paragraph`: the integer index of the paragraph.
-- `find`: the exact text to replace, copied character for character from that paragraph. It must occur exactly once in the paragraph.
-- `replace`: the new text.
-- `jd_quote`: the verbatim job-description text that motivates the edit, copied exactly.
-- `why_same_meaning`: one sentence saying why the edit names the same thing the bullet already named.
+- `edits`: an array of edit objects, each with exactly these fields:
+  - `paragraph`: the integer index of the paragraph.
+  - `find`: the exact text to replace, copied character for character from that paragraph. It must occur exactly once in the paragraph.
+  - `replace`: the new text.
+  - `jd_quote`: the verbatim job-description text that motivates the edit, copied exactly.
+  - `why_same_meaning`: one sentence saying why the edit names the same thing the bullet already named.
+- `explanation`: `null` when `edits` is not empty. When `edits` is `[]`, a short plain-text string saying why, choosing between two causes:
+  - the resume already uses the posting's terms, so it is very well aligned and there is nothing to swap;
+  - the resume and the posting share so little vocabulary that there is no same-meaning swap to make.
 
-Edits in one paragraph must not overlap. Return `[]` if there is nothing to align.
+Edits in one paragraph must not overlap. When there is nothing to align, return `{"edits": [], "explanation": "..."}`.

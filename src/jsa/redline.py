@@ -41,6 +41,14 @@ class Edit:
 
 
 @dataclass(frozen=True)
+class Proposal:
+    """What the redline agent returned: `explanation` is set exactly when `edits` is empty."""
+
+    edits: list[Edit]
+    explanation: str | None
+
+
+@dataclass(frozen=True)
 class Change:
     """Replace `[start, end)` of an edit's `find` with `text`; `start == end` inserts."""
 
@@ -187,26 +195,40 @@ def _tracked_edit(edit: Edit, paragraphs: list[str]) -> TrackedEdit:
     )
 
 
-def parse_edits(text: str) -> list[Edit]:
-    """The agent's final text as edits; anything but a JSON array of edit objects raises."""
+def _parse_edit(position: int, item: object) -> Edit:
+    if not isinstance(item, dict) or any(
+        not isinstance(item.get(name), kind) or isinstance(item.get(name), bool)
+        for name, kind in _FIELDS.items()
+    ):
+        raise JsaError(
+            f"edit {position} of the redline agent's output is not an object with "
+            + ", ".join(_FIELDS)
+        )
+    return Edit(**{name: item[name] for name in _FIELDS})
+
+
+def parse_proposal(text: str) -> Proposal:
+    """The agent's final text as a proposal; anything but a JSON `{edits, explanation}` object raises."""
     try:
         raw = json.loads(text)
     except json.JSONDecodeError as error:
         raise JsaError(f"the redline agent's output is not JSON: {error}") from None
-    if not isinstance(raw, list):
-        raise JsaError("the redline agent's output is not a JSON array")
-    edits = []
-    for position, item in enumerate(raw):
-        if not isinstance(item, dict) or any(
-            not isinstance(item.get(name), kind) or isinstance(item.get(name), bool)
-            for name, kind in _FIELDS.items()
-        ):
-            raise JsaError(
-                f"edit {position} of the redline agent's output is not an object with "
-                + ", ".join(_FIELDS)
-            )
-        edits.append(Edit(**{name: item[name] for name in _FIELDS}))
-    return edits
+    if (
+        not isinstance(raw, dict)
+        or not isinstance(raw.get("edits"), list)
+        or not isinstance(raw.get("explanation"), str | None)
+    ):
+        raise JsaError(
+            "the redline agent's output is not a JSON object with an edits array "
+            "and an explanation string or null"
+        )
+    edits = [_parse_edit(position, item) for position, item in enumerate(raw["edits"])]
+    explanation = raw["explanation"]
+    if bool(edits) == bool(explanation and explanation.strip()):
+        raise JsaError(
+            "the redline agent's explanation must be non-empty exactly when it proposes no edits"
+        )
+    return Proposal(edits, explanation)
 
 
 def assemble_redline_prompt(job_description: str | None, paragraphs: list[str]) -> str:
@@ -221,8 +243,8 @@ def assemble_redline_prompt(job_description: str | None, paragraphs: list[str]) 
     return assemble(app_template("redline.md"), slots)
 
 
-def run_redline(prompt: str, settings: AgentSettings) -> list[Edit]:
-    return parse_edits(agent_loop.run_single_turn(prompt, settings, agent="redline"))
+def run_redline(prompt: str, settings: AgentSettings) -> Proposal:
+    return parse_proposal(agent_loop.run_single_turn(prompt, settings, agent="redline"))
 
 
 def redline_resume(
@@ -240,7 +262,10 @@ def redline_resume(
     if has_unresolved_changes(document):
         return None
     paragraphs = body_paragraph_texts(document)
-    edits = run_redline(assemble_redline_prompt(job_description, paragraphs), settings)
+    proposal = run_redline(
+        assemble_redline_prompt(job_description, paragraphs), settings
+    )
+    edits = proposal.edits
     results = validate_edits(edits, paragraphs, job_description)
     tracked = [
         _tracked_edit(edit, paragraphs)
@@ -250,9 +275,12 @@ def redline_resume(
     if tracked:
         apply_edits(document, tracked)
         document.save(str(redline))
-    record = [
-        {**asdict(edit), "validation": problem}
-        for edit, problem in zip(edits, results, strict=True)
-    ]
+    record = {
+        "explanation": proposal.explanation,
+        "edits": [
+            {**asdict(edit), "validation": problem}
+            for edit, problem in zip(edits, results, strict=True)
+        ],
+    }
     edits_file.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return RedlineResult(results.count(None), len(results) - results.count(None))
