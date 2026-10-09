@@ -16,7 +16,7 @@ from claude_agent_sdk import (
 from jsa import agent_loop
 from jsa.config import search_anthropic_api_key
 from jsa.profile import AgentSettings
-from jsa.runners import RunnerResult, clip
+from jsa.runners import WALL_CLOCK_CEILING_SECONDS, RunnerResult, clip
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ class ClaudeRunner:
             tools=TOOLS,
             max_turns=MAX_TURNS,
             permission_mode="bypassPermissions",
+            wall_clock_seconds=WALL_CLOCK_CEILING_SECONDS,
             env=credential_env(),
             on_message=_trace,
         )
