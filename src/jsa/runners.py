@@ -1,7 +1,9 @@
 """What every search runner shares (PRD 01): its result and the wall-clock ceiling."""
 
+import queue
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 
 from jsa.errors import JsaError
@@ -9,7 +11,8 @@ from jsa.errors import JsaError
 # A hard stop, so a hung run can neither bill indefinitely nor block the day's later searches.
 WALL_CLOCK_CEILING_SECONDS = 3600
 # The longest a streamed runner waits for its connection to send anything, so a half-open one
-# surfaces as a transport error. Each request is also capped by the time left on the ceiling.
+# surfaces as a transport error. Each request is also capped by the time left on the ceiling,
+# and `within` abandons a read still blocked when the ceiling passes.
 READ_TIMEOUT_SECONDS = 1800
 # How often a streamed runner logs that it is still working.
 HEARTBEAT_SECONDS = 5
@@ -59,16 +62,25 @@ class Deadline:
     def elapsed(self) -> float:
         return self._clock() - self._start
 
+    def exceeded(self) -> WallClockExceeded:
+        return WallClockExceeded(
+            f"the search ran past its {self._seconds:.0f}-second ceiling"
+        )
+
     def check(self) -> None:
         if self.elapsed > self._seconds:
-            raise WallClockExceeded(
-                f"the search ran past its {self._seconds:.0f}-second ceiling"
-            )
+            raise self.exceeded()
+
+    def remaining(self) -> float:
+        """Seconds left on the ceiling; raises once it has passed."""
+        left = self._seconds - self.elapsed
+        if left < 0:
+            raise self.exceeded()
+        return left
 
     def request_timeout(self) -> float:
         """How long one request may wait on the connection: the read timeout, cut to the time left, so a stall cannot outlast the ceiling."""
-        self.check()
-        return min(READ_TIMEOUT_SECONDS, self._seconds - self.elapsed)
+        return min(READ_TIMEOUT_SECONDS, self.remaining())
 
     def heartbeat_due(self) -> bool:
         """True at most once per heartbeat interval, so the caller logs when it returns True."""
@@ -76,3 +88,52 @@ class Deadline:
             return False
         self._last_heartbeat = self.elapsed
         return True
+
+
+def within[T](events: Iterable[T], deadline: Deadline) -> Iterator[T]:
+    """Yield `events`, raising WallClockExceeded the moment the ceiling passes, even while the source is blocked in a read.
+
+    A stalled stream sends nothing, so the ceiling cannot be checked between its events. The source is read in a
+    worker thread that the caller waits on only until the ceiling; if the read never returns, the thread is
+    abandoned (it is a daemon, and its own read timeout ends it) and the source is closed once that read ends.
+    """
+    source = iter(events)
+    pulls: queue.SimpleQueue[bool] = queue.SimpleQueue()
+    results: queue.SimpleQueue[tuple[bool, object]] = queue.SimpleQueue()
+
+    def serve() -> None:
+        # True asks for the next event; False closes the source and ends the thread.
+        while pulls.get():
+            try:
+                results.put((True, next(source)))
+            except StopIteration:
+                results.put((False, None))
+            except BaseException as error:  # noqa: BLE001  # handed to the caller, who re-raises it
+                results.put((False, error))
+        if close := getattr(source, "close", None):
+            close()
+
+    worker = threading.Thread(target=serve, daemon=True)
+    worker.start()
+    reading = False
+    try:
+        while True:
+            timeout = deadline.remaining()
+            pulls.put(True)
+            reading = True
+            try:
+                more, value = results.get(timeout=timeout)
+            except queue.Empty:
+                raise deadline.exceeded() from None
+            reading = False
+            if more:
+                yield value
+            elif value is None:
+                return
+            else:
+                raise value
+    finally:
+        pulls.put(False)
+        if not reading:
+            # Idle, so the source is closed before the caller goes on (a stream left open keeps the provider working).
+            worker.join()
