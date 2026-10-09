@@ -10,7 +10,7 @@ from functools import partial
 import httpx
 from google import genai
 
-from jsa.config import api_key
+from jsa.config import SEARCH_AGENT_KEYS, api_key
 from jsa.runners import (
     READ_TIMEOUT_SECONDS,
     Deadline,
@@ -22,7 +22,6 @@ from jsa.runners import (
 
 log = logging.getLogger(__name__)
 
-KEY_NAME = "GEMINI_API_KEY"
 # Pinned (PRD 01, XC-14): the only other Deep Research agent runs past the wall-clock ceiling on this search.
 AGENT = "deep-research-preview-04-2026"
 POLL_SECONDS = 10
@@ -178,7 +177,7 @@ def _dropped(error: Exception) -> bool:
 class GeminiAgentRunner:
     def __init__(self, sleep: Callable[[float], None] = time.sleep) -> None:
         # Validated here, so a missing key raises before any request is made.
-        self._client = make_client(api_key(KEY_NAME))
+        self._client = make_client(api_key(SEARCH_AGENT_KEYS["gemini"]))
         self._sleep = sleep
         # The latest stream state, kept here so a run that raises still knows which interaction to cancel.
         self._latest = StreamState()

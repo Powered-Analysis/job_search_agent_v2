@@ -6,6 +6,13 @@ from dotenv import find_dotenv, load_dotenv
 
 from jsa.errors import JsaError
 
+# The Fly secret (and `.env` key) each search agent runs on; the runners and `jsa deploy` both read it from here.
+SEARCH_AGENT_KEYS = {
+    "perplexity": "PERPLEXITY_API_KEY",
+    "claude": "JSA_SEARCH_ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
+
 
 class MissingKeyError(JsaError, RuntimeError):
     """A runner's API key is not set; raised before any model call."""
@@ -40,7 +47,7 @@ def api_key(name: str) -> str:
 
 def search_anthropic_api_key() -> str | None:
     # Unset in development, where the Claude CLI uses its inherited credential (XC-1).
-    return os.environ.get("JSA_SEARCH_ANTHROPIC_API_KEY") or None
+    return os.environ.get(SEARCH_AGENT_KEYS["claude"]) or None
 
 
 def inbox_gws_credentials() -> str:

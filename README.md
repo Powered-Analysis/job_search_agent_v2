@@ -169,7 +169,9 @@ needs and that the inbox app holds each secret from step 7; it never sets a secr
 both scheduled machines alone.
 
 `jsa deploy` checks the search profile exactly as the cloud will before building anything, and ships
-that same directory into the image, wherever `JSA_PROFILE_DIR` points. It warns,
+that same directory into the image, wherever `JSA_PROFILE_DIR` points. It also checks that the
+search app holds `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, and the key of each agent `search.toml`
+schedules, and stops naming any it lacks; an agent the schedule never uses needs no key. It warns,
 without stopping, when the schedule leaves hours of the week unsearched, when `run_at` is after
 22:59, and when a refine proposal is pending (it will not ship).
 

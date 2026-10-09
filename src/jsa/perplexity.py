@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 
 import httpx
 
-from jsa.config import api_key
+from jsa.config import SEARCH_AGENT_KEYS, api_key
 from jsa.http import post_sse
 from jsa.runners import Deadline, RunnerError, RunnerResult, within
 from jsa.search_output import output_json_schema
@@ -15,7 +15,6 @@ from jsa.search_output import output_json_schema
 log = logging.getLogger(__name__)
 
 URL = "https://api.perplexity.ai/v1/agent"
-KEY_NAME = "PERPLEXITY_API_KEY"
 _FAILURE_EVENTS = frozenset({"response.failed", "error"})
 
 
@@ -75,7 +74,7 @@ def fold_events(events: Iterable[tuple[str, dict]]) -> StreamState:
 class PerplexityRunner:
     def __init__(self, client: httpx.Client) -> None:
         # Validated here, so a missing key raises before any request is made.
-        self._key = api_key(KEY_NAME)
+        self._key = api_key(SEARCH_AGENT_KEYS["perplexity"])
         self._client = client
 
     def run(self, prompt: str) -> RunnerResult:
