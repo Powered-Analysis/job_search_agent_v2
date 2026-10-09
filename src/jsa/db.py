@@ -341,6 +341,9 @@ def health_search_runs(conn: Connection, since: datetime) -> list[tuple]:
     ).fetchall()
 
 
+REVISE_COLUMNS = "id, company, title, location, url, decision, fit_feedback"
+
+
 def find_posting(conn: Connection, url: str) -> tuple[int, str | None] | None:
     """A UX-only read: the posting's (id, decision) for this URL's canonical form."""
     rows = conn.execute(
@@ -359,6 +362,25 @@ def review_backlog(conn: Connection) -> list[tuple]:
         ORDER BY first_seen_at, id
         """
     ).fetchall()
+
+
+def posting_by_id(conn: Connection, posting_id: int) -> tuple | None:
+    """(id, company, title, location, url, decision, fit_feedback), or None for an unknown id."""
+    rows = conn.execute(
+        f"SELECT {REVISE_COLUMNS} FROM postings WHERE id = ?", (posting_id,)
+    ).fetchall()
+    return rows[0] if rows else None
+
+
+def last_decided_posting(conn: Connection) -> tuple | None:
+    """The decided posting with the newest decided_at, ties to the highest id; same columns."""
+    rows = conn.execute(
+        f"""
+        SELECT {REVISE_COLUMNS} FROM postings WHERE decision IS NOT NULL
+        ORDER BY decided_at DESC, id DESC LIMIT 1
+        """
+    ).fetchall()
+    return rows[0] if rows else None
 
 
 def mark_closed(conn: Connection, posting_id: int) -> None:
