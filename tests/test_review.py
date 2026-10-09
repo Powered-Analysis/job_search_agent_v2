@@ -1013,3 +1013,419 @@ def test_a_closed_posting_stays_closed_for_the_next_session(
     _, output = jsa_review(monkeypatch, capsys, [])
     assert dead not in output
     assert closed_at(rdb, dead_url) is not None
+
+
+# --- jsa revise ---------------------------------------------------------------
+
+
+def posting_id(conn, url):
+    return conn.execute(
+        "SELECT id FROM postings WHERE canonical_url = ?", (canonicalize_url(url),)
+    ).fetchone()[0]
+
+
+def decide(conn, url, decision, feedback=None, decided_at=LONG_AGO):
+    """Give a seeded posting a decision decided at a chosen time."""
+    db.record_decision(conn, url, decision, feedback)
+    conn.execute(
+        "UPDATE postings SET decided_at = ? WHERE canonical_url = ?",
+        (decided_at, canonicalize_url(url)),
+    )
+
+
+def jsa_revise(monkeypatch, capsys, args, lines=()):
+    """Run `jsa revise <args>` in-process with scripted input; returns (exit code, output, stdin)."""
+    stdin = Script(lines)
+    monkeypatch.setattr(sys, "argv", ["jsa", "revise", *args])
+    monkeypatch.setattr(sys, "stdin", stdin)
+    code = 0
+    try:
+        cli.main()
+    except SystemExit as exit_:
+        code = exit_.code if isinstance(exit_.code, int) else 1
+    captured = capsys.readouterr()
+    return code, captured.out + captured.err, stdin
+
+
+def test_revise_by_id_prefills_the_note_and_offers_the_decision_as_the_default(
+    rdb, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Apply", "remote only")
+    code, output, _ = jsa_revise(
+        monkeypatch, capsys, ["--id", str(posting_id(rdb, url))], ["", ""]
+    )
+    assert code == 0
+    assert "Enter keeps Apply" in output
+    assert FEEDBACK_PROMPT.split(":")[0] in output
+    assert "[remote only]" in output.split("Enter keeps Apply", 1)[1]
+
+
+def test_revise_with_bare_enters_keeps_the_decision_and_note(rdb, monkeypatch, capsys):
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Skip", "too junior")
+    jsa_revise(monkeypatch, capsys, ["--id", str(posting_id(rdb, url))], ["", ""])
+    kept = row(rdb, url)
+    assert kept["decision"] == "Skip"
+    assert kept["feedback"] == "too junior"
+    assert kept["decided_at"] > LONG_AGO
+
+
+def test_revise_updates_decision_note_and_decided_at_together(rdb, monkeypatch, capsys):
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Apply", "great fit")
+    add_finding(rdb, url)
+    code, _, _ = jsa_revise(
+        monkeypatch,
+        capsys,
+        ["--id", str(posting_id(rdb, url))],
+        ["s", "on reflection, too senior"],
+    )
+    assert code == 0
+    amended = row(rdb, url)
+    assert amended["decision"] == "Skip"
+    assert amended["feedback"] == "on reflection, too senior"
+    assert amended["decided_at"] > LONG_AGO
+    assert finding_decisions(rdb, url) == ["Skip"]
+
+
+@pytest.mark.parametrize(
+    ("typed", "decision", "feedback"),
+    [
+        (":s changed my mind", "Skip", "changed my mind"),
+        (":APPLY", "Apply", None),
+        ("a fresh note", "Skip", "a fresh note"),
+        ("", "Skip", None),
+    ],
+    ids=["flip-with-note", "flip-alone", "note-only", "cleared-note"],
+)
+def test_revise_feedback_commands_work_as_in_review(
+    rdb, monkeypatch, capsys, typed, decision, feedback
+):
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Skip", "old note")
+    jsa_revise(monkeypatch, capsys, ["--id", str(posting_id(rdb, url))], ["", typed])
+    amended = row(rdb, url)
+    assert amended["decision"] == decision
+    assert amended["feedback"] == (feedback if typed != "" else "old note")
+
+
+def test_revise_amends_only_the_named_posting(rdb, monkeypatch, capsys):
+    target_url = seed(rdb, name(), order=1)
+    other_url = seed(rdb, name(), order=2)
+    decide(rdb, target_url, "Apply", "one")
+    decide(rdb, other_url, "Apply", "two")
+    jsa_revise(
+        monkeypatch, capsys, ["--id", str(posting_id(rdb, target_url))], ["s", ""]
+    )
+    assert row(rdb, target_url)["decision"] == "Skip"
+    assert row(rdb, other_url) == {
+        "decision": "Apply",
+        "feedback": "two",
+        "decided_at": LONG_AGO,
+    }
+
+
+def test_revise_shows_the_posting_marked_amending_and_opens_it_in_chrome(
+    rdb, monkeypatch, capsys, chrome
+):
+    company = name()
+    url = seed(rdb, company, order=1, title="Principal Engineer", location="Berlin")
+    decide(rdb, url, "Apply")
+    _, output, _ = jsa_revise(
+        monkeypatch, capsys, ["--id", str(posting_id(rdb, url))], ["q"]
+    )
+    assert company in output
+    assert "Principal Engineer" in output
+    assert "Berlin" in output
+    assert url in output
+    assert "(amending)" in output
+    assert chrome() == [f"-a Google Chrome {url}"]
+
+
+def test_revise_does_not_stop_when_chrome_cannot_be_opened(
+    rdb, monkeypatch, capsys, tmp_path
+):
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Apply")
+    monkeypatch.setenv("PATH", str(tmp_path / "nowhere"))
+    code, _, _ = jsa_revise(
+        monkeypatch, capsys, ["--id", str(posting_id(rdb, url))], ["s", "note"]
+    )
+    assert code == 0
+    assert row(rdb, url)["decision"] == "Skip"
+
+
+def test_revise_last_picks_the_newest_decided_at(rdb, monkeypatch, capsys):
+    older_url = seed(rdb, name(), order=1)
+    newest = name()
+    newest_url = seed(rdb, newest, order=2)
+    newer_url = seed(rdb, name(), order=3)
+    decide(rdb, older_url, "Apply", decided_at="2026-02-01T00:00:00.000Z")
+    decide(rdb, newest_url, "Apply", decided_at="2026-03-01T00:00:00.000Z")
+    decide(rdb, newer_url, "Apply", decided_at="2026-02-15T00:00:00.000Z")
+    _, output, _ = jsa_revise(monkeypatch, capsys, ["--last"], ["s", "second thoughts"])
+    assert newest in output
+    assert row(rdb, newest_url)["decision"] == "Skip"
+    assert row(rdb, newest_url)["feedback"] == "second thoughts"
+    assert row(rdb, older_url)["decision"] == "Apply"
+    assert row(rdb, newer_url)["decision"] == "Apply"
+
+
+def test_revise_last_breaks_ties_with_the_highest_id(rdb, monkeypatch, capsys):
+    stamp = "2026-02-01T00:00:00.000Z"
+    urls = [seed(rdb, name(), order=order) for order in (1, 2, 3)]
+    for url in urls:
+        decide(rdb, url, "Apply", decided_at=stamp)
+    highest = max(urls, key=lambda url: posting_id(rdb, url))
+    jsa_revise(monkeypatch, capsys, ["--last"], ["s", ""])
+    assert [row(rdb, url)["decision"] for url in urls if url != highest] == [
+        "Apply",
+        "Apply",
+    ]
+    assert row(rdb, highest)["decision"] == "Skip"
+
+
+def test_revise_last_ignores_undecided_postings(rdb, monkeypatch, capsys):
+    decided = name()
+    decided_url = seed(rdb, decided, order=1)
+    decide(rdb, decided_url, "Apply")
+    undecided_url = seed(rdb, name(), order=2)
+    _, output, _ = jsa_revise(monkeypatch, capsys, ["--last"], ["q"])
+    assert decided in output
+    assert row(rdb, undecided_url)["decision"] is None
+
+
+def test_revise_last_picks_the_posting_just_amended_by_revise(rdb, monkeypatch, capsys):
+    first = name()
+    first_url = seed(rdb, first, order=1)
+    second_url = seed(rdb, name(), order=2)
+    decide(rdb, first_url, "Apply", decided_at="2026-02-01T00:00:00.000Z")
+    decide(rdb, second_url, "Apply", decided_at="2026-03-01T00:00:00.000Z")
+    jsa_revise(monkeypatch, capsys, ["--id", str(posting_id(rdb, first_url))], ["", ""])
+    _, output, _ = jsa_revise(monkeypatch, capsys, ["--last"], ["q"])
+    assert first in output
+    assert row(rdb, second_url)["decided_at"] == "2026-03-01T00:00:00.000Z"
+
+
+def test_revise_last_picks_the_posting_just_decided_by_review(rdb, monkeypatch, capsys):
+    old_url = seed(rdb, name(), order=1, decision="Skip")
+    fresh = name()
+    seed(rdb, fresh, order=2)
+    jsa_review(monkeypatch, capsys, ["a", "", "q"])
+    _, output, _ = jsa_revise(monkeypatch, capsys, ["--last"], ["q"])
+    assert fresh in output
+    assert row(rdb, old_url)["decided_at"] == LONG_AGO
+
+
+@pytest.mark.parametrize("args", [["--id", "1", "--last"], []], ids=["both", "neither"])
+def test_revise_needs_exactly_one_of_id_and_last(rdb, monkeypatch, capsys, args):
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Apply", "keep")
+    code, output, stdin = jsa_revise(monkeypatch, capsys, args, ["s", "changed"])
+    assert code == 2
+    assert "usage" in output.lower()
+    assert "Traceback" not in output
+    assert stdin.reads == 0
+    assert row(rdb, url)["feedback"] == "keep"
+    assert row(rdb, url)["decided_at"] == LONG_AGO
+
+
+@pytest.mark.parametrize("bad_id", ["abc", "1.5"])
+def test_revise_rejects_an_id_that_is_not_a_number(rdb, monkeypatch, capsys, bad_id):
+    code, output, stdin = jsa_revise(monkeypatch, capsys, ["--id", bad_id], ["s"])
+    assert code != 0
+    assert "Traceback" not in output
+    assert stdin.reads == 0
+
+
+def test_revise_of_an_undecided_posting_fails_pointing_to_review(
+    rdb, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    code, output, stdin = jsa_revise(
+        monkeypatch, capsys, ["--id", str(posting_id(rdb, url))], ["a", "note"]
+    )
+    assert code == 1
+    assert "jsa review" in output
+    assert len(output.strip().splitlines()) == 1
+    assert "Traceback" not in output
+    assert stdin.reads == 0
+    assert row(rdb, url) == {"decision": None, "feedback": None, "decided_at": None}
+
+
+def test_revise_of_an_unknown_id_fails_in_one_line_and_changes_no_row(
+    rdb, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Apply", "keep")
+    unknown = posting_id(rdb, url) + 1000
+    code, output, stdin = jsa_revise(
+        monkeypatch, capsys, ["--id", str(unknown)], ["s", "changed"]
+    )
+    assert code == 1
+    assert len(output.strip().splitlines()) == 1
+    assert str(unknown) in output
+    assert "Traceback" not in output
+    assert stdin.reads == 0
+    assert row(rdb, url) == {
+        "decision": "Apply",
+        "feedback": "keep",
+        "decided_at": LONG_AGO,
+    }
+
+
+def test_revise_last_with_no_decided_postings_fails_in_one_line(
+    rdb, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    code, output, stdin = jsa_revise(monkeypatch, capsys, ["--last"], ["a", "note"])
+    assert code == 1
+    assert len(output.strip().splitlines()) == 1
+    assert "Traceback" not in output
+    assert stdin.reads == 0
+    assert row(rdb, url) == {"decision": None, "feedback": None, "decided_at": None}
+
+
+def test_revise_last_on_an_empty_database_fails_in_one_line(rdb, monkeypatch, capsys):
+    code, output, _ = jsa_revise(monkeypatch, capsys, ["--last"])
+    assert code == 1
+    assert len(output.strip().splitlines()) == 1
+    assert "Traceback" not in output
+
+
+@pytest.mark.parametrize("ending", ["ctrl-d", "ctrl-c"])
+@pytest.mark.parametrize(
+    "where",
+    ["decision prompt", "feedback prompt", "quit key", "back at feedback then quit"],
+)
+def test_revise_quitting_leaves_the_posting_as_it_was(
+    rdb, monkeypatch, capsys, where, ending
+):
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Apply", "original note")
+    end = [INTERRUPT] if ending == "ctrl-c" else []
+    script = {
+        "decision prompt": end,
+        "feedback prompt": ["s", *end],
+        "quit key": ["q"],
+        "back at feedback then quit": ["s", ":b", "q"],
+    }[where]
+    code, output, _ = jsa_revise(
+        monkeypatch, capsys, ["--id", str(posting_id(rdb, url))], script
+    )
+    assert code == 0
+    assert "Traceback" not in output
+    assert row(rdb, url) == {
+        "decision": "Apply",
+        "feedback": "original note",
+        "decided_at": LONG_AGO,
+    }
+
+
+def test_revise_reprompts_on_invalid_choices(rdb, monkeypatch, capsys):
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Apply", "note")
+    jsa_revise(
+        monkeypatch,
+        capsys,
+        ["--id", str(posting_id(rdb, url))],
+        ["x", "nope", "s", "new note"],
+    )
+    assert row(rdb, url)["decision"] == "Skip"
+    assert row(rdb, url)["feedback"] == "new note"
+
+
+def test_revise_back_at_the_feedback_prompt_returns_to_the_decision_prompt(
+    rdb, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Apply", "note")
+    jsa_revise(
+        monkeypatch,
+        capsys,
+        ["--id", str(posting_id(rdb, url))],
+        ["s", ":b", "s", "second try"],
+    )
+    assert row(rdb, url)["decision"] == "Skip"
+    assert row(rdb, url)["feedback"] == "second try"
+
+
+def test_a_revised_posting_stays_out_of_the_review_backlog(rdb, monkeypatch, capsys):
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Apply")
+    jsa_revise(monkeypatch, capsys, ["--id", str(posting_id(rdb, url))], ["s", "x"])
+    _, output = jsa_review(monkeypatch, capsys, [])
+    assert EMPTY_MESSAGE in output
+
+
+def test_revise_runs_end_to_end_as_a_real_command(db_url, tmp_path):
+    drop_all_tables(db_url)
+    conn = db.connect()
+    url = seed(conn, name(), order=1)
+    decide(conn, url, "Apply", "piped note")
+    env = {**os.environ, "TURSO_DATABASE_URL": db_url}
+    result = subprocess.run(
+        [venv_script("jsa"), "revise", "--last"],
+        input="x\ns\n:a still good\n",
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert row(conn, url)["decision"] == "Apply"
+    assert row(conn, url)["feedback"] == "still good"
+    assert row(conn, url)["decided_at"] > LONG_AGO
+    conn.close()
+
+
+def test_revise_exits_non_zero_as_a_real_command_for_an_undecided_posting(
+    db_url, tmp_path
+):
+    drop_all_tables(db_url)
+    conn = db.connect()
+    url = seed(conn, name(), order=1)
+    env = {**os.environ, "TURSO_DATABASE_URL": db_url}
+    result = subprocess.run(
+        [venv_script("jsa"), "revise", "--id", str(posting_id(conn, url))],
+        input="a\n\n",
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "jsa review" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert row(conn, url)["decision"] is None
+    conn.close()
+
+
+def test_revise_is_listed_in_the_help():
+    result = subprocess.run(
+        [venv_script("jsa"), "--help"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "revise" in result.stdout
+
+
+def test_revise_makes_no_model_call_and_no_http(rdb, web, monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)
+    url = seed(rdb, name(), order=1)
+    decide(rdb, url, "Apply")
+    code, _, _ = jsa_revise(
+        monkeypatch, capsys, ["--id", str(posting_id(rdb, url))], ["s", "x"]
+    )
+    assert code == 0
+    assert web.requests == []

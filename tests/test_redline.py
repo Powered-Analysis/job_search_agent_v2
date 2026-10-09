@@ -629,7 +629,7 @@ def test_each_change_has_a_comment_with_its_quote_and_its_reason(tmp_path, stand
     assert ids and ids <= anchored
 
 
-def test_one_edit_with_several_separate_changes_gives_each_change_its_own_comment(
+def test_one_edit_with_several_separate_changes_gets_one_comment_around_all_of_them(
     tmp_path, stand_in
 ):
     def build(document):
@@ -646,11 +646,21 @@ def test_one_edit_with_several_separate_changes_gives_each_change_its_own_commen
     ran = run(tmp_path, stand_in, [as_dict(multi)], build=build, jd=jd)
     assert ran.outcome.applied == 1
     comments = comments_of(ran.redline).findall("w:comment", NS)
-    assert len(comments) == 2
-    for comment in comments:
-        text = "".join(comment.itertext())
-        assert "Constructed the Quuxlate system" in text
-        assert "MULTI-WHY" in text
+    assert len(comments) == 1
+    text = "".join(comments[0].itertext())
+    assert "Constructed the Quuxlate system" in text
+    assert "MULTI-WHY" in text
+    body = body_of(ran.redline)
+    comment_id = comments[0].get(f"{{{W}}}id")
+    order = list(body.iter())
+    revisions = [
+        order.index(node) for node in body.xpath("//w:ins | //w:del", namespaces=NS)
+    ]
+    assert len(revisions) >= 2
+    [start] = body.xpath(f"//w:commentRangeStart[@w:id='{comment_id}']", namespaces=NS)
+    [end] = body.xpath(f"//w:commentRangeEnd[@w:id='{comment_id}']", namespaces=NS)
+    assert order.index(start) < min(revisions)
+    assert order.index(end) > max(revisions)
     assert view_of(ran.redline, "reject") == [
         "Built Quuxlate platform fast, then shipped."
     ]

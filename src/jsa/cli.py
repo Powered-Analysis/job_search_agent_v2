@@ -24,7 +24,7 @@ from jsa.inbox import inbox
 from jsa.packet import build_packets
 from jsa.refetch import refetch
 from jsa.refine import accept, refine, reject
-from jsa.review import review
+from jsa.review import review, revise
 from jsa.search import RUNNERS, Summary, search
 from jsa.tracker import track
 
@@ -92,6 +92,10 @@ def _inbox(args: argparse.Namespace) -> None:
 def _review(args: argparse.Namespace) -> None:
     with make_client() as client:
         review(client)
+
+
+def _revise(args: argparse.Namespace) -> None:
+    revise(posting_id=args.id, last=args.last)
 
 
 def _packet(args: argparse.Namespace) -> None:
@@ -196,6 +200,15 @@ def main() -> None:
     commands.add_parser(
         "review", help="decide Apply or Skip on each undecided posting"
     ).set_defaults(run=_review)
+    revise_command = commands.add_parser(
+        "revise", help="amend the decision and feedback of a decided posting"
+    )
+    revise_modes = revise_command.add_mutually_exclusive_group(required=True)
+    revise_modes.add_argument("--id", type=_positive_int, help="the posting's id")
+    revise_modes.add_argument(
+        "--last", action="store_true", help="the posting decided most recently"
+    )
+    revise_command.set_defaults(run=_revise)
     packet = commands.add_parser(
         "packet", help="create a folder with the job description and a resume copy"
     )
