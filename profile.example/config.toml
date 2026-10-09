@@ -15,8 +15,11 @@ app    = "jsa-example"
 region = "iad"
 
 # The jobs mailbox you email postings to; only these senders (with DMARC passing) are read.
+# `app` is the inbox's Fly app, and `drive_folder_id` the Drive packets folder's id.
 # [inbox]
-# senders = ["jordan.example@example.com"]
+# app             = "jsa-example-inbox"
+# senders         = ["jordan.example@example.com"]
+# drive_folder_id = "replace-with-your-folder-id"
 
 # Any Claude model that accepts an effort setting will run; the app keeps no list.
 # Recommended: claude-fable-5-1 at "medium" for the resume checklist.

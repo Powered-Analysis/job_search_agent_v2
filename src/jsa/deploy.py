@@ -1,4 +1,4 @@
-"""`jsa deploy` (PRD 06): validate the search profile as the cloud will, then build the image and swap it onto the scheduled machine."""
+"""`jsa deploy` (PRD 06): validate the profile as the cloud will, then build the image and swap it onto the scheduled machines."""
 
 import json
 import shutil
@@ -12,13 +12,20 @@ from time import sleep
 from jsa.config import fly_bin
 from jsa.errors import JsaError
 from jsa.profile import (
+    Config,
     FlyConfig,
     Schedule,
     SearchConfig,
+    base_resume,
+    checklist_settings,
     fly_settings,
+    inbox_app,
+    inbox_drive_folder,
     load_config,
     load_search_config,
     profile_dir,
+    redline_settings,
+    tracker_spreadsheet_id,
 )
 from jsa.refine import proposal_pending, refine_dir
 from jsa.search_prompt import SEARCH_DIR, assemble_search_prompt_for
@@ -40,6 +47,17 @@ BUILD_INPUTS = (
     "uv.lock",
     "src",
 )
+# The inbox machine's profile files, set as machine files so they never enter the image (XC-11).
+# The image's working directory is /app, where the app looks for `profile/`.
+INBOX_FILES = ("config.toml", "resume.docx")
+INBOX_ENTRYPOINT = "jsa inbox"
+INBOX_SECRETS = (
+    "TURSO_DATABASE_URL",
+    "TURSO_AUTH_TOKEN",
+    "JSA_GWS_CREDENTIALS",
+    "JSA_INBOX_GWS_CREDENTIALS",
+)
+INBOX_CLAUDE_SECRETS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 _WEEK_MINUTES = 7 * 24 * 60
 _DAY_MINUTES = 24 * 60
 
@@ -116,12 +134,55 @@ def shipped_files() -> list[str]:
     )
 
 
-def validate() -> tuple[FlyConfig, list[str]]:
-    """Load and assemble exactly as the cloud will (XC-13); raises before any build."""
+def _validate_inbox(config: Config) -> str:
+    """The inbox app's name, once everything the inbox machine needs is in the profile."""
+    app = inbox_app(config)
+    inbox_drive_folder(config)
+    base_resume()
+    tracker_spreadsheet_id()
+    checklist_settings(config)
+    redline_settings(config)
+    return app
+
+
+def _secret_names(app: str) -> set[str]:
+    try:
+        secrets = json.loads(_fly(["secrets", "list", "--json"], app, capture=True))
+        return {secret["name"] for secret in secrets}
+    except ValueError, KeyError, TypeError:
+        raise JsaError("fly secrets list did not return a list of secrets") from None
+
+
+def _check_inbox_secrets(app: str) -> None:
+    """Aborts when the inbox app lacks a secret; deploy never sets one."""
+    held = _secret_names(app)
+    missing = [name for name in INBOX_SECRETS if name not in held]
+    if not held.intersection(INBOX_CLAUDE_SECRETS):
+        missing.append(" or ".join(INBOX_CLAUDE_SECRETS))
+    if missing:
+        raise JsaError(
+            f"the inbox app {app} lacks these secrets: {', '.join(missing)}. "
+            "Stage them from .env first (README, set up the inbox)."
+        )
+
+
+def validate() -> tuple[FlyConfig, str | None, list[str]]:
+    """Load and assemble exactly as the cloud will (XC-13); raises before any build.
+
+    Returns the search app's Fly settings, the inbox app's name (None without `[inbox]`), and warnings.
+    """
     config = load_search_config()
     assemble_search_prompt_for(config, "the deploy-time check")
-    fly = fly_settings(load_config())
-    return fly, deploy_warnings(config, pending=proposal_pending(refine_dir()))
+    profile = load_config()
+    fly = fly_settings(profile)
+    app = _validate_inbox(profile) if profile.inbox is not None else None
+    if app is not None:
+        _check_inbox_secrets(app)
+    return (
+        fly,
+        app,
+        deploy_warnings(config, pending=proposal_pending(refine_dir())),
+    )
 
 
 def _fly(args: Sequence[str], app: str, *, capture: bool = False) -> str:
@@ -180,11 +241,12 @@ def _scheduled_machines(app: str) -> list[str]:
         raise JsaError("fly machine list did not return a list of machines") from None
 
 
-def _swap_in(image: str, fly: FlyConfig) -> None:
-    ids = _scheduled_machines(fly.app)
+def _swap_in(image: str, app: str, region: str, *options: str) -> None:
+    """Create or update the app's one `hourly` machine; `options` go on both the create and the update."""
+    ids = _scheduled_machines(app)
     if len(ids) > 1:
         raise JsaError(
-            f"{len(ids)} machines carry the {SCHEDULE} schedule in {fly.app} "
+            f"{len(ids)} machines carry the {SCHEDULE} schedule in {app} "
             f"({', '.join(ids)}). Remove all but one in Fly, then deploy again."
         )
     if not ids:
@@ -198,11 +260,12 @@ def _swap_in(image: str, fly: FlyConfig) -> None:
                 "--vm-memory",
                 MEMORY_MB,
                 "--region",
-                fly.region,
+                region,
+                *options,
             ],
-            fly.app,
+            app,
         )
-        print(f"Created the {SCHEDULE} machine from {image}.")
+        print(f"Created the {SCHEDULE} machine from {image} in {app}.")
         return
     _launch(
         [
@@ -216,10 +279,24 @@ def _swap_in(image: str, fly: FlyConfig) -> None:
             "--schedule",
             SCHEDULE,
             "--yes",
+            *options,
         ],
-        fly.app,
+        app,
     )
-    print(f"Updated machine {ids[0]} to {image}.")
+    print(f"Updated machine {ids[0]} to {image} in {app}.")
+
+
+def inbox_machine_files() -> dict[str, Path]:
+    """Where each inbox machine file lands in the machine, and the profile file it comes from."""
+    return {f"/app/profile/{name}": profile_dir() / name for name in INBOX_FILES}
+
+
+def _inbox_options() -> list[str]:
+    files = [
+        f"--file-local={target}={source}"
+        for target, source in inbox_machine_files().items()
+    ]
+    return ["--entrypoint", INBOX_ENTRYPOINT, *files]
 
 
 def _smoke(image: str, fly: FlyConfig) -> None:
@@ -243,17 +320,26 @@ def _smoke(image: str, fly: FlyConfig) -> None:
 
 
 def deploy(*, dry_run: bool, smoke: bool) -> None:
-    fly, warnings = validate()
+    fly, inbox, warnings = validate()
     print("The search profile is valid.")
+    if inbox is not None:
+        print(f"The inbox profile and the {inbox} app's secrets are in place.")
     for warning in warnings:
         print(f"warning: {warning}")
     if dry_run:
         print("Files that would ship:")
         for path in shipped_files():
             print(f"  {path}")
+        if inbox is not None:
+            print(f"Files that would be set on the {inbox} machine:")
+            for target, source in inbox_machine_files().items():
+                print(f"  {target} (from {source})")
         return
+    # The inbox machine runs this same image from the search app's registry; Fly shares it across the organization's apps.
     image = _build_and_push(fly.app)
     if smoke:
         _smoke(image, fly)
-    else:
-        _swap_in(image, fly)
+        return
+    _swap_in(image, fly.app, fly.region)
+    if inbox is not None:
+        _swap_in(image, inbox, fly.region, *_inbox_options())
