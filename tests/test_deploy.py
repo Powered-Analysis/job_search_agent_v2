@@ -1016,6 +1016,59 @@ def test_image_installs_no_dev_dependencies():
     assert not any("--dev" in a.split() or "--all-groups" in a for a in installs)
 
 
+def tool_install_run() -> str:
+    """The RUN instruction that installs the inbox's external tools (gws, pandoc, typst)."""
+    runs = [a for k, a in dockerfile_instructions() if k == "RUN" and "pandoc" in a]
+    assert len(runs) == 1
+    return runs[0]
+
+
+def test_image_carries_gws_pandoc_and_typst():
+    run = tool_install_run()
+    for tool in ("gws", "pandoc", "typst"):
+        assert tool in run
+    # The pinned releases are fetched over HTTPS.
+    assert "https://" in run
+
+
+def test_image_purges_curl_and_xz_in_the_layer_that_installs_the_tools():
+    # Purging in a later layer would leave the packages in the image's earlier layer.
+    run = tool_install_run()
+    purges = re.findall(r"apt-get purge\b[^&|;]*", run)
+    assert purges
+    purged = {w for p in purges for w in p.split()}
+    assert {"curl", "xz-utils"} <= purged
+
+
+def test_image_purges_curl_and_xz_only_after_the_last_download_and_unpack():
+    run = tool_install_run()
+    before, _, after = run.partition("apt-get purge")
+    assert "xz-utils" in before
+    assert "curl " in before
+    assert "--xz" in before
+    # Nothing after the purge still downloads or unpacks.
+    assert not re.search(r"\b(curl|tar)\b", after.partition("&&")[2])
+
+
+def test_image_keeps_ca_certificates_for_https():
+    run = tool_install_run()
+    assert "ca-certificates" in run
+    purges = re.findall(r"apt-get purge\b[^&|;]*", run)
+    assert not any("ca-certificates" in p for p in purges)
+
+
+def test_image_installs_curl_and_xz_nowhere_else():
+    for keyword, args in dockerfile_instructions():
+        if keyword == "RUN" and args != tool_install_run():
+            assert not re.search(r"\b(curl|xz-utils)\b", args)
+
+
+def test_image_leaves_no_download_cache_or_apt_lists_behind():
+    run = tool_install_run()
+    assert "rm -rf" in run.split("apt-get purge", 1)[1]
+    assert "/var/lib/apt/lists" in run.split("apt-get purge", 1)[1]
+
+
 def test_image_sets_no_tz():
     for keyword, args in dockerfile_instructions():
         if keyword in ("ENV", "ARG"):
