@@ -4,6 +4,7 @@ The Claude Agent SDK is replaced at its one entry point, `agent_loop.query`, so 
 """
 
 import ast
+import asyncio
 import logging
 import os
 import re
@@ -30,7 +31,7 @@ from jsa import agent_loop, cli, db
 from jsa.agent_loop import AgentError
 from jsa.claude import ClaudeRunner
 from jsa.profile import AgentSettings
-from jsa.runners import RunnerResult
+from jsa.runners import WALL_CLOCK_CEILING_SECONDS, RunnerResult, WallClockExceeded
 
 SETTINGS = AgentSettings(model="claude-sonnet-5-5", effort="low")
 SEARCH_KEY = "sk-ant-search-key"
@@ -517,3 +518,116 @@ def test_a_profile_without_the_claude_table_fails_before_any_model_call_or_run_r
     assert "search.toml" in err
     assert world.sdk.calls == []
     assert rows(world.url, "SELECT COUNT(*) FROM search_runs") == [(0,)]
+
+
+# --- each caller of the shared loop supplies its own wall-clock limit (issue #33; PRD 01 "Timeouts/limits", XC-12) ---
+
+
+@pytest.fixture
+def limits(monkeypatch):
+    """Records every wall-clock limit the loop arms; `shrink` swaps one for a tiny real one."""
+    armed = []
+    real_timeout = asyncio.timeout
+    shrink = {}
+
+    def timeout(delay):
+        armed.append(delay)
+        return real_timeout(shrink.get(delay, delay))
+
+    monkeypatch.setattr(asyncio, "timeout", timeout)
+    return SimpleNamespace(armed=armed, shrink=shrink)
+
+
+def hang(sdk):
+    async def query(*, prompt, options=None, **_ignored):
+        sdk.calls.append(SimpleNamespace(prompt=prompt, options=options))
+        await asyncio.sleep(3600)
+        yield result_message()
+
+    return query
+
+
+def slow_but_finishing(sdk, seconds):
+    async def query(*, prompt, options=None, **_ignored):
+        sdk.calls.append(SimpleNamespace(prompt=prompt, options=options))
+        await asyncio.sleep(seconds)
+        yield result_message(result="late but whole")
+
+    return query
+
+
+def test_the_search_runner_hands_the_loop_the_3600_second_ceiling(sdk, limits):
+    ClaudeRunner(SETTINGS).run("p")
+    assert WALL_CLOCK_CEILING_SECONDS == 3600
+    assert limits.armed == [3600]
+
+
+def test_run_agent_stops_a_hung_run_at_the_limit_its_caller_passed(sdk, monkeypatch):
+    monkeypatch.setattr(agent_loop, "query", hang(sdk))
+    with pytest.raises(WallClockExceeded):
+        agent_loop.run_agent(
+            "p",
+            SETTINGS,
+            tools=[],
+            max_turns=1,
+            permission_mode="bypassPermissions",
+            wall_clock_seconds=0.05,
+        )
+
+
+def test_run_agent_uses_the_limit_given_not_the_searchs_ceiling(sdk, limits):
+    agent_loop.run_agent(
+        "p",
+        SETTINGS,
+        tools=[],
+        max_turns=1,
+        permission_mode="bypassPermissions",
+        wall_clock_seconds=120,
+    )
+    assert limits.armed == [120]
+
+
+def test_a_run_inside_its_limit_is_not_cut_short(sdk, monkeypatch):
+    monkeypatch.setattr(agent_loop, "query", slow_but_finishing(sdk, 0.05))
+    result = agent_loop.run_agent(
+        "p",
+        SETTINGS,
+        tools=[],
+        max_turns=1,
+        permission_mode="bypassPermissions",
+        wall_clock_seconds=30,
+    )
+    assert result.text == "late but whole"
+
+
+def test_run_agent_given_no_limit_runs_unbounded(sdk, monkeypatch, limits):
+    monkeypatch.setattr(agent_loop, "query", slow_but_finishing(sdk, 0.2))
+    result = agent_loop.run_agent(
+        "p", SETTINGS, tools=[], max_turns=1, permission_mode="bypassPermissions"
+    )
+    assert result.text == "late but whole"
+    assert limits.armed == [None]
+
+
+def test_the_single_turn_callers_arm_no_wall_clock_limit(sdk, limits):
+    agent_loop.run_single_turn("p", SETTINGS, agent="checklist")
+    assert limits.armed == [None]
+
+
+def test_a_hung_claude_search_closes_the_run_failed_and_inserts_nothing(
+    world, monkeypatch, capsys, limits
+):
+    live = world.boards.job()
+    world.sdk.answers(
+        '{"postings": [{"company": "Acme", "title": "Staff Engineer", '
+        f'"url": "{live}"}}]}}'
+    )
+    limits.shrink[WALL_CLOCK_CEILING_SECONDS] = 0.05
+    monkeypatch.setattr(agent_loop, "query", hang(world.sdk))
+    code, _out, _err = jsa_search_claude(monkeypatch, capsys)
+    assert code != 0
+    assert [r[0] for r in rows(world.url, "SELECT outcome FROM search_runs")] == [
+        "failed"
+    ]
+    assert rows(world.url, "SELECT COUNT(*) FROM postings") == [(0,)]
+    assert rows(world.url, "SELECT COUNT(*) FROM search_findings") == [(0,)]
