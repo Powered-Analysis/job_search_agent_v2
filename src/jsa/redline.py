@@ -216,7 +216,8 @@ def parse_proposal(text: str) -> Proposal:
     if (
         not isinstance(raw, dict)
         or not isinstance(raw.get("edits"), list)
-        or not isinstance(raw.get("explanation"), str | None)
+        or "explanation" not in raw
+        or not isinstance(raw["explanation"], str | None)
     ):
         raise JsaError(
             "the redline agent's output is not a JSON object with an edits array "
@@ -224,7 +225,9 @@ def parse_proposal(text: str) -> Proposal:
         )
     edits = [_parse_edit(position, item) for position, item in enumerate(raw["edits"])]
     explanation = raw["explanation"]
-    if bool(edits) == bool(explanation and explanation.strip()):
+    # `null`, not an empty string, is how a reply with edits carries no explanation.
+    valid = explanation is None if edits else bool(explanation and explanation.strip())
+    if not valid:
         raise JsaError(
             "the redline agent's explanation must be non-empty exactly when it proposes no edits"
         )
