@@ -780,6 +780,110 @@ def test_a_taken_resume_file_name_blocks_the_rename_and_flags_the_row(
     assert (folder / "notes.txt").exists()
 
 
+OLD_LETTER = OLD_COPY.replace("_Resume_", "_CoverLetter_")
+NEW_LETTER = NEW_COPY.replace("_Resume_", "_CoverLetter_")
+
+
+@pytest.mark.parametrize("extension", ["docx", "pdf"])
+def test_a_retitle_renames_the_cover_letter_copy_with_the_resume_copy_and_never_rewrites_it(
+    rdb, web, gws, env, monkeypatch, capsys, extension
+):
+    profile, packets = env
+    (profile / f"cover_letter.{extension}").write_bytes(b"THE BASE LETTER")
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    old = OLD_LETTER.replace(".docx", f".{extension}")
+    new = NEW_LETTER.replace(".docx", f".{extension}")
+    (folder / old).write_bytes(b"MY REVISED LETTER")
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    renamed = packets / NEW_DIR
+    assert (renamed / new).read_bytes() == b"MY REVISED LETTER"
+    assert not (renamed / old).exists()
+    assert (renamed / NEW_COPY).exists()
+
+
+def test_the_cover_letter_copy_is_found_even_after_the_profile_letter_is_removed(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    (folder / OLD_LETTER).write_bytes(b"MY REVISED LETTER")
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert (packets / NEW_DIR / NEW_LETTER).read_bytes() == b"MY REVISED LETTER"
+
+
+def test_a_description_only_change_leaves_the_cover_letter_copy_alone(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    profile, packets = env
+    (profile / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    (folder / OLD_LETTER).write_bytes(b"MY REVISED LETTER")
+    employer(web, rdb, posting_id, title=OLD_TITLE)
+    set_sheet(gws, (posting_id, ""))
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert (folder / OLD_LETTER).read_bytes() == b"MY REVISED LETTER"
+
+
+def test_a_taken_cover_letter_file_name_blocks_the_rename_and_flags_the_row(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    (folder / OLD_LETTER).write_bytes(b"MY REVISED LETTER")
+    squatter = b"a different file at the new cover letter name"
+    (folder / NEW_LETTER).write_bytes(squatter)
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    original = (folder / OLD_COPY).read_bytes()
+    code, output = refetch(monkeypatch, capsys)
+    assert flagged(code, output, posting_id)
+    assert {path.name for path in packets.iterdir()} == {OLD_DIR}
+    assert (folder / OLD_COPY).read_bytes() == original
+    assert (folder / OLD_LETTER).read_bytes() == b"MY REVISED LETTER"
+    assert (folder / NEW_LETTER).read_bytes() == squatter
+    assert (folder / "notes.txt").exists()
+
+
+def test_a_retitle_regeneration_adds_no_second_cover_letter_copy(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    profile, packets = env
+    (profile / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    (folder / OLD_LETTER).write_bytes(b"MY REVISED LETTER")
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    refetch(monkeypatch, capsys)
+    letters = [p.name for p in (packets / NEW_DIR).iterdir() if "CoverLetter" in p.name]
+    assert letters == [NEW_LETTER]
+    assert (packets / NEW_DIR / NEW_LETTER).read_bytes() == b"MY REVISED LETTER"
+
+
+def test_refetch_never_creates_a_packet_or_cover_letter_where_none_existed(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    profile, packets = env
+    (profile / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
+    posting_id = seed(rdb)
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert not packets.exists() or not list(packets.iterdir())
+
+
 def test_a_retitle_that_frees_a_shared_name_renames_the_other_postings_packet(
     rdb, web, gws, env, monkeypatch, capsys
 ):

@@ -1582,6 +1582,195 @@ def test_config_and_resume_never_enter_the_build_context(
     assert config not in staged.values()
 
 
+# --- the cover letter as an inbox machine file (issue #112; PRD 06 `jsa deploy` step 4) ---
+
+
+def held(machine_id: str, *guest_paths: str) -> str:
+    """`fly machine list --json` output for one hourly machine already holding these machine files."""
+    return json.dumps(
+        [
+            {
+                "id": machine_id,
+                "state": "stopped",
+                "config": {
+                    "schedule": "hourly",
+                    "files": [{"guest_path": path} for path in guest_paths],
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.parametrize("existing", [(), ("hourly",)], ids=["create", "update"])
+@pytest.mark.parametrize("name", ["cover_letter.docx", "cover_letter.pdf"])
+def test_a_cover_letter_ships_to_the_inbox_machine_as_a_machine_file(
+    inbox, monkeypatch, capsys, existing, name
+):
+    profile, log = inbox
+    (profile / name).write_bytes(b"THE COVER LETTER")
+    monkeypatch.setenv("STUB_MACHINES", machines(*existing))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    verb = "update" if existing else "run"
+    (launch,) = pick_machine(on_app(calls(log), INBOX_APP), verb)
+    files = {
+        Path(target).name: source
+        for target, source in machine_files(launch).items()
+        if source
+    }
+    assert files == {
+        "config.toml": str(profile / "config.toml"),
+        "resume.docx": str(profile / "resume.docx"),
+        name: str(profile / name),
+    }
+    target = next(t for t in machine_files(launch) if Path(t).name == name)
+    assert Path(target).is_absolute() and Path(target).parent.name == "profile"
+
+
+def test_the_search_machine_never_gets_the_cover_letter(inbox, monkeypatch, capsys):
+    profile, log = inbox
+    (profile / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    (search,) = pick_machine(on_app(calls(log), "jsa-example"), "update")
+    assert machine_files(search) == {}
+
+
+@pytest.mark.parametrize("existing", [(), ("hourly",)], ids=["create", "update"])
+def test_the_cover_letter_never_enters_the_build_context(
+    inbox, monkeypatch, capsys, tmp_path, existing
+):
+    profile, _ = inbox
+    (profile / "cover_letter.docx").write_bytes(b"A DISTINCTIVE COVER LETTER")
+    snapshot = tmp_path / "context"
+    monkeypatch.setenv("STUB_SNAPSHOT", str(snapshot))
+    monkeypatch.setenv("STUB_MACHINES", machines(*existing))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    staged = tree(snapshot)
+    assert staged
+    assert not [name for name in staged if Path(name).name.startswith("cover_letter")]
+    assert b"A DISTINCTIVE COVER LETTER" not in staged.values()
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["profile/cover_letter.docx", "profile/cover_letter.pdf"],
+)
+def test_build_context_excludes_the_cover_letter(path):
+    assert not in_build_context(path)
+
+
+def test_without_a_cover_letter_the_inbox_machine_gets_only_config_and_resume(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    (launch,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
+    assert sorted(Path(target).name for target in machine_files(launch)) == [
+        "config.toml",
+        "resume.docx",
+    ]
+
+
+def test_a_cover_letter_removed_from_the_profile_leaves_the_inbox_machine(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv(
+        "STUB_INBOX_MACHINES",
+        held(
+            "m0",
+            "/app/profile/config.toml",
+            "/app/profile/resume.docx",
+            "/app/profile/cover_letter.docx",
+        ),
+    )
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    (update,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
+    files = machine_files(update)
+    # Fly removes a machine file that is set to an empty source.
+    assert files["/app/profile/cover_letter.docx"] == ""
+    assert files["/app/profile/config.toml"]
+    assert files["/app/profile/resume.docx"]
+
+
+def test_a_renamed_cover_letter_replaces_the_old_one_on_the_inbox_machine(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    (profile / "cover_letter.pdf").write_bytes(b"THE COVER LETTER")
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv(
+        "STUB_INBOX_MACHINES",
+        held(
+            "m0",
+            "/app/profile/config.toml",
+            "/app/profile/resume.docx",
+            "/app/profile/cover_letter.docx",
+        ),
+    )
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    (update,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
+    files = machine_files(update)
+    assert files["/app/profile/cover_letter.pdf"] == str(profile / "cover_letter.pdf")
+    assert files["/app/profile/cover_letter.docx"] == ""
+
+
+def test_a_kept_cover_letter_is_not_cleared_from_the_inbox_machine(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    (profile / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv(
+        "STUB_INBOX_MACHINES", held("m0", "/app/profile/cover_letter.docx")
+    )
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    (update,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
+    assert machine_files(update)["/app/profile/cover_letter.docx"] == str(
+        profile / "cover_letter.docx"
+    )
+
+
+@pytest.mark.parametrize("flags", [(), ("--dry-run",), ("--smoke",)])
+def test_more_than_one_cover_letter_aborts_the_deploy_before_building_naming_both(
+    inbox, monkeypatch, capsys, flags
+):
+    profile, log = inbox
+    (profile / "cover_letter.docx").write_bytes(b"ONE")
+    (profile / "cover_letter.pdf").write_bytes(b"TWO")
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert_aborted_before_building(code, calls(log))
+    assert "cover_letter.docx" in output and "cover_letter.pdf" in output
+
+
+def test_dry_run_lists_the_cover_letter_among_the_inbox_machine_files(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    (profile / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert launched_nothing(calls(log))
+    last_image_file = max(output.index(path) for path in shipped_search_files(profile))
+    assert output.index("cover_letter.docx") > last_image_file
+
+
+def test_dry_run_without_a_cover_letter_lists_none(inbox, monkeypatch, capsys):
+    _, _ = inbox
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert "cover_letter" not in output
+
+
 # --- validation before building ---
 
 

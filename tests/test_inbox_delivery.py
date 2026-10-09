@@ -400,6 +400,30 @@ def test_the_resume_copy_and_the_redline_are_uploaded_as_the_exact_docx_files(
     assert "WHY-SAME-MEANING-MARKER" in comments
 
 
+def test_a_cover_letter_in_the_profile_is_delivered_with_the_packet(
+    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+):
+    profile, _ = env
+    (profile / "cover_letter.pdf").write_bytes(b"THE COVER LETTER")
+    agent.respond_redline = redline_reply(QUUX_EDIT)
+    email(gmail, conn, jd=QUUX_JD)
+    assert run_inbox(monkeypatch) == 0
+    [folder_id] = world.folders(PLAIN)
+    uploaded = world.contents(folder_id)
+    letter = RESUME_COPY.replace("_Resume_", "_CoverLetter_").replace(".docx", ".pdf")
+    assert uploaded[letter] == b"THE COVER LETTER"
+
+
+def test_without_a_cover_letter_the_delivered_packet_has_none(
+    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+):
+    agent.respond_redline = redline_reply(QUUX_EDIT)
+    email(gmail, conn, jd=QUUX_JD)
+    assert run_inbox(monkeypatch) == 0
+    [folder_id] = world.folders(PLAIN)
+    assert not [name for name in world.contents(folder_id) if "CoverLetter" in name]
+
+
 def test_uploads_go_into_the_configured_folder_and_are_never_converted(
     db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
 ):

@@ -784,6 +784,92 @@ def test_a_deleted_resume_copy_is_restored_from_the_base_before_assessing(
     assert BASE_LINE in agent.checklist_prompts[0]
 
 
+# --- the cover letter (issue #112; PRD 04 "Cover letter") ---------------------
+
+COVER_LETTER_COPY = RESUME_COPY.replace("_Resume_", "_CoverLetter_")
+COVER_LETTER_TEXT = b"Dear Hiring Manager, ZEBRAQUILL-MARKER"
+
+
+def test_generate_puts_the_cover_letter_copy_in_the_packet_head(
+    gdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    (profile / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
+    seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets / PLAIN) == {
+        "job_posting.md",
+        RESUME_COPY,
+        COVER_LETTER_COPY,
+        "resume_checklist.md",
+        PDF,
+        REDLINE_EDITS,
+    }
+    assert (packets / PLAIN / COVER_LETTER_COPY).read_bytes() == COVER_LETTER_TEXT
+
+
+def test_generate_without_a_cover_letter_makes_none(gdb, env, monkeypatch, capsys):
+    _, packets = env
+    seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert not [name for name in entries(packets / PLAIN) if "CoverLetter" in name]
+
+
+def test_an_existing_cover_letter_copy_is_never_modified(gdb, env, monkeypatch, capsys):
+    profile, packets = env
+    (profile / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
+    posting_id = seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    (folder / COVER_LETTER_COPY).write_bytes(b"my edited cover letter")
+    for args in ((), ("--id", posting_id)):
+        jsa_generate(monkeypatch, capsys, *args)
+        assert (folder / COVER_LETTER_COPY).read_bytes() == b"my edited cover letter"
+
+
+def test_a_deleted_cover_letter_copy_is_restored_from_the_profile(
+    gdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    (profile / "cover_letter.pdf").write_bytes(COVER_LETTER_TEXT)
+    seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    copy = folder / COVER_LETTER_COPY.replace(".docx", ".pdf")
+    assert copy.read_bytes() == COVER_LETTER_TEXT
+
+
+def test_neither_agent_sees_the_cover_letter(gdb, env, agent, monkeypatch, capsys):
+    profile, _ = env
+    document = docx.Document()
+    document.add_paragraph("ZEBRAQUILL-MARKER")
+    document.save(profile / "cover_letter.docx")
+    seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert agent.calls
+    assert not [prompt for prompt in agent.prompts if "ZEBRAQUILL" in prompt]
+
+
+def test_more_than_one_cover_letter_fails_before_any_row_is_processed(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    profile, packets = env
+    (profile / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
+    (profile / "cover_letter.pdf").write_bytes(COVER_LETTER_TEXT)
+    seed(gdb)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert "cover_letter.docx" in output and "cover_letter.pdf" in output
+    assert not packets.exists() or not list(packets.iterdir())
+    assert agent.calls == []
+    assert not gws.exists()
+
+
 # --- failures -----------------------------------------------------------------
 
 

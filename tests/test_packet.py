@@ -15,7 +15,13 @@ from conftest import drop_all_tables, unique_url
 from profile_helpers import EXAMPLE_DIR, copy_example, write_config_toml
 
 from jsa import cli, db
-from jsa.naming import normalize_company, packet_dir_name, resume_file_stem, title_slug
+from jsa.naming import (
+    cover_letter_file_stem,
+    normalize_company,
+    packet_dir_name,
+    resume_file_stem,
+    title_slug,
+)
 
 LONG_AGO = "2020-01-01T00:00:00.000Z"
 JD = "# Staff Engineer\n\nBuild the platform.\n"
@@ -444,3 +450,175 @@ def test_naming_makes_no_file_system_database_or_network_call(monkeypatch):
         resume_file_stem("Pat", "Staff Engineer", "Acme")
         == "Pat_Resume_StaffEngineer_Acme"
     )
+
+
+# --- the cover letter (issue #112; PRD 04 "Cover letter"; XC-11) --------------
+
+COVER_LETTER_COPY = RESUME_COPY.replace("_Resume_", "_CoverLetter_")
+
+
+def write_cover_letter(profile: Path, name: str = "cover_letter.docx") -> Path:
+    path = profile / name
+    path.write_bytes(f"COVER LETTER {name}".encode())
+    return path
+
+
+@pytest.mark.parametrize("extension", ["docx", "pdf", "txt"])
+def test_a_cover_letter_is_copied_into_the_packet_under_its_own_name_and_extension(
+    pdb, env, monkeypatch, capsys, extension
+):
+    profile, packets = env
+    letter = write_cover_letter(profile, f"cover_letter.{extension}")
+    seed(pdb)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    copy = COVER_LETTER_COPY.removesuffix(".docx") + f".{extension}"
+    assert entries(packets / PLAIN) == {"job_posting.md", RESUME_COPY, copy}
+    assert (packets / PLAIN / copy).read_bytes() == letter.read_bytes()
+
+
+def test_the_cover_letter_copy_name_follows_the_stored_slug_and_normalized_company(
+    pdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    write_cover_letter(profile)
+    seed(pdb, company="Foo/Bar Corp LLC", title="Senior: Data Engineer?")
+    slug, company = pdb.execute(
+        "SELECT title_slug, normalized_company FROM postings"
+    ).fetchone()
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    [folder] = packets.iterdir()
+    expected = f"PatExample_CoverLetter_{slug}_{company}.docx".replace(" ", "")
+    assert expected in entries(folder)
+
+
+def test_without_a_candidate_name_the_cover_letter_copy_has_no_prefix(
+    pdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    write_config_toml(profile, f'packets_dir = "{packets}"\n')
+    write_cover_letter(profile)
+    seed(pdb)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets / PLAIN) == {
+        "job_posting.md",
+        "Resume_StaffEngineer_AcmeWidgets.docx",
+        "CoverLetter_StaffEngineer_AcmeWidgets.docx",
+    }
+
+
+def test_without_a_cover_letter_nothing_raises_and_the_packet_has_none(
+    pdb, env, monkeypatch, capsys
+):
+    _, packets = env
+    seed(pdb)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets / PLAIN) == {"job_posting.md", RESUME_COPY}
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["cover_letter", "cover_letters.docx", "my_cover_letter.docx", "Cover_Letter.docx"],
+)
+def test_a_file_not_matching_the_cover_letter_pattern_is_not_a_cover_letter(
+    pdb, env, monkeypatch, capsys, name
+):
+    profile, packets = env
+    write_cover_letter(profile, name)
+    write_cover_letter(profile)
+    seed(pdb)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets / PLAIN) == {
+        "job_posting.md",
+        RESUME_COPY,
+        COVER_LETTER_COPY,
+    }
+
+
+def test_a_null_jd_row_still_gets_a_cover_letter_copy(pdb, env, monkeypatch, capsys):
+    profile, packets = env
+    write_cover_letter(profile)
+    seed(pdb, jd=None)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets / PLAIN) == {RESUME_COPY, COVER_LETTER_COPY}
+
+
+def test_every_queued_posting_gets_its_own_cover_letter_copy(
+    pdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    letter = write_cover_letter(profile)
+    seed(pdb)
+    seed(pdb, company="Globex Corporation", title="Data Engineer")
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    for folder in packets.iterdir():
+        letters = [name for name in entries(folder) if "_CoverLetter_" in name]
+        assert len(letters) == 1
+        assert (folder / letters[0]).read_bytes() == letter.read_bytes()
+
+
+def test_a_dry_run_copies_no_cover_letter(pdb, env, monkeypatch, capsys):
+    profile, packets = env
+    write_cover_letter(profile)
+    seed(pdb)
+    code, _ = jsa_packet(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert entries(packets) == set()
+
+
+def test_an_existing_folder_is_skipped_so_its_cover_letter_is_never_touched(
+    pdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    write_cover_letter(profile)
+    seed(pdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    (folder / COVER_LETTER_COPY).write_bytes(b"MY EDITED COVER LETTER")
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert snapshot(folder) == {COVER_LETTER_COPY: b"MY EDITED COVER LETTER"}
+
+
+@pytest.mark.parametrize("queue", ["a posting", "no posting"])
+def test_more_than_one_cover_letter_fails_before_any_row_naming_the_files(
+    pdb, env, monkeypatch, capsys, queue
+):
+    profile, packets = env
+    write_cover_letter(profile, "cover_letter.docx")
+    write_cover_letter(profile, "cover_letter.pdf")
+    if queue == "a posting":
+        seed(pdb)
+    code, output = jsa_packet(monkeypatch, capsys)
+    assert code != 0
+    assert "cover_letter.docx" in output
+    assert "cover_letter.pdf" in output
+    assert entries(packets) == set()
+
+
+@pytest.mark.parametrize(
+    "candidate, expected",
+    [
+        ("Pat Example", "PatExample_CoverLetter_StaffEngineer_AcmeWidgets"),
+        (None, "CoverLetter_StaffEngineer_AcmeWidgets"),
+    ],
+)
+def test_cover_letter_file_stem(candidate, expected):
+    stem = cover_letter_file_stem(candidate, "Staff Engineer", "Acme Widgets")
+    assert stem == expected
+
+
+def test_cover_letter_file_stem_has_no_spaces_and_no_path_hostile_characters():
+    stem = cover_letter_file_stem(
+        'Pat: "P" Example',
+        title_slug("Data / Analytics Lead"),
+        normalize_company("A/B Corp Inc"),
+    )
+    assert " " not in stem
+    assert not set(stem) & set('/\\:*?"<>|')
