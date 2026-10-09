@@ -480,6 +480,7 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
         reply_object([], ""),
         json.dumps({"edits": []}),
         reply_object([], 7),
+        reply_object([], "  \n "),
         json.dumps({"explanation": EXPLANATION}),
         json.dumps({"edits": None, "explanation": EXPLANATION}),
         json.dumps({"edits": {}, "explanation": EXPLANATION}),
@@ -493,6 +494,7 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
         "no-edits-empty-explanation",
         "no-edits-missing-explanation",
         "no-edits-numeric-explanation",
+        "no-edits-blank-explanation",
         "missing-edits",
         "null-edits",
         "object-edits",
@@ -513,6 +515,17 @@ def test_an_object_that_breaks_the_explanation_rule_or_shape_raises(
         redline_resume(copy, redline, edits_file, JD, SETTINGS)
     assert not edits_file.exists()
     assert not redline.exists()
+
+
+def test_the_prompt_tells_the_agent_to_return_edits_and_an_explanation_for_an_empty_redline(
+    tmp_path, stand_in
+):
+    run(tmp_path, stand_in, [])
+    (call,) = stand_in.calls
+    assert "explanation" in call.prompt
+    assert "edits" in call.prompt
+    assert "null" in call.prompt
+    assert "{{" not in call.prompt
 
 
 def test_an_edit_object_missing_a_field_raises(tmp_path, stand_in):
