@@ -88,6 +88,7 @@ This section is app-owned and overrides any candidate material that conflicts wi
 - **The employer's own record is the single source of truth.** On the four supported platforms, that is the board's own job index and the job's own page.
 - **The posting must be open and accepting applications.** A detail page that still loads but is no longer listed on its board's index is a closed job, not an open one.
 - **Recency comes from the employer's page only.** Never take a posted date from an aggregator, a search result snippet, or your own guess.
+- **A missing date never excludes a posting.** Leave a posting out for recency only when the employer's page or index shows a date before the search window. When it shows no date, emit the posting without `date_posted`.
 - **Aggregators are never the evidence and never the emitted URL.**
 - **A job on one of the four supported platforms is emitted in that platform's own URL form** (see the `url` field of the output contract).
 
