@@ -1988,6 +1988,106 @@ def test_either_claude_credential_satisfies_the_inbox_check(
     assert pick(calls(log), "deploy")
 
 
+@pytest.mark.parametrize(
+    "flags", [(), ("--dry-run",), ("--smoke",)], ids=["deploy", "dry-run", "smoke"]
+)
+def test_an_inbox_app_holding_both_claude_credentials_aborts_naming_both(
+    inbox, monkeypatch, capsys, flags
+):
+    _, log = inbox
+    monkeypatch.setenv(
+        "STUB_INBOX_SECRETS", secrets_json(*INBOX_REQUIRED_SECRETS, *CLAUDE_CREDENTIALS)
+    )
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert_aborted_before_building(code, calls(log))
+    assert all(name in output for name in CLAUDE_CREDENTIALS)
+
+
+def test_both_claude_credentials_abort_whatever_order_fly_lists_them(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    monkeypatch.setenv(
+        "STUB_INBOX_SECRETS",
+        secrets_json(*CLAUDE_CREDENTIALS[::-1], *INBOX_REQUIRED_SECRETS),
+    )
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+    assert all(name in output for name in CLAUDE_CREDENTIALS)
+
+
+def test_both_credentials_do_not_hide_another_missing_inbox_secret(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    held = [name for name in INBOX_REQUIRED_SECRETS if name != "JSA_GWS_CREDENTIALS"]
+    monkeypatch.setenv("STUB_INBOX_SECRETS", secrets_json(*held, *CLAUDE_CREDENTIALS))
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+    assert "JSA_GWS_CREDENTIALS" in output
+
+
+def test_the_search_key_beside_one_claude_credential_is_not_a_conflict(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    monkeypatch.setenv(
+        "STUB_INBOX_SECRETS",
+        secrets_json(
+            *INBOX_REQUIRED_SECRETS,
+            CLAUDE_CREDENTIALS[1],
+            "JSA_SEARCH_ANTHROPIC_API_KEY",
+        ),
+    )
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    assert pick(calls(log), "deploy")
+
+
+def test_a_search_app_holding_both_claude_credentials_is_not_checked_for_them(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    hold(monkeypatch, *SEARCH_APP_SECRETS, *CLAUDE_CREDENTIALS)
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    assert pick(calls(log), "deploy")
+
+
+def test_conflicting_claude_secrets_names_both_only_when_both_are_held(
+    monkeypatch, tmp_path
+):
+    from jsa.deploy import conflicting_claude_secrets
+
+    # No `fly` is reachable, so any attempt to read the listing would fail.
+    monkeypatch.setenv("JSA_FLY_BIN", str(tmp_path / "no-such-fly"))
+    unrelated = {*INBOX_REQUIRED_SECRETS, "JSA_SEARCH_ANTHROPIC_API_KEY"}
+    assert set(conflicting_claude_secrets({*unrelated, *CLAUDE_CREDENTIALS})) == set(
+        CLAUDE_CREDENTIALS
+    )
+    for credential in CLAUDE_CREDENTIALS:
+        assert not conflicting_claude_secrets({*unrelated, credential})
+    assert not conflicting_claude_secrets(unrelated)
+    assert not conflicting_claude_secrets(set())
+
+
+def test_missing_inbox_secrets_names_what_is_not_held_and_ignores_a_second_credential(
+    monkeypatch, tmp_path
+):
+    from jsa.deploy import missing_inbox_secrets
+
+    monkeypatch.setenv("JSA_FLY_BIN", str(tmp_path / "no-such-fly"))
+    complete = {*INBOX_REQUIRED_SECRETS, CLAUDE_CREDENTIALS[0]}
+    assert not missing_inbox_secrets(complete)
+    assert not missing_inbox_secrets({*complete, *CLAUDE_CREDENTIALS})
+    assert set(missing_inbox_secrets(complete - {"JSA_GWS_CREDENTIALS"})) == {
+        "JSA_GWS_CREDENTIALS"
+    }
+    missing_claude = missing_inbox_secrets(set(INBOX_REQUIRED_SECRETS))
+    assert len(missing_claude) == 1
+    assert all(name in missing_claude[0] for name in CLAUDE_CREDENTIALS)
+
+
 def test_an_unreadable_secret_listing_aborts_before_building(
     inbox, monkeypatch, capsys
 ):
