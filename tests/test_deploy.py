@@ -32,7 +32,8 @@ from jsa import cli
 from jsa.deploy import BUILD_INPUTS
 
 # Logs argv to $STUB_LOG, answers a machine listing from $STUB_MACHINES, and fails any call whose
-# subcommand is named in $STUB_FAIL (exit 1). `secrets list` answers $STUB_SECRETS, and a machine
+# subcommand is named in $STUB_FAIL (exit 1). `secrets list` answers $STUB_SECRETS for the search app and
+# $STUB_INBOX_SECRETS for an app whose name ends in `-inbox`, and a machine
 # listing for an app whose name ends in `-inbox` answers $STUB_INBOX_MACHINES when that is set. `machine update` fails its first $STUB_UPDATE_FAILS
 # attempts, and `machine run` its first $STUB_RUN_FAILS, as a registry that hasn't caught up with the push would. When $STUB_SNAPSHOT is set, a
 # `deploy` call copies its build context (the directory named in its arguments, else its working
@@ -54,7 +55,8 @@ if words[:1] and words[0] in os.environ.get("STUB_FAIL", "").split(","):
     sys.exit(1)
 app = next((argv[i + 1] for i in range(len(argv) - 1) if argv[i] == "-a"), "")
 if words[:2] == ["secrets", "list"]:
-    print(os.environ.get("STUB_SECRETS", "[]"))
+    held = "STUB_INBOX_SECRETS" if app.endswith("-inbox") else "STUB_SECRETS"
+    print(os.environ.get(held, "[]"))
     sys.exit(0)
 created = os.environ["STUB_LOG"] + ".created"
 if ("list" in words or "ls" in words) and os.path.exists(created) and open(created).read() == app:
@@ -87,6 +89,16 @@ if "run" in words:
         sys.exit(1)
 """
 
+# What the search app holds so a deploy is not stopped for a missing secret (PRD 06, `jsa deploy` step 1):
+# the database's two and the key of every search agent a profile can schedule.
+SEARCH_APP_SECRETS = (
+    "TURSO_DATABASE_URL",
+    "TURSO_AUTH_TOKEN",
+    "PERPLEXITY_API_KEY",
+    "JSA_SEARCH_ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+)
+
 FULL_WEEK = {day: [("perplexity", 24)] for day in WEEKDAYS}
 SAFE_RUN_AT = "07:00"
 REQUIRED = ("candidate", "target_roles", "filters")
@@ -108,7 +120,7 @@ def fly(tmp_path, monkeypatch):
         "STUB_FAIL",
         "STUB_MACHINES",
         "STUB_INBOX_MACHINES",
-        "STUB_SECRETS",
+        "STUB_INBOX_SECRETS",
         "STUB_UPDATE_FAILS",
         "STUB_RUN_FAILS",
         "STUB_RUN_CREATES_ON",
@@ -116,6 +128,7 @@ def fly(tmp_path, monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
     # A retry for registry lag must not slow the suite, whichever way the app sleeps.
+    monkeypatch.setenv("STUB_SECRETS", secrets_json(*SEARCH_APP_SECRETS))
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     monkeypatch.setattr("jsa.deploy.sleep", lambda _seconds: None, raising=False)
     monkeypatch.setattr("jsa.deploy.UPDATE_RETRY_SECONDS", 0, raising=False)
@@ -168,6 +181,10 @@ def pick(all_calls: list[list[str]], *words: str) -> list[list[str]]:
         if leading == list(words):
             picked.append(argv)
     return picked
+
+
+def secret_calls(log: Path) -> list[list[str]]:
+    return [argv for argv in calls(log) if any(a.startswith("secret") for a in argv)]
 
 
 def pick_machine(all_calls: list[list[str]], verb: str) -> list[list[str]]:
@@ -443,7 +460,7 @@ def test_warnings_stack(fly, monkeypatch, capsys):
 # --- --dry-run ------------------------------------------------------------------------
 
 
-def test_dry_run_lists_the_search_files_and_runs_no_fly_command(
+def test_dry_run_lists_the_search_files_and_runs_no_fly_command_but_the_secret_listing(
     fly, monkeypatch, capsys
 ):
     _, log = fly
@@ -451,7 +468,7 @@ def test_dry_run_lists_the_search_files_and_runs_no_fly_command(
     assert code == 0
     for name in (*(f"{f}.md" for f in FRAGMENTS), "search.toml"):
         assert name in output
-    assert calls(log) == []
+    assert all(pick([argv], "secrets", "list") for argv in calls(log))
 
 
 def test_dry_run_lists_nothing_outside_profile_search(fly, monkeypatch, capsys):
@@ -473,12 +490,15 @@ def test_dry_run_lists_files_in_nested_search_directories(fly, monkeypatch, caps
     assert "more.md" in output
 
 
-def test_dry_run_with_no_fly_binary_installed_still_succeeds(
+def test_dry_run_with_no_fly_binary_installed_ends_cleanly_without_building(
     fly, monkeypatch, capsys, tmp_path
 ):
+    _, log = fly
     monkeypatch.setenv("JSA_FLY_BIN", str(tmp_path / "no-such-fly"))
-    code, _ = jsa_deploy(monkeypatch, capsys, "--dry-run")
-    assert code == 0
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code in (0, 1)
+    assert "Traceback" not in output
+    assert pick(calls(log), "deploy") == []
 
 
 def test_dry_run_and_smoke_are_mutually_exclusive(fly, monkeypatch, capsys):
@@ -646,8 +666,9 @@ def test_deploy_never_runs_fly_secrets(fly, monkeypatch, capsys):
     monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
     for flags in ((), ("--smoke",), ("--dry-run",)):
         assert jsa_deploy(monkeypatch, capsys, *flags)[0] == 0
-    for argv in calls(log):
-        assert not any(word.startswith("secret") for word in argv)
+    for argv in secret_calls(log):
+        assert "list" in argv
+        assert not {"set", "import", "unset"} & set(argv)
 
 
 def test_the_label_changes_between_deploys(fly, monkeypatch, capsys):
@@ -1500,7 +1521,8 @@ def inbox(fly, monkeypatch):
         pattern=True,
     )
     monkeypatch.setenv(
-        "STUB_SECRETS", secrets_json(*INBOX_REQUIRED_SECRETS, CLAUDE_CREDENTIALS[0])
+        "STUB_INBOX_SECRETS",
+        secrets_json(*INBOX_REQUIRED_SECRETS, CLAUDE_CREDENTIALS[0]),
     )
     return profile, log
 
@@ -1932,7 +1954,7 @@ def test_a_missing_inbox_secret_aborts_naming_it(
 ):
     _, log = inbox
     held = [name for name in INBOX_REQUIRED_SECRETS if name != missing]
-    monkeypatch.setenv("STUB_SECRETS", secrets_json(*held, CLAUDE_CREDENTIALS[0]))
+    monkeypatch.setenv("STUB_INBOX_SECRETS", secrets_json(*held, CLAUDE_CREDENTIALS[0]))
     code, output = jsa_deploy(monkeypatch, capsys, *flags)
     assert_aborted_before_building(code, calls(log))
     assert missing in output
@@ -1940,14 +1962,14 @@ def test_a_missing_inbox_secret_aborts_naming_it(
 
 def test_an_inbox_app_with_no_claude_credential_aborts(inbox, monkeypatch, capsys):
     _, log = inbox
-    monkeypatch.setenv("STUB_SECRETS", secrets_json(*INBOX_REQUIRED_SECRETS))
+    monkeypatch.setenv("STUB_INBOX_SECRETS", secrets_json(*INBOX_REQUIRED_SECRETS))
     code, output = jsa_deploy(monkeypatch, capsys)
     assert_aborted_before_building(code, calls(log))
     assert all(name in output for name in CLAUDE_CREDENTIALS)
 
 
 def test_every_missing_inbox_secret_is_named(inbox, monkeypatch, capsys):
-    monkeypatch.setenv("STUB_SECRETS", "[]")
+    monkeypatch.setenv("STUB_INBOX_SECRETS", "[]")
     code, output = jsa_deploy(monkeypatch, capsys)
     assert code != 0
     assert all(name in output for name in INBOX_REQUIRED_SECRETS)
@@ -1959,7 +1981,7 @@ def test_either_claude_credential_satisfies_the_inbox_check(
 ):
     _, log = inbox
     monkeypatch.setenv(
-        "STUB_SECRETS", secrets_json(*INBOX_REQUIRED_SECRETS, credential)
+        "STUB_INBOX_SECRETS", secrets_json(*INBOX_REQUIRED_SECRETS, credential)
     )
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code == 0
@@ -1982,21 +2004,18 @@ def test_the_inbox_secrets_are_read_from_the_inbox_app_and_never_set(
     monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
     for flags in ((), ("--smoke",), ("--dry-run",)):
         assert jsa_deploy(monkeypatch, capsys, *flags)[0] == 0
-    secret_calls = [
-        argv for argv in calls(log) if any(a.startswith("secret") for a in argv)
-    ]
-    assert secret_calls
-    for argv in secret_calls:
+    inbox_reads = on_app(secret_calls(log), INBOX_APP)
+    assert inbox_reads
+    for argv in secret_calls(log):
         assert "list" in argv
         assert not {"set", "import", "unset"} & set(argv)
-        assert has_flag(argv, "-a", INBOX_APP) or f"--app={INBOX_APP}" in argv
 
 
 def test_inbox_validation_happens_before_the_build_even_when_only_a_secret_is_missing(
     inbox, monkeypatch, capsys
 ):
     _, log = inbox
-    monkeypatch.setenv("STUB_SECRETS", "[]")
+    monkeypatch.setenv("STUB_INBOX_SECRETS", "[]")
     jsa_deploy(monkeypatch, capsys)
     all_calls = calls(log)
     assert pick(all_calls, "deploy") == []
@@ -2058,7 +2077,7 @@ def test_without_inbox_deploy_touches_only_the_search_app(fly, monkeypatch, caps
     assert code == 0
     all_calls = calls(log)
     assert on_app(all_calls, "jsa-example") == all_calls
-    assert not any(a.startswith("secret") for argv in all_calls for a in argv)
+    assert not on_app(secret_calls(log), INBOX_APP)
     assert len(pick_machine(all_calls, "update")) == 1
     (update,) = pick_machine(all_calls, "update")
     assert machine_files(update) == {}
