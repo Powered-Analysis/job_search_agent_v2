@@ -10,7 +10,13 @@ from jsa.naming import (
     redline_file_name,
     resume_file_stem,
 )
-from jsa.profile import Config, PacketSources, load_config, packet_sources
+from jsa.profile import (
+    COVER_LETTER_PREFIX,
+    Config,
+    PacketSources,
+    load_config,
+    packet_sources,
+)
 
 JOB_POSTING = "job_posting.md"
 CHECKLIST = "resume_checklist.md"
@@ -44,7 +50,7 @@ def packet_copies(
     copies = {resume_copy: sources.resume}
     if sources.cover_letter is not None:
         # The copy keeps the source's extension, whatever it is (`.docx`, `.pdf`, ...).
-        extension = sources.cover_letter.name.removeprefix("cover_letter")
+        extension = sources.cover_letter.name.removeprefix(COVER_LETTER_PREFIX)
         copies[directory / f"{cover_letter_stem(config, job)}{extension}"] = (
             sources.cover_letter
         )

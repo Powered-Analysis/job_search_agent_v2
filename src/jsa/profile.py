@@ -25,7 +25,8 @@ from jsa.errors import JsaError
 _STRICT = ConfigDict(extra="forbid", frozen=True)
 # XC-14: model and agent are checked only for being non-empty, never against a list of allowed values.
 NonEmptyStr = Annotated[str, StringConstraints(strict=True, min_length=1)]
-_COVER_LETTER = re.compile(r"cover_letter\..+")
+COVER_LETTER_PREFIX = "cover_letter"
+_COVER_LETTER = re.compile(rf"{COVER_LETTER_PREFIX}\..+")
 _RUN_AT = re.compile(r"([01]\d|2[0-3]):([0-5]\d)")
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
@@ -231,7 +232,7 @@ def cover_letter() -> Path | None:
     """The optional cover letter (XC-11); more than one match raises, since the app won't guess which is meant."""
     matches = sorted(
         path
-        for path in profile_dir().glob("cover_letter.*")
+        for path in profile_dir().glob(f"{COVER_LETTER_PREFIX}.*")
         if path.is_file() and _COVER_LETTER.fullmatch(path.name)
     )
     if len(matches) > 1:
