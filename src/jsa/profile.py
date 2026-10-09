@@ -255,6 +255,17 @@ def inbox_settings(config: Config) -> InboxConfig:
     return config.inbox
 
 
+def inbox_drive_folder(config: Config) -> str:
+    """The Drive packets folder's id; a missing one raises before any packet is built."""
+    folder_id = inbox_settings(config).drive_folder_id
+    if not folder_id:
+        raise JsaError(
+            f"[inbox] drive_folder_id is missing in {profile_dir() / 'config.toml'}. "
+            f"{_pointer('config.toml')}"
+        )
+    return folder_id
+
+
 def checklist_settings(config: Config) -> AgentSettings:
     return _agent_settings(config, "checklist")
 
