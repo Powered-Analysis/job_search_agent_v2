@@ -9,7 +9,7 @@ from itertools import pairwise
 from pathlib import Path
 from time import sleep
 
-from jsa.config import fly_bin
+from jsa.config import SEARCH_AGENT_KEYS, fly_bin
 from jsa.errors import JsaError
 from jsa.profile import (
     Config,
@@ -53,9 +53,9 @@ BUILD_INPUTS = (
 MACHINE_PROFILE_DIR = "/app/profile"
 INBOX_FILES = ("config.toml", "resume.docx")
 INBOX_ENTRYPOINT = "jsa inbox"
+DATABASE_SECRETS = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
 INBOX_SECRETS = (
-    "TURSO_DATABASE_URL",
-    "TURSO_AUTH_TOKEN",
+    *DATABASE_SECRETS,
     "JSA_GWS_CREDENTIALS",
     "JSA_INBOX_GWS_CREDENTIALS",
 )
@@ -156,6 +156,22 @@ def _secret_names(app: str) -> set[str]:
         raise JsaError("fly secrets list did not return a list of secrets") from None
 
 
+def missing_search_secrets(config: SearchConfig, held: set[str]) -> list[str]:
+    """The secrets the schedule needs that the search app doesn't hold: the database's and each scheduled agent's key. Pure (XC-9)."""
+    scheduled = dict.fromkeys(search.agent for search in config.schedule.searches())
+    needed = [*DATABASE_SECRETS, *(SEARCH_AGENT_KEYS[agent] for agent in scheduled)]
+    return [name for name in needed if name not in held]
+
+
+def _check_search_secrets(app: str, config: SearchConfig) -> None:
+    """Aborts when the search app lacks a secret the schedule needs; deploy never sets one."""
+    if missing := missing_search_secrets(config, _secret_names(app)):
+        raise JsaError(
+            f"the search app {app} lacks these secrets: {', '.join(missing)}. "
+            "Stage them from .env first (README, set up Fly)."
+        )
+
+
 def _check_inbox_secrets(app: str) -> None:
     """Aborts when the inbox app lacks a secret; deploy never sets one."""
     held = _secret_names(app)
@@ -179,6 +195,7 @@ def validate() -> tuple[FlyConfig, str | None, list[str]]:
     profile = load_config()
     fly = fly_settings(profile)
     app = _validate_inbox(profile) if profile.inbox is not None else None
+    _check_search_secrets(fly.app, config)
     if app is not None:
         _check_inbox_secrets(app)
     return (
