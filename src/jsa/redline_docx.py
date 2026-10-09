@@ -31,6 +31,13 @@ class TrackedChange:
     start: int
     end: int
     text: str
+
+
+@dataclass(frozen=True)
+class TrackedEdit:
+    """The tracked changes of one edit, which share a single comment."""
+
+    changes: list[TrackedChange]
     comment: str
 
 
@@ -189,7 +196,8 @@ def _apply(
 
 def _anchor_comment(
     document: Document,
-    elements: list[BaseOxmlElement],
+    first: BaseOxmlElement,
+    last: BaseOxmlElement,
     text: str,
 ) -> None:
     comment = document.comments.add_comment(
@@ -205,20 +213,26 @@ def _anchor_comment(
     reference = OxmlElement("w:r")
     reference.append(mark("w:commentReference"))
     # The range wraps the tracked elements, so rejecting a change leaves the comment on the original text.
-    elements[0].addprevious(start)
-    elements[-1].addnext(end)
+    first.addprevious(start)
+    last.addnext(end)
     end.addnext(reference)
 
 
-def apply_changes(document: Document, changes: list[TrackedChange]) -> None:
-    """Write the changes into the document as tracked changes, each with its comment.
+def apply_edits(document: Document, edits: list[TrackedEdit]) -> None:
+    """Write the edits into the document as tracked changes, one comment around each edit.
 
     Later text is changed first, so the offsets of the changes still to apply stay valid.
     """
-    revisions = _Revisions(document, len(changes))
+    revisions = _Revisions(document, len(edits))
     paragraphs = document.paragraphs
-    for change in sorted(
-        changes, key=lambda c: (c.paragraph, c.start, c.end), reverse=True
+    for edit in sorted(
+        edits, key=lambda e: (e.changes[0].paragraph, e.changes[0].start), reverse=True
     ):
-        elements = _apply(paragraphs[change.paragraph]._p, change, revisions)
-        _anchor_comment(document, elements, change.comment)
+        # Changes apply last to first, so the earliest change's elements come last.
+        applied = [
+            _apply(paragraphs[change.paragraph]._p, change, revisions)
+            for change in sorted(
+                edit.changes, key=lambda c: (c.start, c.end), reverse=True
+            )
+        ]
+        _anchor_comment(document, applied[-1][0], applied[0][-1], edit.comment)

@@ -13,7 +13,8 @@ from jsa.errors import JsaError
 from jsa.profile import AgentSettings
 from jsa.redline_docx import (
     TrackedChange,
-    apply_changes,
+    TrackedEdit,
+    apply_edits,
     body_paragraph_texts,
     has_unresolved_changes,
 )
@@ -174,13 +175,16 @@ def validate_edits(
     return results
 
 
-def _tracked_changes(edit: Edit, paragraphs: list[str]) -> list[TrackedChange]:
+def _tracked_edit(edit: Edit, paragraphs: list[str]) -> TrackedEdit:
     offset = paragraphs[edit.paragraph].index(edit.find)
     comment = f'Posting: "{edit.jd_quote}"\nSame meaning: {edit.why_same_meaning}'
-    return [
-        TrackedChange(edit.paragraph, offset + c.start, offset + c.end, c.text, comment)
-        for c in plan_changes(edit.find, edit.replace)
-    ]
+    return TrackedEdit(
+        [
+            TrackedChange(edit.paragraph, offset + c.start, offset + c.end, c.text)
+            for c in plan_changes(edit.find, edit.replace)
+        ],
+        comment,
+    )
 
 
 def parse_edits(text: str) -> list[Edit]:
@@ -238,14 +242,13 @@ def redline_resume(
     paragraphs = body_paragraph_texts(document)
     edits = run_redline(assemble_redline_prompt(job_description, paragraphs), settings)
     results = validate_edits(edits, paragraphs, job_description)
-    changes = [
-        change
+    tracked = [
+        _tracked_edit(edit, paragraphs)
         for edit, problem in zip(edits, results, strict=True)
         if problem is None
-        for change in _tracked_changes(edit, paragraphs)
     ]
-    if changes:
-        apply_changes(document, changes)
+    if tracked:
+        apply_edits(document, tracked)
         document.save(str(redline))
     record = [
         {**asdict(edit), "validation": problem}
