@@ -669,6 +669,113 @@ def test_one_edit_with_several_separate_changes_gets_one_comment_around_all_of_t
     ]
 
 
+def revision_text_inside_comment(path, comment_id):
+    """The deleted and inserted text between a comment's range markers, in document order."""
+    body = body_of(path)
+    inside = False
+    parts = []
+    for node in body.iter():
+        tag = etree.QName(node).localname
+        if node.get(f"{{{W}}}id") == comment_id and tag == "commentRangeStart":
+            inside = True
+        elif node.get(f"{{{W}}}id") == comment_id and tag == "commentRangeEnd":
+            return parts
+        elif inside and tag in ("t", "delText"):
+            ancestors = {etree.QName(a).localname for a in node.iterancestors()}
+            if ancestors & {"ins", "del"}:
+                parts.append(node.text or "")
+    raise AssertionError(f"comment {comment_id} has no closed range")
+
+
+def test_every_applied_edit_gets_exactly_one_comment_with_a_unique_id_around_its_own_changes(
+    tmp_path, stand_in
+):
+    def build(document):
+        document.add_paragraph(
+            "Built Quuxlate platform fast, then ran Zorblat jobs nightly."
+        )
+        document.add_paragraph("Wrote Frobnicate scripts for churn.")
+
+    # Out of document order on purpose; the first and third each split into several tracked changes.
+    third = edit(
+        paragraph=1,
+        find="Wrote Frobnicate scripts for churn",
+        replace="Authored Frobnicate tooling for customer churn",
+        jd_quote="Authored Frobnicate tooling for customer churn",
+        why_same_meaning="THIRD-WHY",
+    )
+    second = edit(
+        paragraph=0,
+        find="ran Zorblat jobs",
+        replace="ran Zorblat pipelines",
+        jd_quote="Zorblat pipelines",
+        why_same_meaning="SECOND-WHY",
+    )
+    first = edit(
+        paragraph=0,
+        find="Built Quuxlate platform fast",
+        replace="Constructed Quuxlate system fast",
+        jd_quote="Constructed the Quuxlate system",
+        why_same_meaning="FIRST-WHY",
+    )
+    jd = (
+        "Constructed the Quuxlate system. Zorblat pipelines. "
+        "Authored Frobnicate tooling for customer churn."
+    )
+    ran = run(
+        tmp_path,
+        stand_in,
+        [as_dict(third), as_dict(second), as_dict(first)],
+        build=build,
+        jd=jd,
+    )
+    assert ran.outcome.applied == 3
+    comments = comments_of(ran.redline).findall("w:comment", NS)
+    assert len(comments) == 3
+    ids = [comment.get(f"{{{W}}}id") for comment in comments]
+    assert len(set(ids)) == 3
+    body = body_of(ran.redline)
+    for marker in ("commentRangeStart", "commentRangeEnd", "commentReference"):
+        anchored = body.xpath(f"//w:{marker}/@w:id", namespaces=NS)
+        assert sorted(anchored) == sorted(ids)
+    by_why = {
+        why: comment.get(f"{{{W}}}id")
+        for comment in comments
+        for why in ("FIRST-WHY", "SECOND-WHY", "THIRD-WHY")
+        if why in "".join(comment.itertext())
+    }
+    assert set(by_why) == {"FIRST-WHY", "SECOND-WHY", "THIRD-WHY"}
+    first_text = revision_text_inside_comment(ran.redline, by_why["FIRST-WHY"])
+    second_text = revision_text_inside_comment(ran.redline, by_why["SECOND-WHY"])
+    third_text = revision_text_inside_comment(ran.redline, by_why["THIRD-WHY"])
+    assert "".join(first_text).count("Constructed") == 1
+    assert "system" in "".join(first_text)
+    assert "Zorblat" not in "".join(first_text)
+    assert "pipelines" in "".join(second_text)
+    assert "Constructed" not in "".join(second_text)
+    assert "Authored" in "".join(third_text)
+    assert "customer" in "".join(third_text)
+    assert "Zorblat" not in "".join(third_text)
+    assert view_of(ran.redline, "reject") == [
+        "Built Quuxlate platform fast, then ran Zorblat jobs nightly.",
+        "Wrote Frobnicate scripts for churn.",
+    ]
+    assert view_of(ran.redline, "accept") == [
+        "Constructed Quuxlate system fast, then ran Zorblat pipelines nightly.",
+        "Authored Frobnicate tooling for customer churn.",
+    ]
+
+
+def test_a_dropped_edit_leaves_no_comment_beside_an_applied_one(tmp_path, stand_in):
+    dropped = edit(
+        paragraph=2, find="not in this paragraph", jd_quote="Quuxlate system"
+    )
+    ran = run(tmp_path, stand_in, [as_dict(dropped), as_dict(edit())])
+    assert ran.outcome.applied == 1
+    comments = comments_of(ran.redline).findall("w:comment", NS)
+    assert len(comments) == 1
+
+
 def test_only_the_words_that_differ_are_deleted_and_inserted(tmp_path, stand_in):
     ran = run(tmp_path, stand_in, [as_dict(edit())])
     body = body_of(ran.redline)
