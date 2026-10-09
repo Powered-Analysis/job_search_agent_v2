@@ -6,6 +6,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # The inbox's packet build shells out to these (PRD 06). Pinned releases; the musl `typst` is static.
+# curl and xz-utils only fetch and unpack them, so they are purged afterwards; `gws` keeps ca-certificates for HTTPS.
 ARG GWS_VERSION=0.22.5
 ARG PANDOC_VERSION=3.12.1
 ARG TYPST_VERSION=0.15.1
@@ -23,6 +24,7 @@ RUN apt-get update \
     && apt-get install --yes "./pandoc-${PANDOC_VERSION}-1-${deb_arch}.deb" \
     && curl -fsSL "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-${arch}-unknown-linux-musl.tar.xz" \
         | tar --extract --xz --strip-components=1 --directory /usr/local/bin --wildcards '*/typst' \
+    && apt-get purge --yes --auto-remove curl xz-utils \
     && rm -rf /tmp/* /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /usr/local/bin/uv
