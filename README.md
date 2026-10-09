@@ -61,6 +61,7 @@ cp -r profile.example profile
 |---|---|
 | `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the resume checklist, the ATS redline, and refine |
 | `profile/resume.docx` | your single base resume |
+| `profile/cover_letter.*` | optional; your cover letter, copied into each packet |
 | `profile/search/search.toml` | timezone, `run_at`, the weekly schedule, the Claude runner settings, and the verification mode |
 | `profile/search/*.md` | the six fragments that tell the search who you are and what you want |
 
@@ -161,7 +162,7 @@ accept a refine proposal.
 
 With `[inbox]` set, `jsa deploy` also creates or updates the inbox app's one hourly machine, running
 `jsa inbox` from the same image (a machine in one Fly app can run an image from another app in the
-same organization). Every deploy sets that machine's `config.toml` and `resume.docx` as machine
+same organization). Every deploy sets that machine's `config.toml`, `resume.docx`, and cover letter (if you have one) as machine
 files; they are never in the image or the build context. So run `jsa deploy` again after you change
 your resume or `config.toml`. Before building, it checks that the profile has everything the inbox
 needs and that the inbox app holds each secret from step 7; it never sets a secret. `--smoke` leaves

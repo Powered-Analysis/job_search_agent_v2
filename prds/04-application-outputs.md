@@ -1,7 +1,7 @@
 # Application Outputs
 #### tl;dr
 
-What an Apply decision turns into: a per-job **application packet** on disk (`{packets_dir}/{company} - {title}`) holding the job description, a **working copy of the user's single base resume**, and a **resume checklist** — an agent's assessment of the packet's resume against the posting, read as a hiring manager would read it, written to guide the user's own revision — plus a row appended to the **Google Sheet tracker**. The app never revises the resume: revision is the user's. Its one hand on the resume's text is the **ATS redline**, a copy of the packet's resume that proposes wording changes as Word tracked changes, each traced to a verbatim quote from the posting, for the user to accept or reject one by one. A posting that arrives through the email side door (PRD 03) has its packet built on the inbox machine and delivered to the same folder through Google Drive (`XC-1`). It also owns **refetch**, which reconciles stored postings against their ATS record when a req is edited under a stable URL. This spec covers PRD Steps 4–5 plus reconciliation.
+What an Apply decision turns into: a per-job **application packet** on disk (`{packets_dir}/{company} - {title}`) holding the job description, a **working copy of the user's single base resume**, a copy of the user's cover letter when they keep one, and a **resume checklist** — an agent's assessment of the packet's resume against the posting, read as a hiring manager would read it, written to guide the user's own revision — plus a row appended to the **Google Sheet tracker**. The app never revises the resume: revision is the user's. Its one hand on the resume's text is the **ATS redline**, a copy of the packet's resume that proposes wording changes as Word tracked changes, each traced to a verbatim quote from the posting, for the user to accept or reject one by one. A posting that arrives through the email side door (PRD 03) has its packet built on the inbox machine and delivered to the same folder through Google Drive (`XC-1`). It also owns **refetch**, which reconciles stored postings against their ATS record when a req is edited under a stable URL. This spec covers PRD Steps 4–5 plus reconciliation.
 
 ------
 #### Goals
@@ -25,6 +25,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 ##### Non-Goals
 - **Writing resume content on the user's behalf.** The checklist assesses the resume, the redline proposes term alignments, and the user revises and decides. No step changes what a bullet claims, adds a qualification, or rewords for style, and nothing writes to the packet's resume copy.
 - **More than one base resume, or any selection among resumes.** One base resume serves every posting.
+- **Tailoring, generating, or reading the cover letter.** It is copied into the packet as the user's file; the checklist and the redline never see it.
 - **Posting data storage and queue queries** — PRD 02 (the packet, tracker, and refetch queues, marking tracked, and JD capture).
 - **ATS fetcher shapes** — PRD 01 (refetch reuses them).
 - **Application state (Date Applied, Status)** — the user's columns, never agent-written (`XC-4`).
@@ -53,10 +54,14 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **One file:** `profile/resume.docx` (`XC-11`). A missing or empty file raises before any row is processed, pointing to `profile.example/`.
 - **Rendered to text** (pure over the loaded document; `python-docx` is approved for reading it): paragraphs in order, bold preserved as `**…**`, so the checklist agent sees a resume's structure and emphasis.
 
+**Cover letter (Priority: P0)**
+- **One optional file:** the file in `profile/` whose name matches `^cover_letter\..+$` (`XC-11`), such as `cover_letter.docx`. Absent, packets simply have none and nothing raises. More than one match raises before any row is processed, naming the files, because the app won't guess which is meant.
+- **Part of the packet head:** the head (below) copies it into the packet, so `jsa packet`, `jsa generate`, and refetch's regeneration all include it through the one implementation.
+
 **Packet directory (Step 4's head) (Priority: P0)**
-- Creates `{packets_dir}/{normalized_company} - {title_slug}` (`packets_dir` from `profile/config.toml`, default `~/Documents/Job Applications`; name from PRD 01's naming fields), writes `job_posting.md` from `jd_markdown`, and copies the base resume in as `{resume_file_stem}.docx`, the user's working copy. File names are `{candidate_name}_Resume_{title_slug}_{normalized_company}` with spaces removed (pure; `candidate_name` from `profile/config.toml`); the candidate prefix is omitted when the key is unset.
+- Creates `{packets_dir}/{normalized_company} - {title_slug}` (`packets_dir` from `profile/config.toml`, default `~/Documents/Job Applications`; name from PRD 01's naming fields), writes `job_posting.md` from `jd_markdown`, and copies the base resume in as `{resume_file_stem}.docx`, the user's working copy. File names are `{candidate_name}_Resume_{title_slug}_{normalized_company}` with spaces removed (pure; `candidate_name` from `profile/config.toml`); the candidate prefix is omitted when the key is unset. The cover letter copy is named `{cover_letter_file_stem}` + the source file's extension, where `cover_letter_file_stem` is `{candidate_name}_CoverLetter_{title_slug}_{normalized_company}` built by the same rule (defined once beside `resume_file_stem`).
 - **Name collisions:** two postings can share a normalized company and title slug (two reqs for the same role). The lowest-id posting gets the plain directory name, and each other's directory name gets ` ({id})` appended, so a posting never re-enters another posting's packet. The rule reads only the DB, so every command and refresh derives the same name.
-- **Never overwrites the resume copy:** an existing file at that path is left alone, since it may hold the user's edits.
+- **Never overwrites the resume copy or the cover letter copy:** an existing file at either path is left alone, since it may hold the user's edits.
 - Standalone `jsa packet` **skips a posting whose directory already exists** (never clobbered) and writes no checklist or redline; a `NULL`-JD row still gets its directory and resume copy (no `job_posting.md`). Queue: the packet queue (PRD 02; `--id` waives the tracker condition, never Apply).
 
 **Resume checklist (Step 4) (Priority: P0)**
@@ -136,7 +141,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Projection reads and writes:** rewriting a row's Title cell (`C{row}`, used by refetch); reading the tracker index (`postings.id → {row number, Date Applied}`, skipping non-integer ID cells); authority never flows Sheet→DB (`XC-4`).
 
 **Packets built on the inbox machine (Priority: P0)** — the email side door's continuation (PRD 03), for one posting that has a description.
-- **The same build, for one posting:** exactly what `jsa generate --id` does for it — packet head, checklist and its PDF, redline — through the same implementation, into a temporary directory on the machine. There is no liveness re-check, because the user vouched for the posting by sending it, as with `--id` (`XC-5`).
+- **The same build, for one posting:** exactly what `jsa generate --id` does for it — packet head, checklist and its PDF, redline — through the same implementation, into a temporary directory on the machine. The inbox machine has the base resume and the cover letter as machine files (PRD 06), so its packet is identical to a local one. There is no liveness re-check, because the user vouched for the posting by sending it, as with `--id` (`XC-5`).
 - **Delivered to Drive before tracking (P0):** the packet folder is uploaded through `gws`, with the owner's credential, into the Drive packets folder (`[inbox] drive_folder_id`), under the folder and file names a local build would use ("Packet directory" above). Files are uploaded as they are and never converted to Google Docs format, so the resume copy and the redline stay the exact `.docx` files, tracked changes and comments included. The tracker row is appended only after every file is confirmed uploaded, so a tracked row always has its packet. Upload planning (which file goes to which folder, under which name) is pure (`XC-9`).
 - **An upload never clobbers (P0):** a retry finds the posting's folder if an earlier attempt created it, uploads only the files missing from it, and never replaces or deletes a file there, because the user may already have opened it.
 - **Never rebuilt:** a posting already tracked gets nothing built or uploaded (`XC-10`). Refreshing a tracked packet stays local: `jsa generate --id` or refetch.
@@ -148,7 +153,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Re-apply the insert rule:** re-read the ATS record (off the four, the posting page's `JobPosting` data, PRD 01); the ATS-canonical title wins and `title_slug` is re-derived (PRD 02's JD capture), except on a `manual` row, whose title is the one the user confirmed at add (PRD 03).
 - **Failed fetch leaves the row *completely* untouched** (`XC-6`) — never trade a good capture for a blip; for a pulled posting the stored JD is the only surviving record.
 - **Title propagation:** a corrected title on a tracked-but-unapplied row updates the Sheet Title cell; a failed Sheet write degrades to a flagged hand-fix, never blocks the reconciliation.
-- **Packet refresh on drift, in place:** a title/description change on a row with an existing packet directory renames the directory, the resume copy, and any redline to their new names when the title changed, then regenerates the row exactly as `jsa generate --id` would, which rewrites `job_posting.md` and regenerates the checklist against the (possibly revised) resume copy. Refetch never deletes a packet directory or any file in it, and renames only, never rewrites, the resume copy and the redline, because they may hold the user's revision work. If a distinct directory, resume file, or redline already exists at a new name, refetch renames nothing and flags the row. A location-only change touches nothing; refetch never creates a packet where none existed. A failed generate is flagged for a manual re-run, never rolled back.
+- **Packet refresh on drift, in place:** a title/description change on a row with an existing packet directory renames the directory, the resume copy, the cover letter copy, and any redline to their new names when the title changed, then regenerates the row exactly as `jsa generate --id` would, which rewrites `job_posting.md` and regenerates the checklist against the (possibly revised) resume copy. Refetch never deletes a packet directory or any file in it, and renames only, never rewrites, the resume copy, the cover letter copy, and the redline, because they may hold the user's revision work. If a distinct directory, resume file, cover letter file, or redline already exists at a new name, refetch renames nothing and flags the row. A location-only change touches nothing; refetch never creates a packet where none existed. A failed generate is flagged for a manual re-run, never rolled back.
 
 -----
 #### User Experience
@@ -189,7 +194,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 
 -----
 #### Technical Considerations
-- **Where it runs (`XC-1`):** `packet`, `generate`, `track`, and `refetch` run locally, on the local disk, the local profile, and the local `gws` login. The inbox machine runs one emailed posting's build and track, with `config.toml` and `resume.docx` as machine files and its own `gws` credential (PRD 06).
+- **Where it runs (`XC-1`):** `packet`, `generate`, `track`, and `refetch` run locally, on the local disk, the local profile, and the local `gws` login. The inbox machine runs one emailed posting's build and track, with `config.toml`, `resume.docx`, and the cover letter (if any) as machine files and its own `gws` credential (PRD 06).
 - **Deterministic core, agentic shell (`XC-9`):** resume rendering, resume file naming, and tracker row building are pure; the checklist is one agentic call whose output is advisory, so a non-reproducible checklist never makes the packet itself non-reproducible.
 - **The redline's guarantees live in code, not in the agent (`XC-9`):** validation, the plain-text paragraph rendering, and the tracked-change writing are pure and tested without a model. The proposals themselves are judged by the owner on real packets.
 - **Completion guard is `added_to_tracker`, not directory-exists (`XC-10`):** `jsa generate` must re-enter a bare directory.
@@ -208,6 +213,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 
 **User inputs / manual setup this subsystem requires** (consolidated in PRD 06; all local-only profile content, `XC-11`):
 - **`profile/resume.docx`** — the single base resume every packet starts from.
+- **`profile/cover_letter.*`** (optional) — the cover letter every packet gets a copy of.
 - **`gws` CLI + Google OAuth** (`gws auth login`) for Sheet writes; note the testing-status OAuth 7-day token expiry until the consent screen is published.
 - **The tracker Google Sheet** (with the inbox in use, the copy made with `gws`, PRD 06) with an `Applications` tab, an A:H header, and a Status dropdown / data-validation already set up; its id as **`tracker_spreadsheet_id`** in `profile/config.toml` (no code default).
 - **`candidate_name`** (the resume file-name prefix) in `profile/config.toml`, optional.
