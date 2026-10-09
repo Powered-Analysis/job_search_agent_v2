@@ -172,16 +172,33 @@ def _check_search_secrets(app: str, config: SearchConfig) -> None:
         )
 
 
-def _check_inbox_secrets(app: str) -> None:
-    """Aborts when the inbox app lacks a secret; deploy never sets one."""
-    held = _secret_names(app)
+def missing_inbox_secrets(held: set[str]) -> list[str]:
+    """The secrets the inbox app doesn't hold; one entry stands for the Claude credential. Pure (XC-9)."""
     missing = [name for name in INBOX_SECRETS if name not in held]
     if not held.intersection(INBOX_CLAUDE_SECRETS):
         missing.append(" or ".join(INBOX_CLAUDE_SECRETS))
-    if missing:
+    return missing
+
+
+def conflicting_claude_secrets(held: set[str]) -> list[str]:
+    """Both Claude credentials when the app holds both, else none. Pure (XC-9)."""
+    credentials = [name for name in INBOX_CLAUDE_SECRETS if name in held]
+    return credentials if len(credentials) > 1 else []
+
+
+def _check_inbox_secrets(app: str) -> None:
+    """Aborts when the inbox app lacks a secret or holds both Claude credentials; deploy never sets one."""
+    held = _secret_names(app)
+    if missing := missing_inbox_secrets(held):
         raise JsaError(
             f"the inbox app {app} lacks these secrets: {', '.join(missing)}. "
             "Stage them from .env first (README, set up the inbox)."
+        )
+    if both := conflicting_claude_secrets(held):
+        # The CLI prefers the API key, so the OAuth flow fails with a 401 on the machine (PRD 06).
+        raise JsaError(
+            f"the inbox app {app} holds both Claude credentials: {' and '.join(both)}. "
+            f"Keep exactly one; remove the other with `fly secrets unset -a {app}`."
         )
 
 
