@@ -3,6 +3,7 @@
 import logging
 import time
 from collections.abc import Callable, Iterable
+from contextlib import closing
 from dataclasses import dataclass, replace
 from functools import partial
 
@@ -16,6 +17,7 @@ from jsa.runners import (
     RunnerError,
     RunnerResult,
     clip,
+    within,
 )
 
 log = logging.getLogger(__name__)
@@ -256,20 +258,21 @@ class GeminiAgentRunner:
     ) -> StreamState:
         """Fold events until the stream ends or drops; a drop is not an error, the run reconnects."""
         try:
-            for raw in open_events():
-                deadline.check()
-                event = raw.model_dump(mode="json", exclude_none=True)
-                state = self._track(fold(state, event))
-                if summary := thought_summary(event):
-                    log.info("gemini: %s", clip(summary))
-                if state.failure:
-                    raise RunnerError(f"Gemini reported a failure: {state.failure}")
-                if deadline.heartbeat_due():
-                    log.info(
-                        "still researching: %d thought steps, %.0fs",
-                        state.thought_steps,
-                        deadline.elapsed,
-                    )
+            with closing(within(open_events(), deadline)) as stream:
+                for raw in stream:
+                    deadline.check()
+                    event = raw.model_dump(mode="json", exclude_none=True)
+                    state = self._track(fold(state, event))
+                    if summary := thought_summary(event):
+                        log.info("gemini: %s", clip(summary))
+                    if state.failure:
+                        raise RunnerError(f"Gemini reported a failure: {state.failure}")
+                    if deadline.heartbeat_due():
+                        log.info(
+                            "still researching: %d thought steps, %.0fs",
+                            state.thought_steps,
+                            deadline.elapsed,
+                        )
         except Exception as error:
             if not _dropped(error):
                 raise

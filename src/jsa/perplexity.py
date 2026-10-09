@@ -9,7 +9,7 @@ import httpx
 
 from jsa.config import api_key
 from jsa.http import post_sse
-from jsa.runners import Deadline, RunnerError, RunnerResult
+from jsa.runners import Deadline, RunnerError, RunnerResult, within
 from jsa.search_output import output_json_schema
 
 log = logging.getLogger(__name__)
@@ -84,12 +84,15 @@ class PerplexityRunner:
         # Closing the stream is what makes Perplexity stop the run, so it is closed the moment
         # this block is left, however it is left (PRD 01).
         with closing(
-            post_sse(
-                self._client,
-                URL,
-                request_body(prompt),
-                headers={"Authorization": f"Bearer {self._key}"},
-                read_timeout=deadline.request_timeout(),
+            within(
+                post_sse(
+                    self._client,
+                    URL,
+                    request_body(prompt),
+                    headers={"Authorization": f"Bearer {self._key}"},
+                    read_timeout=deadline.request_timeout(),
+                ),
+                deadline,
             )
         ) as events:
             for event, data in events:
