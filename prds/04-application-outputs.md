@@ -102,8 +102,8 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
   - any edit made for style.
 - **Part of `jsa generate`:** each row that gets a checklist then gets a redline from the same worker, before its tracker append. The redline reads the same resume copy as the checklist and works independently of it; neither sees the other's output. `jsa packet` writes neither.
 - **Why it can run headless:** the user's judgment is applied where the redline is reviewed, in Word, one change at a time. Proposing the edits needs no conversation, and the validator below holds the guarantees that matter. So the redline is a batch step like the checklist, not an interactive session.
-- **Agent:** the Claude Agent SDK, headless, **`model` and `effort` from `[agents.redline]` in `profile/config.toml`** (`XC-14`; example default `claude-fable-5-1` at `medium`), no tools at all, a single turn, run through the shared agent loop (`XC-12`). Its final text is a JSON array of `{paragraph, find, replace, jd_quote, why_same_meaning}` objects. An empty result, or text that isn't such an array, raises.
-- **Invalid edits are dropped, never repaired:** every proposed edit is checked against the rules below. An edit that fails is left out of the redline; the app never adjusts an edit to make it pass. Every proposed edit, with its validation result (`null`, or the reason it was dropped), is written to the packet as `redline_edits.json`, the record of what was proposed. Generate's report gives each row's applied and dropped counts.
+- **Agent:** the Claude Agent SDK, headless, **`model` and `effort` from `[agents.redline]` in `profile/config.toml`** (`XC-14`; example default `claude-fable-5-1` at `medium`), no tools at all, a single turn, run through the shared agent loop (`XC-12`). Its final text is a JSON object `{edits, explanation}`: `edits` is an array of `{paragraph, find, replace, jd_quote, why_same_meaning}` objects, and `explanation` is a short plain-text string. `explanation` is non-empty exactly when `edits` is empty, and `null` otherwise. An empty result, text that isn't such an object, or an object that breaks the `explanation` rule raises.
+- **Invalid edits are dropped, never repaired:** every proposed edit is checked against the rules below. An edit that fails is left out of the redline; the app never adjusts an edit to make it pass. `redline_edits.json`, the record of what was proposed, is written to the packet as a JSON object `{explanation, edits}`: the agent's `explanation`, and every proposed edit with its validation result (`null`, or the reason it was dropped). Generate's report gives each row's applied and dropped counts.
 - **Validation (pure, `XC-9`):** a *word* is a whitespace-separated token with leading and trailing `.,;:!?()[]"'` stripped, compared case-insensitively. An edit passes only when all of these hold:
   - `paragraph` is the index of a body paragraph in the resume copy;
   - `find` occurs exactly once in that paragraph's plain text;
@@ -114,6 +114,8 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
   - `find` and `replace` contain the same digit-bearing words, so no number changes;
   - `find` is at most 6 words long. This is a first cut, to be revisited once the owner has judged real redlines;
   - `why_same_meaning` is non-empty.
+
+- **Why no edits:** when the agent proposes none, its `explanation` says why, so an empty redline can be read rather than guessed at. Two causes are told apart: the resume already uses the posting's terms (very well aligned), or the resume and posting share so little vocabulary that no same-meaning swap exists (little overlap). The explanation is advisory, like the checklist, and nothing validates it. It is kept in `redline_edits.json` and nowhere else, since an empty redline writes no document. When edits were proposed but every one was dropped, the per-edit reasons in the file are the account, and `explanation` is `null`.
 
   *What code can't check is meaning.* A swap worded entirely from the posting can still shift a claim (e.g. "SQL" → "PostgreSQL"). That judgment rests on the template's rules and on the user's accept or reject. The comment beside each change puts the evidence in front of the user at the moment they decide.
 - **The redline document:** written when at least one edit passes. It is a copy of the packet's resume copy, named `{resume_file_stem}_redline.docx` (the name is defined once beside `resume_file_stem`).
@@ -126,7 +128,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Re-entry:** `redline_edits.json` marks the redline step done, since a run with no valid edits writes no document. The queue path runs the redline only when the packet lacks that file, so a run interrupted after the redline resumes at the tracker append. `--id` and a refetch refresh rerun it against the resume copy's current contents, **unless a redline document already exists**: the user may be partway through reviewing it, so it and its `redline_edits.json` are left untouched. To get a fresh redline of a revised resume, the user deletes the redline and runs `jsa generate --id`.
 - **Unresolved tracked changes in the resume copy:** the redline is skipped for that row, with a warning, and the row continues to its tracker append. The copy's paragraph text is ambiguous until the user accepts or rejects those changes, and that is the user's state to fix, not a failure.
 - **Text in scope:** the body paragraphs, the same ones the checklist sees ("Base resume"). Text in tables, headers, footers, and text boxes isn't redlined.
-- **Prompt (`XC-13`):** the app's redline template. It is candidate-agnostic and has no profile slots. It states the boundary, the allowed and forbidden edits above, and the edit list's output contract.
+- **Prompt (`XC-13`):** the app's redline template. It is candidate-agnostic and has no profile slots. It states the boundary, the allowed and forbidden edits above, the output contract (`edits` and `explanation`), and the two causes an empty `edits` must choose between.
 
   | Slot | Source | Required | Precedence |
   |---|---|---|---|
@@ -186,7 +188,8 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Standalone `jsa packet` on an existing directory:** skipped, never clobbered.
 - **Redline proposes an invalid edit:** the edit is dropped and recorded in `redline_edits.json` with its reason; the valid ones are still written.
 - **Redline has no valid edit:** no redline document; `redline_edits.json` is still written, so re-entry doesn't rerun it.
-- **Redline output isn't a JSON edit array:** raised like an agent error; the row is flagged `failed` and stays in the queue, and re-entry resumes at the redline.
+- **Agent proposes no edits:** no redline document; `redline_edits.json` holds an empty `edits` and the agent's `explanation` of why.
+- **Redline output isn't a JSON `{edits, explanation}` object:** raised like an agent error; the row is flagged `failed` and stays in the queue, and re-entry resumes at the redline.
 - **Resume copy with unresolved tracked changes:** redline skipped with a warning; the row is still tracked.
 - **Redline already present on `--id` or a refetch refresh:** left untouched with its `redline_edits.json`; the checklist still refreshes.
 - **An emailed posting with a description:** built and tracked on the inbox machine; its packet appears locally through Drive for Desktop.

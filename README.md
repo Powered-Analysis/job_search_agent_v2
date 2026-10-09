@@ -229,7 +229,8 @@ After `jsa generate`, revise each packet's resume copy by hand against its check
 packet's `*_redline.docx` in Word to accept or reject each proposed wording change; every change
 carries a comment quoting the posting text behind it. Save the result over the resume copy to keep it.
 A redline is only written when at least one proposed change passes validation; `redline_edits.json`
-records every proposal and why any was dropped. To redline a revised resume again, delete the
+records every proposal and why any was dropped, and, when none was proposed, the agent's explanation of
+why (a resume already well aligned, or one with little vocabulary in common with the posting). To redline a revised resume again, delete the
 redline and run `jsa generate --id <id>`.
 
 ## Portability
