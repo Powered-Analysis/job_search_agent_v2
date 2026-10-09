@@ -24,11 +24,11 @@ from jsa.generate import build_packet, track_posting
 from jsa.gws import run_gws
 from jsa.packet import packet_paths
 from jsa.profile import (
-    base_resume,
     inbox_drive_folder,
     inbox_settings,
     load_config,
     packet_agents,
+    packet_sources,
     tracker_spreadsheet_id,
 )
 from jsa.tracker import today
@@ -193,10 +193,10 @@ def _deliver(posting_id: int, *, has_jd: bool) -> str:
     spreadsheet_id = tracker_spreadsheet_id()
     drive_folder_id = inbox_drive_folder(config)
     agents = packet_agents(config)
-    resume = base_resume()
+    sources = packet_sources()
     with tempfile.TemporaryDirectory() as scratch:
         built = config.model_copy(update={"packets_dir": Path(scratch)})
-        if not build_packet(job, built, resume, agents, rewrite=True):
+        if not build_packet(job, built, sources, agents, rewrite=True):
             return NEEDS_JD
         deliver_packet(drive_folder_id, packet_paths(built, job)[0])
     track_posting(spreadsheet_id, today(), posting_id)

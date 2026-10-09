@@ -1,11 +1,16 @@
-"""Application packet folders (PRD 04): the job description and the user's own resume copy."""
+"""Application packet folders (PRD 04): the job description and the user's own resume and cover letter copies."""
 
 import shutil
 from pathlib import Path
 
 from jsa import db
-from jsa.naming import packet_dir_name, redline_file_name, resume_file_stem
-from jsa.profile import Config, base_resume, load_config
+from jsa.naming import (
+    cover_letter_file_stem,
+    packet_dir_name,
+    redline_file_name,
+    resume_file_stem,
+)
+from jsa.profile import Config, PacketSources, load_config, packet_sources
 
 JOB_POSTING = "job_posting.md"
 CHECKLIST = "resume_checklist.md"
@@ -25,6 +30,27 @@ def packet_paths(config: Config, job: db.PacketJob) -> tuple[Path, Path]:
     return directory, copy
 
 
+def cover_letter_stem(config: Config, job: db.PacketJob) -> str:
+    return cover_letter_file_stem(
+        config.candidate_name, job.title_slug, job.normalized_company
+    )
+
+
+def packet_copies(
+    config: Config, job: db.PacketJob, sources: PacketSources
+) -> dict[Path, Path]:
+    """Each file the packet holds a user-owned copy of, as copy -> profile source."""
+    directory, resume_copy = packet_paths(config, job)
+    copies = {resume_copy: sources.resume}
+    if sources.cover_letter is not None:
+        # The copy keeps the source's extension, whatever it is (`.docx`, `.pdf`, ...).
+        extension = sources.cover_letter.name.removeprefix("cover_letter")
+        copies[directory / f"{cover_letter_stem(config, job)}{extension}"] = (
+            sources.cover_letter
+        )
+    return copies
+
+
 def redline_path(copy: Path) -> Path:
     """The ATS redline beside the resume copy it is made from."""
     return copy.with_name(redline_file_name(copy.stem))
@@ -32,28 +58,28 @@ def redline_path(copy: Path) -> Path:
 
 def ensure_head(
     directory: Path,
-    copy: Path,
     job: db.PacketJob,
-    resume: Path,
+    copies: dict[Path, Path],
     *,
     refresh_posting: bool = False,
 ) -> None:
-    """Complete the folder, the job description, and the resume copy.
+    """Complete the folder, the job description, and the resume and cover letter copies.
 
-    The resume copy and a hand-filled job description are never replaced. The row's description
+    The copies and a hand-filled job description are never replaced. The row's description
     replaces an existing `job_posting.md` only when `refresh_posting` is set.
     """
     directory.mkdir(parents=True, exist_ok=True)
     posting = directory / JOB_POSTING
     if job.jd_markdown is not None and (refresh_posting or not posting.exists()):
         posting.write_text(job.jd_markdown, encoding="utf-8")
-    # The copy is the user's working file, so an existing one is never replaced.
-    if not copy.exists():
-        shutil.copyfile(resume, copy)
+    # A copy is the user's working file, so an existing one is never replaced.
+    for copy, source in copies.items():
+        if not copy.exists():
+            shutil.copyfile(source, copy)
 
 
 def build_packets(posting_id: int | None, *, dry_run: bool) -> None:
-    resume = base_resume()
+    sources = packet_sources()
     config = load_config()
     conn = db.connect()
     queue = db.packet_queue(conn, posting_id)
@@ -61,10 +87,10 @@ def build_packets(posting_id: int | None, *, dry_run: bool) -> None:
         print("No postings awaiting a packet.")
         return
     for job in queue:
-        directory, copy = packet_paths(config, job)
+        directory = packet_paths(config, job)[0]
         if directory.exists():
             print(f"skipped (folder exists): {directory}")
             continue
         print(f"{'would create' if dry_run else 'created'}: {directory}")
         if not dry_run:
-            ensure_head(directory, copy, job, resume)
+            ensure_head(directory, job, packet_copies(config, job, sources))

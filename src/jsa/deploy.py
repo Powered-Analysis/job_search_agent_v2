@@ -18,6 +18,7 @@ from jsa.profile import (
     SearchConfig,
     base_resume,
     checklist_settings,
+    cover_letter,
     fly_settings,
     inbox_app,
     inbox_drive_folder,
@@ -49,6 +50,7 @@ BUILD_INPUTS = (
 )
 # The inbox machine's profile files, set as machine files so they never enter the image (XC-11).
 # The image's working directory is /app, where the app looks for `profile/`.
+MACHINE_PROFILE_DIR = "/app/profile"
 INBOX_FILES = ("config.toml", "resume.docx")
 INBOX_ENTRYPOINT = "jsa inbox"
 INBOX_SECRETS = (
@@ -139,6 +141,7 @@ def _validate_inbox(config: Config) -> str:
     app = inbox_app(config)
     inbox_drive_folder(config)
     base_resume()
+    cover_letter()
     tracker_spreadsheet_id()
     checklist_settings(config)
     redline_settings(config)
@@ -229,11 +232,11 @@ def _build_and_push(app: str) -> str:
     return f"registry.fly.io/{app}:{label}"
 
 
-def _scheduled_machines(app: str) -> list[str]:
+def _scheduled_machines(app: str) -> list[dict]:
     try:
         machines = json.loads(_fly(["machine", "list", "--json"], app, capture=True))
         return [
-            machine["id"]
+            machine
             for machine in machines
             if machine["config"].get("schedule") == SCHEDULE
         ]
@@ -241,9 +244,33 @@ def _scheduled_machines(app: str) -> list[str]:
         raise JsaError("fly machine list did not return a list of machines") from None
 
 
-def _swap_in(image: str, app: str, region: str, *options: str) -> None:
-    """Create or update the app's one `hourly` machine; `options` go on both the create and the update."""
-    ids = _scheduled_machines(app)
+def _held_files(machine: dict) -> list[str]:
+    """The profile files a machine already holds as machine files."""
+    return [
+        file["guest_path"]
+        for file in machine["config"].get("files") or []
+        if file["guest_path"].startswith(f"{MACHINE_PROFILE_DIR}/")
+    ]
+
+
+def _swap_in(
+    image: str,
+    app: str,
+    region: str,
+    *options: str,
+    machine_files: dict[str, Path] | None = None,
+) -> None:
+    """Create or update the app's one `hourly` machine; `options` go on both the create and the update.
+
+    `machine_files` are all the profile files the machine holds. An update clears any other file the
+    machine already holds under the profile, such as a cover letter since removed (PRD 06).
+    """
+    machines = _scheduled_machines(app)
+    ids = [machine["id"] for machine in machines]
+    machine_files = machine_files or {}
+    files = [
+        f"--file-local={target}={source}" for target, source in machine_files.items()
+    ]
     if len(ids) > 1:
         raise JsaError(
             f"{len(ids)} machines carry the {SCHEDULE} schedule in {app} "
@@ -262,6 +289,7 @@ def _swap_in(image: str, app: str, region: str, *options: str) -> None:
                 "--region",
                 region,
                 *options,
+                *files,
             ],
             app,
         )
@@ -280,6 +308,13 @@ def _swap_in(image: str, app: str, region: str, *options: str) -> None:
             SCHEDULE,
             "--yes",
             *options,
+            *files,
+            # Fly removes a machine file that is set to an empty path.
+            *(
+                f"--file-local={held}="
+                for held in _held_files(machines[0])
+                if held not in machine_files
+            ),
         ],
         app,
     )
@@ -288,15 +323,10 @@ def _swap_in(image: str, app: str, region: str, *options: str) -> None:
 
 def inbox_machine_files() -> dict[str, Path]:
     """Where each inbox machine file lands in the machine, and the profile file it comes from."""
-    return {f"/app/profile/{name}": profile_dir() / name for name in INBOX_FILES}
-
-
-def _inbox_options() -> list[str]:
-    files = [
-        f"--file-local={target}={source}"
-        for target, source in inbox_machine_files().items()
-    ]
-    return ["--entrypoint", INBOX_ENTRYPOINT, *files]
+    sources = [profile_dir() / name for name in INBOX_FILES]
+    if (letter := cover_letter()) is not None:
+        sources.append(letter)
+    return {f"{MACHINE_PROFILE_DIR}/{source.name}": source for source in sources}
 
 
 def _smoke(image: str, fly: FlyConfig) -> None:
@@ -342,4 +372,11 @@ def deploy(*, dry_run: bool, smoke: bool) -> None:
         return
     _swap_in(image, fly.app, fly.region)
     if inbox is not None:
-        _swap_in(image, inbox, fly.region, *_inbox_options())
+        _swap_in(
+            image,
+            inbox,
+            fly.region,
+            "--entrypoint",
+            INBOX_ENTRYPOINT,
+            machine_files=inbox_machine_files(),
+        )

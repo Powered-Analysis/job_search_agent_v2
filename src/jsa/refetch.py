@@ -1,5 +1,6 @@
 """`jsa refetch` (PRD 04 "Reconciliation"): carry an employer's edits into the database, the tracker, and the packet."""
 
+import glob
 from contextlib import closing
 from pathlib import Path
 
@@ -10,13 +11,19 @@ from jsa.ats import resolve_ats
 from jsa.capture import Capture, CaptureError, capture_posting
 from jsa.errors import JsaError, one_line
 from jsa.generate import build_packet
-from jsa.packet import JOB_POSTING, packet_paths, redline_path
+from jsa.packet import (
+    JOB_POSTING,
+    cover_letter_stem,
+    packet_paths,
+    redline_path,
+)
 from jsa.profile import (
     Config,
     PacketAgents,
-    base_resume,
+    PacketSources,
     load_config,
     packet_agents,
+    packet_sources,
     tracker_spreadsheet_id,
 )
 
@@ -47,16 +54,30 @@ def _taken(name: Path, source: Path) -> bool:
 
 
 def _rename_packet(
-    old_directory: Path, old_copy: Path, new_directory: Path, new_copy: Path
+    old_job: db.PacketJob,
+    new_job: db.PacketJob,
+    old_directory: Path,
+    old_copy: Path,
+    config: Config,
 ) -> str | None:
     """Move the packet to its new names; returns why nothing was renamed when a name is taken."""
+    new_directory, new_copy = packet_paths(config, new_job)
     if _taken(new_directory, old_directory):
         return f"{new_directory} already exists"
-    # The resume copy and its redline hold the user's work and move together, never rewritten.
+    # The resume copy, the cover letter copy, and the redline hold the user's work and move together,
+    # never rewritten. The cover letter copy is found by name, whatever its extension.
     old_redline, new_redline = redline_path(old_copy), redline_path(new_copy)
+    old_cover, new_cover = (
+        cover_letter_stem(config, job) for job in (old_job, new_job)
+    )
     moves = [
         (old_copy, old_directory / new_copy.name),
         (old_redline, old_directory / new_redline.name),
+        *(
+            (path, old_directory / (new_cover + path.name.removeprefix(old_cover)))
+            for path in old_directory.glob(f"{glob.escape(old_cover)}.*")
+            if path.is_file()
+        ),
     ]
     moves = [(source, target) for source, target in moves if source.name != target.name]
     for source, target in moves:
@@ -120,24 +141,25 @@ def _move_neighbours(
 
 
 def _refresh_packet(
+    current: db.PacketJob,
     fresh: db.PacketJob,
     old_directory: Path,
     old_copy: Path,
     config: Config,
-    resume: Path,
+    sources: PacketSources,
     agents: PacketAgents,
 ) -> str | None:
     """Rename and regenerate the packet in place; returns what needs a hand fix, if anything."""
-    new_directory, new_copy = packet_paths(config, fresh)
+    new_directory = packet_paths(config, fresh)[0]
     try:
-        taken = _rename_packet(old_directory, old_copy, new_directory, new_copy)
+        taken = _rename_packet(current, fresh, old_directory, old_copy, config)
         if taken:
             return (
                 f"{taken}, so nothing was renamed or regenerated; rename the packet by hand "
                 f"to match the new title, then run `jsa generate --id {fresh.id}`"
             )
         # PRD 04: exactly `jsa generate --id`, which keeps the resume copy and rewrites the rest.
-        if not build_packet(fresh, config, resume, agents, rewrite=True):
+        if not build_packet(fresh, config, sources, agents, rewrite=True):
             return (
                 f"no job description to assess; fill in {new_directory / JOB_POSTING}, "
                 f"then run `jsa generate --id {fresh.id}`"
@@ -170,7 +192,7 @@ def _reconcile(
     index: dict[int, tracker.SheetRow] | None,
     spreadsheet_id: str,
     config: Config,
-    resume: Path,
+    sources: PacketSources,
     agents: PacketAgents,
     *,
     dry_run: bool,
@@ -234,7 +256,7 @@ def _reconcile(
         and drift
         and (
             problem := _refresh_packet(
-                fresh, old_directory, old_copy, config, resume, agents
+                current, fresh, old_directory, old_copy, config, sources, agents
             )
         )
     ):
@@ -250,7 +272,7 @@ def refetch(
     every_row: bool,
     dry_run: bool,
 ) -> None:
-    resume = base_resume()
+    sources = packet_sources()
     spreadsheet_id = tracker_spreadsheet_id()
     config = load_config()
     agents = packet_agents(config)
@@ -273,7 +295,7 @@ def refetch(
             index,
             spreadsheet_id,
             config,
-            resume,
+            sources,
             agents,
             dry_run=dry_run,
         )
