@@ -15,7 +15,7 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 
 ##### User Goals
 - As the job seeker, I want to see each undecided role in my browser and record Apply/Skip with one keystroke, so that I can clear a backlog quickly.
-- As the job seeker, I want to attach a note explaining *why*, and to amend that note or flip the decision later in the same session, so that my ground truth is accurate.
+- As the job seeker, I want to attach a note explaining *why*, and to amend that note or flip the decision later, in the same session or afterward with `jsa revise`, so that my ground truth is accurate.
 - As the job seeker, I want to drop in a URL I found myself and have it treated as Apply immediately, so that I don't review a role I've already chosen.
 - As the job seeker, I want to email a role I found on my phone and trust it to land, so that finding a job doesn't wait on being at my computer.
 
@@ -32,6 +32,7 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 **Job seeker**
 - As the job seeker, I want the backlog presented oldest-first, so that stale postings are triaged before they close.
 - As the job seeker, I want to step back to a previous posting and amend my call, so that a too-quick decision is recoverable.
+- As the job seeker, I want to reopen any decided posting, or the one I decided last, to amend it after the session has ended, so that a second thought needn't wait for a final prompt.
 - As the job seeker, I want `jsa add` to derive the company and title for me (and let me correct them) rather than making me type them, so that adding a role is quick.
 - As the job seeker, I want re-adding a URL I already reviewed to promote it to Apply while keeping the note I wrote, so that nothing is lost.
 - As the job seeker, I want postings that closed while they waited to be dropped before I see them, so that I never spend review time on a dead link.
@@ -60,7 +61,8 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 - **Decision prompt:** single-letter choices — **`a` = Apply, `s` = Skip, `b` = back, `q` = quit**; a bare Enter (keep the existing decision) is offered only when the posting already has a recorded decision. No pre-filled buffer at the decision prompt (a single-letter pre-fill would double the keystroke).
 - **Stored vs displayed:** the keystroke `a`/`s` maps to the stored/displayed decision strings **`Apply`/`Skip`**.
 - **Feedback + amend (P0):** after a decision, prompt `"Feedback (Enter to skip, :a/:s to change the decision): "`. The buffer is **pre-filled with any prior feedback** so amending edits the existing note rather than retyping it. Inline commands (case-insensitive): `:a`/`:apply` and `:s`/`:skip` flip the decision and keep the remaining text as feedback; `:b`/`:back` discards and returns to the decision prompt for the same posting.
-- **Revisability (P0):** within a session a posting can be revisited and re-decided (shown as " (amending)"); after the backlog, the loop offers one more pass at the last entry. Each write refreshes `decided_at` (PRD 02), so amended rows re-enter refinement scope.
+- **Revisability (P0):** within a session a posting can be revisited and re-decided (shown as " (amending)"). The session ends when the last posting in the backlog is decided. Each write refreshes `decided_at` (PRD 02), so amended rows re-enter refinement scope.
+- **`jsa revise` (P0):** reopens one decided posting for amendment, outside a review session. Exactly one of `--id N` (the posting's `id`, PRD 02) or `--last` (the decided posting with the newest `decided_at`, ties to the highest `id`) is required. It shows and opens the posting like review does, then runs the same decision and feedback prompts, with the existing decision offered as the Enter default and the existing note pre-filled, and writes through the same decision write. An unknown `id`, a posting with no decision (the message points to `jsa review`), or `--last` with no decided postings exits non-zero with a one-line message and writes nothing. Quitting leaves the posting as it was.
 - **Persistence:** a posting's decision and feedback are written together, and committed immediately, when its feedback prompt is submitted. Ctrl-C/Ctrl-D quits cleanly: every committed decision survives, and a posting whose prompts were interrupted keeps whatever it had before (undecided, or its earlier decision).
 - **No LLM:** the loop makes no model calls.
 
@@ -105,13 +107,14 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 **Entry Point & First-Time Experience**
 - `jsa review` (local, interactive; run directly or `!`-prefixed — never as a slash command, which would reintroduce per-posting token cost). Empty backlog prints "No postings awaiting review. 🎉" and exits.
 - `jsa add <URL> [--company] [--title] [--date-posted] [--no-input]` (local).
+- `jsa revise (--id N | --last)` (local, interactive): amend a decided posting.
 - The email side door: the user emails the jobs mailbox a posting's link, or its link and its pasted description, one posting per message; `jsa inbox` on the inbox machine picks it up within the hour (PRD 06).
 
 **Core Experience (review)**
 1. Session prints the search health line, re-checks the backlog, says how many postings closed, then opens the oldest undecided posting in Chrome and shows company/title/location/url.
 2. User presses `a`/`s` (or `b`/`q`).
 3. User optionally types a note, or `:a`/`:s` to flip, or `:b` to redo.
-4. Decision commits; loop advances. After the last posting, one final amend pass is offered.
+4. Decision commits; loop advances. The session ends after the last posting.
 
 **Edge Cases**
 - **No TTY:** degrades to plain line input (structured validation like choice-matching still enforced).
