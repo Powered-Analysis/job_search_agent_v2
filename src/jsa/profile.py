@@ -255,6 +255,18 @@ def inbox_settings(config: Config) -> InboxConfig:
     return config.inbox
 
 
+def inbox_app(config: Config) -> str:
+    """The inbox app's name, once `[inbox]` has the keys `jsa deploy` needs; a missing one raises before any build."""
+    inbox = inbox_settings(config)
+    for key in ("app", "drive_folder_id"):
+        if getattr(inbox, key) is None:
+            raise JsaError(
+                f"[inbox] {key} is missing in {profile_dir() / 'config.toml'}. "
+                f"{_pointer('config.toml')}"
+            )
+    return inbox.app
+
+
 def checklist_settings(config: Config) -> AgentSettings:
     return _agent_settings(config, "checklist")
 
