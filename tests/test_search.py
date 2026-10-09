@@ -4,6 +4,8 @@ import itertools
 import json
 import logging
 import sys
+import threading
+import time
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -887,6 +889,99 @@ def test_the_same_stream_completes_when_the_clock_stays_under_the_ceiling(
     code, _out, _err = run(monkeypatch, capsys)
     assert code == 0
     assert count_rows(world.url, "postings") == 1
+
+
+# --- a stream that goes silent (issue #30) ---------------------------------------
+
+
+class Silent(httpx.SyncByteStream):
+    """A response body that serves some events, then sends nothing until released."""
+
+    def __init__(self, events):
+        self.chunks = [sse([event]).encode() for event in events]
+        self.release = threading.Event()
+        self.closed = threading.Event()
+
+    def __iter__(self):
+        yield from self.chunks
+        # Capped, so a regression fails the test instead of hanging it.
+        self.release.wait(30)
+
+    def close(self):
+        self.closed.set()
+
+
+@pytest.fixture
+def silent_stream(web):
+    bodies = []
+
+    def serve(events):
+        bodies.append(Silent(events))
+        web.routes[PERPLEXITY] = httpx.Response(
+            200, stream=bodies[-1], headers={"content-type": "text/event-stream"}
+        )
+        return bodies[-1]
+
+    yield serve
+    for body in bodies:
+        body.release.set()
+
+
+def ceiling_of(monkeypatch, seconds):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (seconds, time.monotonic))
+
+
+FEW_SECONDS = 5
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        pytest.param([], id="silent-from-the-start"),
+        pytest.param(
+            [("response.created", {})] + [(STEP_EVENT, {})] * 3, id="after-steps"
+        ),
+        pytest.param(
+            stream_for(answer_with([]))[:-1], id="after-the-answer-before-completion"
+        ),
+    ],
+)
+def test_a_perplexity_stream_that_goes_silent_raises_at_the_ceiling(
+    web, profile, silent_stream, monkeypatch, events
+):
+    ceiling_of(monkeypatch, 0.5)
+    silent_stream(events)
+    started = time.monotonic()
+    with make_client() as client, pytest.raises(WallClockExceeded):
+        PerplexityRunner(client).run("a prompt")
+    assert time.monotonic() - started < 0.5 + FEW_SECONDS
+
+
+def test_a_silent_perplexity_stream_is_closed_once_its_read_ends(
+    web, profile, silent_stream, monkeypatch
+):
+    ceiling_of(monkeypatch, 0.5)
+    body = silent_stream([(STEP_EVENT, {})])
+    with make_client() as client, pytest.raises(WallClockExceeded):
+        PerplexityRunner(client).run("a prompt")
+    body.release.set()
+    assert body.closed.wait(FEW_SECONDS)
+
+
+def test_a_search_whose_stream_goes_silent_fails_at_the_ceiling_and_inserts_nothing(
+    world, silent_stream, monkeypatch, capsys
+):
+    ceiling_of(monkeypatch, 0.5)
+    silent_stream(stream_for(answer_with([entry(world.web.job())]))[:-1])
+    started = time.monotonic()
+    code, _out, err = run(monkeypatch, capsys)
+    assert time.monotonic() - started < 0.5 + FEW_SECONDS
+    assert code != 0
+    assert err
+    assert count_rows(world.url, "postings") == 0
+    assert count_rows(world.url, "search_findings") == 0
+    (row,) = search_runs(world.url)
+    assert row["outcome"] == "failed"
 
 
 # --- findings and the verification gate ------------------------------------------

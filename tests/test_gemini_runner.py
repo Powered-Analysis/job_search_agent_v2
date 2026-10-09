@@ -7,6 +7,8 @@ The agent is pinned by the PRD, so the profile has no Gemini setting.
 import logging
 import shutil
 import sys
+import threading
+import time
 from types import SimpleNamespace
 
 import httpx
@@ -868,6 +870,85 @@ def test_a_missing_key_raises_a_runtime_error_naming_it_before_any_call(
     assert fake.read_calls == []
 
 
+# --- a stream that goes silent (issue #30) -------------------------------------------------
+
+
+@pytest.fixture
+def silent():
+    """Streams that serve some events and then send nothing until released."""
+    releases = []
+
+    def stream(*events):
+        release = threading.Event()
+        releases.append(release)
+
+        def serve():
+            yield from (Wire(event) for event in events)
+            # Capped, so a regression fails the test instead of hanging it.
+            release.wait(30)
+
+        return serve()
+
+    yield stream
+    for release in releases:
+        release.set()
+
+
+def real_ceiling(monkeypatch, seconds):
+    monkeypatch.setattr(Deadline.__init__, "__defaults__", (seconds, time.monotonic))
+
+
+FEW_SECONDS = 5
+
+
+def test_a_stream_silent_from_the_start_raises_at_the_ceiling(
+    fake, silent, monkeypatch
+):
+    real_ceiling(monkeypatch, 0.5)
+    fake.created = silent()
+    started = time.monotonic()
+    with pytest.raises(WallClockExceeded):
+        runner().run("p")
+    assert time.monotonic() - started < 0.5 + FEW_SECONDS
+
+
+def test_a_stream_that_goes_silent_after_the_interaction_starts_raises_and_cancels_it(
+    fake, silent, monkeypatch
+):
+    real_ceiling(monkeypatch, 0.5)
+    fake.created = silent(created("e1"), thought("e2"))
+    started = time.monotonic()
+    with pytest.raises(WallClockExceeded):
+        runner().run("p")
+    assert time.monotonic() - started < 0.5 + FEW_SECONDS
+    assert fake.cancel_calls == [INTERACTION]
+
+
+def test_a_reconnected_stream_that_goes_silent_raises_and_cancels_it(
+    fake, silent, monkeypatch
+):
+    real_ceiling(monkeypatch, 0.5)
+    fake.created = [created("e1"), thought("e2")]
+    fake.reconnects = [silent(thought("e3"))]
+    started = time.monotonic()
+    with pytest.raises(WallClockExceeded):
+        runner().run("p")
+    assert time.monotonic() - started < 0.5 + FEW_SECONDS
+    assert [c["last_event_id"] for c in fake.reconnect_calls] == ["e2"]
+    assert fake.cancel_calls == [INTERACTION]
+
+
+def test_a_silent_stream_does_not_fall_back_to_a_result_read_after_the_ceiling(
+    fake, silent, monkeypatch
+):
+    real_ceiling(monkeypatch, 0.5)
+    fake.created = silent(created("e1"))
+    fake.reads = [finished("a late answer")]
+    with pytest.raises(WallClockExceeded):
+        runner().run("p")
+    assert fake.read_calls == []
+
+
 # --- jsa search --agent gemini ----------------------------------------------------------------
 
 
@@ -1080,3 +1161,22 @@ def test_a_search_that_hits_the_ceiling_fails_the_run_and_cancels_the_interactio
         "failed"
     ]
     assert rows(world.url, "SELECT COUNT(*) FROM search_findings") == [(0,)]
+
+
+def test_a_search_whose_stream_goes_silent_fails_at_the_ceiling_and_inserts_nothing(
+    world, silent, monkeypatch, capsys
+):
+    real_ceiling(monkeypatch, 0.5)
+    live = world.boards.job()
+    world.fake.created = silent(created("e1"), thought("e2"))
+    world.fake.reads = [finished(posted(live))]
+    started = time.monotonic()
+    code, _out, _err = jsa_search_gemini(monkeypatch, capsys)
+    assert time.monotonic() - started < 0.5 + FEW_SECONDS
+    assert code != 0
+    assert world.fake.cancel_calls == [INTERACTION]
+    assert [r[0] for r in rows(world.url, "SELECT outcome FROM search_runs")] == [
+        "failed"
+    ]
+    assert rows(world.url, "SELECT COUNT(*) FROM search_findings") == [(0,)]
+    assert rows(world.url, "SELECT COUNT(*) FROM postings") == [(0,)]
