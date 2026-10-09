@@ -55,16 +55,20 @@ REDLINE_MODEL = "claude-opus-5-5"
 REDLINE_EDITS = "redline_edits.json"
 # One edit the validator drops (no such paragraph): a well-formed, non-empty redline result.
 REDLINE_JSON = json.dumps(
-    [
-        {
-            "paragraph": 99,
-            "find": "nothing here",
-            "replace": "nothing there",
-            "jd_quote": "Frobnicator platform",
-            "why_same_meaning": "the same thing",
-        }
-    ]
+    {
+        "edits": [
+            {
+                "paragraph": 99,
+                "find": "nothing here",
+                "replace": "nothing there",
+                "jd_quote": "Frobnicator platform",
+                "why_same_meaning": "the same thing",
+            }
+        ],
+        "explanation": None,
+    }
 )
+NO_EDITS_EXPLANATION = "The resume already uses the posting's terms."
 
 
 class Agent:
@@ -1287,8 +1291,10 @@ QUUX_EDIT = {
 REDLINE_DOC = RESUME_COPY.replace(".docx", "_redline.docx")
 
 
-def redline_reply(*edits):
-    return lambda prompt: result_message(result=json.dumps(list(edits)))
+def redline_reply(*edits, explanation=None):
+    return lambda prompt: result_message(
+        result=json.dumps({"edits": list(edits), "explanation": explanation})
+    )
 
 
 def proposed(folder):
@@ -1367,9 +1373,10 @@ def test_every_proposed_edit_is_recorded_with_its_validation_result(
     )
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
-    records = proposed(packets / PLAIN)
-    assert len(records) == 2
-    assert all(record["validation"] for record in records)
+    record = proposed(packets / PLAIN)
+    assert record["explanation"] is None
+    assert len(record["edits"]) == 2
+    assert all(edit["validation"] for edit in record["edits"])
     assert not (packets / PLAIN / REDLINE_DOC).exists()
 
 
@@ -1381,6 +1388,23 @@ def test_a_run_with_no_valid_edit_writes_the_record_but_no_redline_document(
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
     assert REDLINE_EDITS in entries(packets / PLAIN)
+    assert proposed(packets / PLAIN)["explanation"] is None
+    assert REDLINE_DOC not in entries(packets / PLAIN)
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_a_run_where_the_agent_proposes_no_edits_records_why_and_writes_no_redline(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    agent.respond_redline = redline_reply(explanation=NO_EDITS_EXPLANATION)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert proposed(packets / PLAIN) == {
+        "explanation": NO_EDITS_EXPLANATION,
+        "edits": [],
+    }
     assert REDLINE_DOC not in entries(packets / PLAIN)
     assert column(gdb, posting_id, "added_to_tracker") == 1
 
@@ -1394,8 +1418,10 @@ def test_a_valid_edit_becomes_a_tracked_change_with_a_comment_in_a_copy(
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
     folder = packets / PLAIN
-    (record,) = proposed(folder)
-    assert record["validation"] is None
+    record = proposed(folder)
+    assert record["explanation"] is None
+    (edit,) = record["edits"]
+    assert edit["validation"] is None
     assert REDLINE_DOC in entries(folder)
     with zipfile.ZipFile(folder / REDLINE_DOC) as archive:
         body = archive.read("word/document.xml").decode("utf-8")
@@ -1419,10 +1445,26 @@ def test_the_redline_never_touches_the_resume_copy(
 
 @pytest.mark.parametrize(
     "text",
-    ["not json at all", '{"paragraph": 1}', "", "   \n"],
-    ids=["prose", "object", "empty", "blank"],
+    [
+        "not json at all",
+        '{"paragraph": 1}',
+        "",
+        "   \n",
+        "[]",
+        json.dumps({"edits": [], "explanation": None}),
+        json.dumps({"edits": [], "explanation": ""}),
+    ],
+    ids=[
+        "prose",
+        "object",
+        "empty",
+        "blank",
+        "bare-array",
+        "no-edits-null-explanation",
+        "no-edits-empty-explanation",
+    ],
 )
-def test_a_redline_result_that_is_not_an_edit_array_flags_the_row_and_exits_non_zero(
+def test_a_redline_result_that_is_not_an_edits_and_explanation_object_flags_the_row_and_exits_non_zero(
     gdb, env, agent, gws, text, monkeypatch, capsys
 ):
     _, packets = env
@@ -1494,7 +1536,9 @@ def test_the_queue_path_skips_the_redline_when_the_record_exists(
     folder = packets / PLAIN
     folder.mkdir(parents=True)
     (folder / "resume_checklist.md").write_text("MY OLD CHECKLIST", encoding="utf-8")
-    (folder / REDLINE_EDITS).write_text("[]", encoding="utf-8")
+    (folder / REDLINE_EDITS).write_text(
+        json.dumps({"explanation": NO_EDITS_EXPLANATION, "edits": []}), encoding="utf-8"
+    )
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
     assert agent.calls == []

@@ -341,7 +341,7 @@ def test_every_dropped_edit_carries_a_non_empty_reason():
 
 @pytest.fixture
 def stand_in(monkeypatch):
-    state = SimpleNamespace(reply="[]", calls=[])
+    state = SimpleNamespace(reply=reply_object([], EXPLANATION), calls=[])
 
     async def query(*, prompt, options=None, **_ignored):
         state.calls.append(SimpleNamespace(prompt=prompt, options=options))
@@ -362,8 +362,18 @@ def make_resume(path, build=None):
     return path
 
 
+EXPLANATION = "The resume already uses the posting's terms."
+
+
+def reply_object(edits, explanation=None):
+    return json.dumps({"edits": edits, "explanation": explanation})
+
+
 def run(tmp_path, stand_in, reply, *, build=None, jd=JD):
-    stand_in.reply = reply if isinstance(reply, str) else json.dumps(reply)
+    """`reply` is raw text, or a list of edit dicts sent as `{edits, explanation}`."""
+    if isinstance(reply, list):
+        reply = reply_object(reply, None if reply else EXPLANATION)
+    stand_in.reply = reply
     copy = make_resume(tmp_path / "resume.docx", build)
     redline = tmp_path / "resume_redline.docx"
     edits_file = tmp_path / "redline_edits.json"
@@ -377,11 +387,22 @@ def as_dict(e: Edit, **overrides) -> dict:
     return {**e.__dict__, **overrides}
 
 
-def test_a_bare_empty_array_is_a_valid_zero_edit_result(tmp_path, stand_in):
-    ran = run(tmp_path, stand_in, "[]")
-    assert json.loads(ran.edits_file.read_text(encoding="utf-8")) == []
+def test_a_no_edit_result_records_the_explanation_and_an_empty_edit_list(
+    tmp_path, stand_in
+):
+    ran = run(tmp_path, stand_in, [])
+    record = json.loads(ran.edits_file.read_text(encoding="utf-8"))
+    assert record == {"explanation": EXPLANATION, "edits": []}
     assert not ran.redline.exists()
     assert (ran.outcome.applied, ran.outcome.dropped) == (0, 0)
+
+
+def test_a_result_with_edits_records_a_null_explanation(tmp_path, stand_in):
+    ran = run(tmp_path, stand_in, [as_dict(edit())])
+    record = json.loads(ran.edits_file.read_text(encoding="utf-8"))
+    assert set(record) == {"explanation", "edits"}
+    assert record["explanation"] is None
+    assert len(record["edits"]) == 1
 
 
 @pytest.mark.parametrize(
@@ -393,17 +414,37 @@ def test_a_bare_empty_array_is_a_valid_zero_edit_result(tmp_path, stand_in):
         '{"paragraph": 1}',
         '"[]"',
         "null",
+        "[]",
         "[1, 2]",
         '["Quuxlate"]',
         "[[]]",
-        "```json\n[]\n```",
-        "```\n[]\n```",
-        "Here you go: []",
-        "[]\nThanks!",
-        "[{",
+        json.dumps([{"edits": []}]),
+        "```json\n" + reply_object([], EXPLANATION) + "\n```",
+        "```\n" + reply_object([], EXPLANATION) + "\n```",
+        "Here you go: " + reply_object([], EXPLANATION),
+        reply_object([], EXPLANATION) + "\nThanks!",
+        '{"edits": [], "explanation": "x"',
+    ],
+    ids=[
+        "empty",
+        "blank",
+        "prose",
+        "wrong-object",
+        "string",
+        "null",
+        "bare-empty-array",
+        "numbers",
+        "strings",
+        "nested-empty-array",
+        "array-holding-an-object",
+        "json-fence",
+        "plain-fence",
+        "text-before",
+        "text-after",
+        "truncated",
     ],
 )
-def test_text_that_is_not_a_bare_array_of_edit_objects_raises(
+def test_text_that_is_not_an_edits_and_explanation_object_raises(
     tmp_path, stand_in, reply
 ):
     copy = make_resume(tmp_path / "resume.docx")
@@ -416,19 +457,69 @@ def test_text_that_is_not_a_bare_array_of_edit_objects_raises(
     assert not redline.exists()
 
 
-def test_a_fenced_array_of_real_edits_also_raises(tmp_path, stand_in):
+def test_a_bare_array_of_real_edits_raises(tmp_path, stand_in):
     copy = make_resume(tmp_path / "resume.docx")
-    stand_in.reply = "```json\n" + json.dumps([as_dict(edit())]) + "\n```"
+    stand_in.reply = json.dumps([as_dict(edit())])
     with pytest.raises(JsaError):
         redline_resume(copy, tmp_path / "r.docx", tmp_path / "e.json", JD, SETTINGS)
     assert not (tmp_path / "e.json").exists()
+
+
+def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
+    copy = make_resume(tmp_path / "resume.docx")
+    stand_in.reply = "```json\n" + reply_object([as_dict(edit())]) + "\n```"
+    with pytest.raises(JsaError):
+        redline_resume(copy, tmp_path / "r.docx", tmp_path / "e.json", JD, SETTINGS)
+    assert not (tmp_path / "e.json").exists()
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        reply_object([], None),
+        reply_object([], ""),
+        json.dumps({"edits": []}),
+        reply_object([], 7),
+        json.dumps({"explanation": EXPLANATION}),
+        json.dumps({"edits": None, "explanation": EXPLANATION}),
+        json.dumps({"edits": {}, "explanation": EXPLANATION}),
+        reply_object([as_dict(edit())], EXPLANATION),
+        reply_object([as_dict(edit())], ""),
+        json.dumps({"edits": [as_dict(edit())]}),
+        reply_object([as_dict(edit())], 7),
+    ],
+    ids=[
+        "no-edits-null-explanation",
+        "no-edits-empty-explanation",
+        "no-edits-missing-explanation",
+        "no-edits-numeric-explanation",
+        "missing-edits",
+        "null-edits",
+        "object-edits",
+        "edits-with-an-explanation",
+        "edits-with-an-empty-explanation",
+        "edits-missing-explanation",
+        "edits-with-numeric-explanation",
+    ],
+)
+def test_an_object_that_breaks_the_explanation_rule_or_shape_raises(
+    tmp_path, stand_in, reply
+):
+    copy = make_resume(tmp_path / "resume.docx")
+    stand_in.reply = reply
+    redline = tmp_path / "r.docx"
+    edits_file = tmp_path / "e.json"
+    with pytest.raises(JsaError):
+        redline_resume(copy, redline, edits_file, JD, SETTINGS)
+    assert not edits_file.exists()
+    assert not redline.exists()
 
 
 def test_an_edit_object_missing_a_field_raises(tmp_path, stand_in):
     copy = make_resume(tmp_path / "resume.docx")
     partial = as_dict(edit())
     del partial["why_same_meaning"]
-    stand_in.reply = json.dumps([partial])
+    stand_in.reply = reply_object([partial])
     with pytest.raises(JsaError):
         redline_resume(copy, tmp_path / "r.docx", tmp_path / "e.json", JD, SETTINGS)
     assert not (tmp_path / "e.json").exists()
@@ -437,7 +528,7 @@ def test_an_edit_object_missing_a_field_raises(tmp_path, stand_in):
 def test_the_agent_gets_no_tools_and_one_turn_with_the_profiles_model_and_effort(
     tmp_path, stand_in
 ):
-    run(tmp_path, stand_in, "[]")
+    run(tmp_path, stand_in, [])
     (call,) = stand_in.calls
     assert call.options.model == "claude-opus-5-5"
     assert call.options.effort == "medium"
@@ -455,7 +546,7 @@ def test_the_prompt_numbers_body_paragraphs_keeps_indices_across_blanks_and_skip
         table = document.add_table(rows=1, cols=1)
         table.cell(0, 0).text = "TABLE-ONLY-TEXT"
 
-    run(tmp_path, stand_in, "[]", build=build)
+    run(tmp_path, stand_in, [], build=build)
     (call,) = stand_in.calls
     assert "0: First line TABLELESS" in call.prompt
     assert "2: Third line" in call.prompt
@@ -473,7 +564,7 @@ def test_the_record_lists_every_proposal_in_order_with_its_five_fields_and_valid
     good = edit()
     bad = edit(paragraph=99, jd_quote="Quuxlate system")
     ran = run(tmp_path, stand_in, [as_dict(bad), as_dict(good)])
-    record = json.loads(ran.edits_file.read_text(encoding="utf-8"))
+    record = json.loads(ran.edits_file.read_text(encoding="utf-8"))["edits"]
     assert isinstance(record, list) and len(record) == 2
     fields = {"paragraph", "find", "replace", "jd_quote", "why_same_meaning"}
     for entry, original in zip(record, [bad, good], strict=True):
@@ -501,7 +592,7 @@ def test_dropped_edits_are_absent_from_the_document_but_present_in_the_record(
         comments = archive.read("word/comments.xml").decode("utf-8")
     assert "Elasticsearch" not in body
     assert "NOT-IN-DOC-MARKER" not in comments
-    record = json.loads(ran.edits_file.read_text(encoding="utf-8"))
+    record = json.loads(ran.edits_file.read_text(encoding="utf-8"))["edits"]
     assert record[0]["replace"] == "Elasticsearch daily"
     assert record[0]["validation"]
     assert record[1]["validation"] is None
@@ -512,7 +603,9 @@ def test_no_redline_is_written_when_every_edit_fails_but_the_record_is(
 ):
     ran = run(tmp_path, stand_in, [as_dict(edit(paragraph=99))])
     assert not ran.redline.exists()
-    assert ran.edits_file.exists()
+    record = json.loads(ran.edits_file.read_text(encoding="utf-8"))
+    assert record["explanation"] is None
+    assert len(record["edits"]) == 1
     assert (ran.outcome.applied, ran.outcome.dropped) == (0, 1)
 
 
@@ -822,7 +915,7 @@ def test_paragraphs_the_edits_do_not_touch_are_unchanged(tmp_path, stand_in):
 def test_the_resume_copy_is_byte_identical_after_a_run(tmp_path, stand_in):
     copy = make_resume(tmp_path / "resume.docx")
     before = copy.read_bytes()
-    stand_in.reply = json.dumps([as_dict(edit())])
+    stand_in.reply = reply_object([as_dict(edit())])
     redline_resume(
         copy, tmp_path / "resume_redline.docx", tmp_path / "e.json", JD, SETTINGS
     )
@@ -840,7 +933,7 @@ def test_text_in_a_table_is_not_addressable_by_a_body_paragraph_index(
 
     ran = run(tmp_path, stand_in, [as_dict(edit(paragraph=1))], build=build)
     assert not ran.redline.exists()
-    (entry,) = json.loads(ran.edits_file.read_text(encoding="utf-8"))
+    (entry,) = json.loads(ran.edits_file.read_text(encoding="utf-8"))["edits"]
     assert entry["validation"]
 
 
@@ -858,7 +951,7 @@ def test_a_resume_with_unresolved_tracked_changes_is_skipped_and_the_agent_never
             )
         )
 
-    stand_in.reply = json.dumps([as_dict(edit(paragraph=0))])
+    stand_in.reply = reply_object([as_dict(edit(paragraph=0))])
     copy = make_resume(tmp_path / "resume.docx", build)
     outcome = redline_resume(
         copy, tmp_path / "r.docx", tmp_path / "e.json", JD, SETTINGS
