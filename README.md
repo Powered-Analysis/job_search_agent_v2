@@ -61,6 +61,7 @@ cp -r profile.example profile
 |---|---|
 | `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the resume checklist, the ATS redline, and refine |
 | `profile/resume.docx` | your single base resume |
+| `profile/cover_letter.*` | optional; your cover letter, copied into each packet (not sent to the inbox machine) |
 | `profile/search/search.toml` | timezone, `run_at`, the weekly schedule, the Claude runner settings, and the verification mode |
 | `profile/search/*.md` | the six fragments that tell the search who you are and what you want |
 
