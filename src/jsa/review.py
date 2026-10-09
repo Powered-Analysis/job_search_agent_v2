@@ -1,12 +1,14 @@
 """The review loop (PRD 03): no model call, one decision at a time, each committed on submit."""
 
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
 import httpx
 
 from jsa import db, prompts
+from jsa.errors import JsaError
 from jsa.health import search_health
 from jsa.verify import CLOSED_OUTCOMES, Verifier, recheck
 
@@ -112,7 +114,6 @@ def _review_entry(conn: db.Connection, entry: Entry, *, first: bool) -> str:
 
 def _work(conn: db.Connection, entries: list[Entry]) -> None:
     index = 0
-    final_pass_offered = False
     while index < len(entries):
         entry = entries[index]
         _show(entry)
@@ -122,13 +123,8 @@ def _work(conn: db.Connection, entries: list[Entry]) -> None:
             return
         if outcome == "back":
             index -= 1
-            final_pass_offered = False
             continue
         index += 1
-        if index == len(entries) and not final_pass_offered:
-            # One more look at the last entry before the session ends (PRD 03).
-            final_pass_offered = True
-            index -= 1
 
 
 def _recheck_backlog(
@@ -144,6 +140,14 @@ def _recheck_backlog(
     ]
 
 
+def _abortable(work: Callable[[], None]) -> None:
+    try:
+        work()
+    except prompts.PromptAborted:
+        # Every committed decision already survives; the interrupted one is untouched.
+        print("\nQuit.")
+
+
 def review(client: httpx.Client) -> None:
     conn = db.connect()
     for line in search_health(conn):
@@ -154,8 +158,25 @@ def review(client: httpx.Client) -> None:
     if not entries:
         print("No postings awaiting review. 🎉")
         return
-    try:
-        _work(conn, entries)
-    except prompts.PromptAborted:
-        # Every committed decision already survives; the interrupted one is untouched.
-        print("\nQuit.")
+    _abortable(lambda: _work(conn, entries))
+
+
+def revise(*, posting_id: int | None = None, last: bool = False) -> None:
+    """Reopen one decided posting outside a review session (PRD 03)."""
+    conn = db.connect()
+    row = db.last_decided_posting(conn) if last else db.posting_by_id(conn, posting_id)
+    if row is None:
+        raise JsaError(
+            "no decided postings to revise."
+            if last
+            else f"no posting with id {posting_id}."
+        )
+    entry = Entry(*row)
+    if not entry.decision:
+        raise JsaError(
+            f"posting {entry.id} has no decision to revise; decide it with `jsa review`."
+        )
+    _show(entry)
+    _open_in_chrome(entry.url)
+    # first=True: a step back has nowhere to go, so it re-asks, and `q` leaves the row as it was.
+    _abortable(lambda: _review_entry(conn, entry, first=True))
