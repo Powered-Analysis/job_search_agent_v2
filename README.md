@@ -122,6 +122,8 @@ Console key, for each search agent you schedule; Anthropic auth for the local Cl
 | `PERPLEXITY_API_KEY`, `GEMINI_API_KEY`, `JSA_SEARCH_ANTHROPIC_API_KEY` (each if its agent is used) | yes | yes |
 | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` (one, never both) | yes | no |
 
+For what "production" means and when to run locally versus on Fly, see [PRD 06's search guidance](prds/06-platform-and-operations.md#technical-considerations).
+
 Google OAuth (`gws auth login`) and Fly's login (`fly auth login`) stay on your machine.
 
 **Local tools:** `uv`; Google Chrome (`jsa review`); the `gws` CLI, signed in with `gws auth login`
