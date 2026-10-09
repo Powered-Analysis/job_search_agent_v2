@@ -1,4 +1,4 @@
-"""Filesystem-safe names for packet folders and resume files, computed once at insert."""
+"""Filesystem-safe names for packet folders, resume files, and cover letter files, computed once at insert."""
 
 import re
 import string
@@ -46,11 +46,23 @@ def packet_dir_name(
     return f"{name} ({posting_id})" if shares_name else name
 
 
+def _file_stem(
+    candidate_name: str | None, kind: str, slug: str, normalized_company: str
+) -> str:
+    parts = [_path_safe(candidate_name or ""), kind, slug, normalized_company]
+    return "_".join(part for part in parts if part).replace(" ", "")
+
+
 def resume_file_stem(
     candidate_name: str | None, slug: str, normalized_company: str
 ) -> str:
-    parts = [_path_safe(candidate_name or ""), "Resume", slug, normalized_company]
-    return "_".join(part for part in parts if part).replace(" ", "")
+    return _file_stem(candidate_name, "Resume", slug, normalized_company)
+
+
+def cover_letter_file_stem(
+    candidate_name: str | None, slug: str, normalized_company: str
+) -> str:
+    return _file_stem(candidate_name, "CoverLetter", slug, normalized_company)
 
 
 def redline_file_name(stem: str) -> str:

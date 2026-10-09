@@ -25,6 +25,8 @@ from jsa.errors import JsaError
 _STRICT = ConfigDict(extra="forbid", frozen=True)
 # XC-14: model and agent are checked only for being non-empty, never against a list of allowed values.
 NonEmptyStr = Annotated[str, StringConstraints(strict=True, min_length=1)]
+COVER_LETTER_PREFIX = "cover_letter"
+_COVER_LETTER = re.compile(rf"{COVER_LETTER_PREFIX}\..+")
 _RUN_AT = re.compile(r"([01]\d|2[0-3]):([0-5]\d)")
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
@@ -224,6 +226,32 @@ def base_resume() -> Path:
     if not path.is_file() or path.stat().st_size == 0:
         raise JsaError(f"{path} is missing or empty. {_pointer('resume.docx')}")
     return path
+
+
+def cover_letter() -> Path | None:
+    """The optional cover letter (XC-11); more than one match raises, since the app won't guess which is meant."""
+    matches = sorted(
+        path
+        for path in profile_dir().glob(f"{COVER_LETTER_PREFIX}.*")
+        if path.is_file() and _COVER_LETTER.fullmatch(path.name)
+    )
+    if len(matches) > 1:
+        raise JsaError(
+            f"{profile_dir()} holds more than one cover letter: "
+            f"{', '.join(path.name for path in matches)}. Keep one."
+        )
+    return matches[0] if matches else None
+
+
+class PacketSources(NamedTuple):
+    """The profile files each packet starts from."""
+
+    resume: Path
+    cover_letter: Path | None
+
+
+def packet_sources() -> PacketSources:
+    return PacketSources(base_resume(), cover_letter())
 
 
 def _agent_settings(config: Config, name: str) -> AgentSettings:

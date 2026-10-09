@@ -21,6 +21,7 @@ from jsa.packet import (
     JOB_POSTING,
     REDLINE_EDITS,
     ensure_head,
+    packet_copies,
     packet_paths,
     redline_path,
 )
@@ -28,9 +29,10 @@ from jsa.profile import (
     AgentSettings,
     Config,
     PacketAgents,
-    base_resume,
+    PacketSources,
     load_config,
     packet_agents,
+    packet_sources,
     tracker_spreadsheet_id,
 )
 from jsa.redline import redline_resume
@@ -96,7 +98,7 @@ def _build_redline(
 def build_packet(
     job: db.PacketJob,
     config: Config,
-    resume: Path,
+    sources: PacketSources,
     agents: PacketAgents,
     *,
     rewrite: bool,
@@ -104,7 +106,9 @@ def build_packet(
     """Complete the packet, its checklist, and its redline; False when it must stay untracked for lack of a JD."""
     directory, copy = packet_paths(config, job)
     # PRD 04: `--id` (rewrite) refreshes `job_posting.md` from the row, as refetch relies on.
-    ensure_head(directory, copy, job, resume, refresh_posting=rewrite)
+    ensure_head(
+        directory, job, packet_copies(config, job, sources), refresh_posting=rewrite
+    )
     checklist = directory / CHECKLIST
     pdf = directory / CHECKLIST_PDF
     redline = redline_path(copy)
@@ -149,7 +153,7 @@ def track_posting(spreadsheet_id: str, added: date, posting_id: int) -> None:
 
 
 def generate(client: httpx.Client, posting_id: int | None, *, dry_run: bool) -> None:
-    resume = base_resume()
+    sources = packet_sources()
     spreadsheet_id = tracker_spreadsheet_id()
     config = load_config()
     agents = packet_agents(config)
@@ -176,7 +180,7 @@ def generate(client: httpx.Client, posting_id: int | None, *, dry_run: bool) -> 
                 build_packet,
                 job,
                 config,
-                resume,
+                sources,
                 agents,
                 rewrite=posting_id is not None,
             ): job
