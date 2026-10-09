@@ -1234,13 +1234,21 @@ def test_readme_walkthrough_is_ordered_from_fresh_clone_to_deploy():
     assert re.search(r"jsa deploy(?! --)", section[positions[-1] :])
 
 
-def test_readme_stages_only_the_five_cloud_keys_from_env():
-    # PRD 06 setup step 3: the cloud runs only search, so no other credential is piped in.
-    section = readme_walkthrough()
-    (filter_line,) = [
-        line for line in section.splitlines() if "TURSO_DATABASE_URL|" in line
+def staged_filter_keys(section, app_placeholder):
+    """Keys in the walkthrough's `grep -E` filter piped to `fly secrets import -a <app_placeholder>`."""
+    lines = [
+        line
+        for line in section.splitlines()
+        if "TURSO_DATABASE_URL|" in line
+        and re.search(rf"-a {re.escape(app_placeholder)}\s*$", line)
     ]
-    keys = set(re.findall(r"[A-Z][A-Z_]+(?=[|)])", filter_line))
+    return [set(re.findall(r"[A-Z][A-Z_]+(?=[|)])", line)) for line in lines]
+
+
+def test_readme_stages_only_the_five_cloud_keys_from_env():
+    # PRD 06 setup step 3: the search app gets only its five keys, no other credential.
+    section = readme_walkthrough()
+    (keys,) = staged_filter_keys(section, "<app>")
     assert keys == {
         "TURSO_DATABASE_URL",
         "TURSO_AUTH_TOKEN",
@@ -1249,6 +1257,20 @@ def test_readme_stages_only_the_five_cloud_keys_from_env():
         "GEMINI_API_KEY",
     }
     assert "fly secrets import --stage" in section
+
+
+def test_readme_stages_only_the_inbox_keys_to_the_inbox_app():
+    # PRD 06 setup step 4: the inbox app gets only its six keys; the walkthrough's
+    # filter line, where present, must not leak the search app's other credentials.
+    for keys in staged_filter_keys(readme_walkthrough(), "<inbox app>"):
+        assert keys == {
+            "TURSO_DATABASE_URL",
+            "TURSO_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "JSA_GWS_CREDENTIALS",
+            "JSA_INBOX_GWS_CREDENTIALS",
+        }
 
 
 @pytest.mark.parametrize(

@@ -255,16 +255,25 @@ def inbox_settings(config: Config) -> InboxConfig:
     return config.inbox
 
 
+def _inbox_key(config: Config, key: str) -> str:
+    """A required `[inbox]` key; a missing one raises naming the file."""
+    value = getattr(inbox_settings(config), key)
+    if not value:
+        raise JsaError(
+            f"[inbox] {key} is missing in {profile_dir() / 'config.toml'}. "
+            f"{_pointer('config.toml')}"
+        )
+    return value
+
+
 def inbox_app(config: Config) -> str:
-    """The inbox app's name, once `[inbox]` has the keys `jsa deploy` needs; a missing one raises before any build."""
-    inbox = inbox_settings(config)
-    for key in ("app", "drive_folder_id"):
-        if getattr(inbox, key) is None:
-            raise JsaError(
-                f"[inbox] {key} is missing in {profile_dir() / 'config.toml'}. "
-                f"{_pointer('config.toml')}"
-            )
-    return inbox.app
+    """The inbox's Fly app, which `jsa deploy` ships the inbox machine to."""
+    return _inbox_key(config, "app")
+
+
+def inbox_drive_folder(config: Config) -> str:
+    """The Drive packets folder's id; a missing one raises before any packet is built."""
+    return _inbox_key(config, "drive_folder_id")
 
 
 def checklist_settings(config: Config) -> AgentSettings:

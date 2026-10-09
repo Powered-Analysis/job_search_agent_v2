@@ -5,7 +5,7 @@ from typing import NamedTuple
 
 from jsa import db
 from jsa.errors import JsaError
-from jsa.gws import run_gws
+from jsa.gws import run_owner_gws
 from jsa.profile import load_search_config, tracker_spreadsheet_id
 
 TAB = "Applications"
@@ -40,7 +40,7 @@ def tracker_row(
 
 def _gws(method: str, params: dict, body: dict | None = None) -> object:
     """Run one `gws sheets spreadsheets values` call and return its parsed JSON, raising on any failure."""
-    return run_gws(("sheets", "spreadsheets", "values", method), params, body)
+    return run_owner_gws(("sheets", "spreadsheets", "values", method), params, body)
 
 
 def append_row(spreadsheet_id: str, row: list[str | int]) -> None:
@@ -110,9 +110,14 @@ def append_tracked(
     db.mark_tracked(conn, posting_id)
 
 
+def today() -> date:
+    """Today's date in the profile's `timezone`: a row's Date Added."""
+    return datetime.now(load_search_config().tz).date()
+
+
 def track(posting_id: int | None, *, dry_run: bool) -> None:
     spreadsheet_id = tracker_spreadsheet_id()
-    today = datetime.now(load_search_config().tz).date()
+    added = today()
     conn = db.connect()
     queue = db.tracker_queue(conn, posting_id)
     if not queue:
@@ -122,10 +127,10 @@ def track(posting_id: int | None, *, dry_run: bool) -> None:
     for entry in queue:
         pid = entry[0]
         if dry_run:
-            print(f"would append: {tracker_row(*entry, today)}")
+            print(f"would append: {tracker_row(*entry, added)}")
             continue
         try:
-            append_tracked(conn, spreadsheet_id, today, entry)
+            append_tracked(conn, spreadsheet_id, added, entry)
         except JsaError as error:
             print(f"failed: posting {pid}: {error}")
             failures.append(pid)

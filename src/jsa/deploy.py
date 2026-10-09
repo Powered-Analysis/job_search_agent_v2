@@ -20,6 +20,7 @@ from jsa.profile import (
     checklist_settings,
     fly_settings,
     inbox_app,
+    inbox_drive_folder,
     load_config,
     load_search_config,
     profile_dir,
@@ -136,6 +137,7 @@ def shipped_files() -> list[str]:
 def _validate_inbox(config: Config) -> str:
     """The inbox app's name, once everything the inbox machine needs is in the profile."""
     app = inbox_app(config)
+    inbox_drive_folder(config)
     base_resume()
     tracker_spreadsheet_id()
     checklist_settings(config)

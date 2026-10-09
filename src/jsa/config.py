@@ -53,6 +53,11 @@ def inbox_gws_credentials() -> str:
     return credential
 
 
+def owner_gws_credentials() -> str | None:
+    """The owner's exported `gws` credential (XC-1); set on the inbox app only. Unset locally, where `gws` uses its own login."""
+    return os.environ.get("JSA_GWS_CREDENTIALS") or None
+
+
 def gws_bin() -> str:
     return os.environ.get("JSA_GWS_BIN") or "gws"
 

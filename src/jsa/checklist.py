@@ -29,8 +29,16 @@ def run_checklist(prompt: str, settings: AgentSettings) -> str:
 
 def render_checklist_pdf(checklist: Path, pdf: Path) -> None:
     """Render the checklist to a PDF with pandoc, which typesets through Typst."""
+    # PRD 04: the checklist is model output over untrusted text, and a raw Typst block could read a file into the PDF.
     result = run_tool(
-        [pandoc_bin(), str(checklist), "-o", str(pdf), "--pdf-engine=typst"]
+        [
+            pandoc_bin(),
+            str(checklist),
+            "-o",
+            str(pdf),
+            "--from=markdown-raw_attribute-raw_html-raw_tex",
+            "--pdf-engine=typst",
+        ]
     )
     if result.returncode != 0:
         detail = (result.stderr.strip() or result.stdout.strip()).partition("\n")[0]
