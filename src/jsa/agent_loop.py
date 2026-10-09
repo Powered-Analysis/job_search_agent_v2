@@ -19,7 +19,7 @@ from claude_agent_sdk import (
 
 from jsa.errors import JsaError
 from jsa.profile import AgentSettings
-from jsa.runners import WALL_CLOCK_CEILING_SECONDS, Deadline, WallClockExceeded
+from jsa.runners import Deadline, WallClockExceeded
 
 
 class AgentError(JsaError):
@@ -53,6 +53,7 @@ def _failure(
 async def _drive(
     prompt: str,
     options: ClaudeAgentOptions,
+    wall_clock_seconds: float | None,
     on_message: Callable[[Message], None] | None,
 ) -> AgentResult:
     deadline = Deadline()
@@ -60,7 +61,7 @@ async def _drive(
     final: ResultMessage | None = None
     try:
         # A hung CLI sends no messages, so only a timeout can stop it.
-        async with asyncio.timeout(WALL_CLOCK_CEILING_SECONDS):
+        async with asyncio.timeout(wall_clock_seconds):
             async for message in query(prompt=prompt, options=options):
                 if on_message:
                     on_message(message)
@@ -74,7 +75,7 @@ async def _drive(
                     final = message
     except TimeoutError:
         raise WallClockExceeded(
-            f"the Claude run ran past its {WALL_CLOCK_CEILING_SECONDS}-second ceiling"
+            f"the Claude run ran past its {wall_clock_seconds}-second limit"
         ) from None
     except ResultError as error:
         # The SDK raises this itself after an error result, carrying the real HTTP status.
@@ -100,11 +101,15 @@ def run_agent(
     tools: list[str],
     max_turns: int,
     permission_mode: PermissionMode,
+    wall_clock_seconds: float | None = None,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     on_message: Callable[[Message], None] | None = None,
 ) -> AgentResult:
-    """Run one headless Claude session; raises AgentError on an error result."""
+    """Run one headless Claude session; raises AgentError on an error result.
+
+    `wall_clock_seconds` is the caller's hard stop; None leaves the run unbounded.
+    """
     options = ClaudeAgentOptions(
         model=settings.model,
         effort=settings.effort,
@@ -119,7 +124,7 @@ def run_agent(
         cwd=cwd,
         env=env or {},
     )
-    return asyncio.run(_drive(prompt, options, on_message))
+    return asyncio.run(_drive(prompt, options, wall_clock_seconds, on_message))
 
 
 def run_single_turn(prompt: str, settings: AgentSettings, *, agent: str) -> str:
