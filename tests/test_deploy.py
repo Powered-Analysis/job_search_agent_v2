@@ -2085,6 +2085,287 @@ def test_without_inbox_deploy_touches_only_the_search_app(fly, monkeypatch, caps
     assert "inbox" not in output.lower()
 
 
+# --- the search app's secrets (PRD 06, `jsa deploy` step 1) ---
+
+SEARCH_FLAGS = pytest.mark.parametrize(
+    "flags", [(), ("--dry-run",), ("--smoke",)], ids=["deploy", "dry-run", "smoke"]
+)
+AGENT_KEYS = {
+    "perplexity": "PERPLEXITY_API_KEY",
+    "claude": "JSA_SEARCH_ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
+DATABASE_SECRETS = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
+
+
+def schedule_for(*agents: str) -> str:
+    """A `search.toml` scheduling just these agents, each on its own weekday."""
+    days = dict(zip(WEEKDAYS, ([(agent, 24)] for agent in agents), strict=False))
+    return schedule_toml("America/New_York", SAFE_RUN_AT, days)
+
+
+def schedule_only(profile: Path, *agents: str) -> None:
+    set_search(profile, schedule_for(*agents))
+
+
+def hold(monkeypatch, *names: str) -> None:
+    monkeypatch.setenv("STUB_SECRETS", secrets_json(*names))
+
+
+def search_config(*agents: str):
+    from jsa.profile import SearchConfig
+
+    return SearchConfig.model_validate(tomllib.loads(schedule_for(*agents)))
+
+
+def test_each_search_agent_runs_on_its_documented_key():
+    from jsa.config import SEARCH_AGENT_KEYS
+
+    assert dict(SEARCH_AGENT_KEYS) == AGENT_KEYS
+
+
+@SEARCH_FLAGS
+@pytest.mark.parametrize("agent", AGENT_KEYS)
+def test_a_scheduled_agent_whose_key_the_search_app_lacks_aborts_naming_it(
+    fly, monkeypatch, capsys, agent, flags
+):
+    profile, log = fly
+    schedule_only(profile, agent)
+    hold(monkeypatch, *DATABASE_SECRETS)
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert_aborted_before_building(code, calls(log))
+    assert AGENT_KEYS[agent] in output
+    for other in set(AGENT_KEYS.values()) - {AGENT_KEYS[agent]}:
+        assert other not in output
+
+
+def test_claude_scheduled_without_its_search_key_aborts_the_example_profile_deploy(
+    fly, monkeypatch, capsys
+):
+    _, log = fly
+    hold(
+        monkeypatch,
+        *(name for name in SEARCH_APP_SECRETS if name != AGENT_KEYS["claude"]),
+    )
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert_aborted_before_building(code, calls(log))
+    assert "JSA_SEARCH_ANTHROPIC_API_KEY" in output
+
+
+@SEARCH_FLAGS
+@pytest.mark.parametrize("missing", DATABASE_SECRETS)
+def test_a_search_app_without_a_database_secret_aborts_naming_it(
+    fly, monkeypatch, capsys, missing, flags
+):
+    _, log = fly
+    hold(monkeypatch, *(name for name in SEARCH_APP_SECRETS if name != missing))
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert_aborted_before_building(code, calls(log))
+    assert missing in output
+
+
+def test_every_missing_search_secret_is_named_at_once(fly, monkeypatch, capsys):
+    profile, log = fly
+    schedule_only(profile, "perplexity", "claude", "gemini")
+    hold(monkeypatch)
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+    assert all(name in output for name in (*DATABASE_SECRETS, *AGENT_KEYS.values()))
+
+
+@SEARCH_FLAGS
+@pytest.mark.parametrize("agent", AGENT_KEYS)
+def test_an_agent_that_is_not_scheduled_does_not_need_its_key(
+    fly, monkeypatch, capsys, agent, flags
+):
+    profile, _ = fly
+    schedule_only(profile, agent)
+    hold(monkeypatch, *DATABASE_SECRETS, AGENT_KEYS[agent])
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert code == 0, output
+    for other in set(AGENT_KEYS.values()) - {AGENT_KEYS[agent]}:
+        assert other not in output
+
+
+@pytest.mark.parametrize("agent", ["claude", "gemini"])
+def test_an_agent_scheduled_on_a_single_day_still_needs_its_key(
+    fly, monkeypatch, capsys, agent
+):
+    profile, log = fly
+    set_search(
+        profile,
+        schedule_toml(
+            "America/New_York",
+            SAFE_RUN_AT,
+            {"monday": [("perplexity", 24)], "sunday": [(agent, 24)]},
+        ),
+    )
+    hold(monkeypatch, *DATABASE_SECRETS, AGENT_KEYS["perplexity"])
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+    assert AGENT_KEYS[agent] in output
+
+
+def test_an_agent_scheduled_more_than_once_is_named_once(fly, monkeypatch, capsys):
+    profile, _ = fly
+    set_search(
+        profile,
+        schedule_toml(
+            "America/New_York",
+            SAFE_RUN_AT,
+            {"monday": [("claude", 24), ("claude", 48)], "friday": [("claude", 24)]},
+        ),
+    )
+    hold(monkeypatch, *DATABASE_SECRETS)
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code != 0
+    assert output.count(AGENT_KEYS["claude"]) == 1
+
+
+@SEARCH_FLAGS
+def test_with_every_needed_search_secret_held_deploy_behaves_as_before(
+    fly, monkeypatch, capsys, flags
+):
+    _, log = fly
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert code == 0, output
+    all_calls = calls(log)
+    if flags == ("--dry-run",):
+        assert "search.toml" in output
+        assert launched_nothing(all_calls)
+    elif flags == ("--smoke",):
+        assert len(pick_machine(all_calls, "run")) == 1
+        assert pick_machine(all_calls, "update") == []
+    else:
+        assert len(pick_machine(all_calls, "update")) == 1
+
+
+def test_other_held_secrets_do_not_stand_in_for_a_missing_one(fly, monkeypatch, capsys):
+    _, log = fly
+    hold(
+        monkeypatch,
+        *(name for name in SEARCH_APP_SECRETS if name != AGENT_KEYS["claude"]),
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+    )
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+    assert AGENT_KEYS["claude"] in output
+
+
+def test_the_search_secrets_are_read_from_the_search_app_and_never_set(
+    fly, monkeypatch, capsys
+):
+    _, log = fly
+    assert jsa_deploy(monkeypatch, capsys, "--dry-run")[0] == 0
+    assert on_app(secret_calls(log), "jsa-example")
+    for argv in secret_calls(log):
+        assert "list" in argv
+        assert not {"set", "import", "unset"} & set(argv)
+
+
+def test_the_search_app_named_in_the_profile_is_the_one_read(fly, monkeypatch, capsys):
+    profile, log = fly
+    edit_config(profile, 'app    = "jsa-example"', 'app    = "jsa-elsewhere"')
+    assert jsa_deploy(monkeypatch, capsys, "--dry-run")[0] == 0
+    assert on_app(secret_calls(log), "jsa-elsewhere")
+    assert not on_app(secret_calls(log), "jsa-example")
+
+
+@SEARCH_FLAGS
+def test_an_unreadable_search_secret_listing_aborts_before_building(
+    fly, monkeypatch, capsys, flags
+):
+    _, log = fly
+    monkeypatch.setenv("STUB_FAIL", "secrets")
+    code, _ = jsa_deploy(monkeypatch, capsys, *flags)
+    assert_aborted_before_building(code, calls(log))
+
+
+@pytest.mark.parametrize("listing", ['{"name": "TURSO_DATABASE_URL"}', "null", '"x"'])
+def test_a_search_secret_listing_that_is_not_a_list_aborts_before_building(
+    fly, monkeypatch, capsys, listing
+):
+    _, log = fly
+    monkeypatch.setenv("STUB_SECRETS", listing)
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+
+
+def test_a_missing_search_secret_is_caught_even_when_the_inbox_app_is_complete(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    hold(monkeypatch, *DATABASE_SECRETS)
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+    assert AGENT_KEYS["perplexity"] in output
+
+
+def test_a_complete_search_app_does_not_satisfy_an_incomplete_inbox_app(
+    inbox, monkeypatch, capsys
+):
+    _, log = inbox
+    monkeypatch.setenv("STUB_INBOX_SECRETS", "[]")
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+    assert "JSA_GWS_CREDENTIALS" in output
+
+
+def test_the_search_secret_check_does_not_hide_a_missing_search_toml(
+    fly, monkeypatch, capsys
+):
+    profile, log = fly
+    (profile / "search" / "search.toml").unlink()
+    hold(monkeypatch)
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+    assert "search.toml" in output
+
+
+def test_missing_search_secrets_names_what_the_schedule_needs_that_is_not_held(
+    monkeypatch, tmp_path
+):
+    from jsa.deploy import missing_search_secrets
+
+    # No `fly` is reachable, so any attempt to read the listing would fail.
+    monkeypatch.setenv("JSA_FLY_BIN", str(tmp_path / "no-such-fly"))
+    config = search_config("perplexity", "claude")
+    everything = {*DATABASE_SECRETS, *AGENT_KEYS.values()}
+    assert set(missing_search_secrets(config, everything)) == set()
+    assert set(missing_search_secrets(config, set())) == {
+        *DATABASE_SECRETS,
+        AGENT_KEYS["perplexity"],
+        AGENT_KEYS["claude"],
+    }
+    assert set(missing_search_secrets(config, everything - {AGENT_KEYS["claude"]})) == {
+        AGENT_KEYS["claude"]
+    }
+
+
+def test_missing_search_secrets_ignores_agents_that_are_not_scheduled():
+    from jsa.deploy import missing_search_secrets
+
+    config = search_config("perplexity")
+    held = {*DATABASE_SECRETS, AGENT_KEYS["perplexity"]}
+    assert list(missing_search_secrets(config, held)) == []
+    assert set(missing_search_secrets(config, set(DATABASE_SECRETS))) == {
+        AGENT_KEYS["perplexity"]
+    }
+
+
+def test_missing_search_secrets_does_not_change_what_it_is_given():
+    from jsa.deploy import missing_search_secrets
+
+    config = search_config("gemini")
+    held = {"TURSO_AUTH_TOKEN"}
+    first = list(missing_search_secrets(config, held))
+    assert held == {"TURSO_AUTH_TOKEN"}
+    assert list(missing_search_secrets(config, held)) == first
+
+
 # --- README ---
 
 
