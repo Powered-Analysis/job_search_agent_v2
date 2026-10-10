@@ -22,14 +22,8 @@ The resume is shown as plain text. Text between double asterisks is bold in the 
 
 # Your assessment
 
-Write the checklist for the candidate, who will revise the resume by hand. You advise; you do not rewrite. Do not produce replacement resume text, a rewritten resume, or a cover letter.
+Consider each requirement or preference in the job description that the resume does not show, or shows too weakly to convince you. Your role is to produce a Markdown checklist of concrete changes, ordered from most to least important, that would improve your perception of the candidate's fit for the job role. Each item names the part of the resume to change and what it should show a reader. Where a requirement cannot be met honestly from the resume as it stands, say that the candidate should not claim it.
 
-Cover these three things, as three Markdown sections in this order:
-
-1. **Lead with these strengths.** The strengths the resume already shows that this role rewards most, and what the candidate should put first or make more prominent.
-2. **Requirements the resume leaves unmet or under-evidenced.** Each requirement or preference in the job description that the resume does not show, or shows too weakly to convince you. Say which of the two it is, and how much it would matter to your decision.
-3. **What to revise.** A checklist of concrete changes, ordered from most to least important. Each item names the part of the resume to change and what it should show a reader. Where a requirement cannot be met honestly from the resume as it stands, say that the candidate should not claim it.
-
-Keep every point specific to this role and this resume. Quote the posting's own words where it helps. Be direct and brief.
+Write the checklist for the candidate, who will revise the resume by hand. You advise; you do not rewrite. Do not produce replacement resume text, a rewritten resume, or a cover letter. Keep every point specific to this role and this resume. Quote the posting's own words where it helps. Be direct and brief.
 
 Respond with the checklist only.
