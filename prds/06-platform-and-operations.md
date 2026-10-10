@@ -10,7 +10,7 @@ How the system runs: the **cloud/local split** (the search and the email side do
 - **Unattended search in the cloud, at a fixed time:** a single Fly `hourly` machine runs the search cron with no human in the loop, self-gating to the weekly schedule and the profile's `run_at`, so the run time never drifts and never needs re-establishing.
 - **Apply from anywhere:** a second Fly app's `hourly` machine drains the jobs mailbox, so an emailed posting becomes a packet in Drive and a tracker row while the user's computer is off (PRD 03, 04).
 - **Credentials stay where they belong:** the Claude, Perplexity, and Gemini API keys live as Fly secrets (cloud) and in local `.env`; Fly auth stays on the local machine; Google credentials leave it only for the inbox app, each scoped to its one job; no credential ever passes through an agent transcript (`XC-1`).
-- **Only what each machine needs leaves the computer:** the image carries app code plus `profile/search/`, nothing else of the user's; the inbox machine also gets `config.toml`, `resume.docx`, and the cover letter (if any), as machine files, never in the image (`XC-11`).
+- **Only what each machine needs leaves the computer:** the image carries app code plus `profile/search/`, nothing else of the user's; the inbox machine also gets `config.toml`, `resume.docx`, and the cover letter and skills list (if any), as machine files, never in the image (`XC-11`).
 - **One reproducible setup path:** a documented, ordered sequence takes a fresh clone to a running cron and a working local pipeline.
 - **One command to ship:** `jsa deploy` validates the profile, builds the image, and swaps it onto both scheduled machines in place.
 - **Cheap to run:** shared-CPU, 1 GB Fly machines that wake hourly and exit within seconds when there is nothing to do; no machine runs between wakes.
@@ -36,7 +36,7 @@ How the system runs: the **cloud/local split** (the search and the email side do
 
 **Developer**
 - As the developer, I want to run the whole pipeline locally against a throwaway SQLite file, so that I can develop without touching the hosted DB.
-- As the developer, I want every external CLI the app shells out to (`gws`, `fly`, `pandoc`) overridable by an env var, so that tests and scratch runs can stub them.
+- As the developer, I want every external CLI the app shells out to (`gws`, `fly`, `pandoc`, `soffice`) overridable by an env var, so that tests and scratch runs can stub them.
 
 -----
 #### Functional Requirements
@@ -50,7 +50,7 @@ How the system runs: the **cloud/local split** (the search and the email side do
 - **One shared Turso DB** for both sides (`XC-2`); `jsa init-db` (run once locally) creates it, and every command ensures the schema on connect.
 
 **Deployment image (Priority: P0)**
-- Python 3.14, timezone data, and the Claude Code CLI the Claude Agent SDK drives (the SDK bundles it). It runs as a non-root user with a writable home directory, because the Claude Code CLI refuses to run without permission prompts as root. Its entrypoint is `jsa cron`; the inbox machine overrides it with `jsa inbox`. One image serves both machines, so it also carries the `gws` CLI, `pandoc`, and `typst` the inbox's packet build needs. No dev dependencies. Base image and install mechanics are the engineers' call, on current, supported releases.
+- Python 3.14, timezone data, and the Claude Code CLI the Claude Agent SDK drives (the SDK bundles it). It runs as a non-root user with a writable home directory, because the Claude Code CLI refuses to run without permission prompts as root. Its entrypoint is `jsa cron`; the inbox machine overrides it with `jsa inbox`. One image serves both machines, so it also carries what the inbox's packet build needs: the `gws` CLI, `pandoc`, `typst`, and LibreOffice (`soffice`, which renders the packet's PDF copies, PRD 04). No dev dependencies. Base image and install mechanics are the engineers' call, on current, supported releases.
 - **Copies the app plus `profile/search/` and nothing else of the profile.** The build context excludes `profile/` except `profile/search/`, so the rest of the profile is never even in the build context — which matters because Fly's remote builder uploads the context off the machine (`XC-11`).
 - No `TZ` anchor: the cadence and window use the profile's `timezone` explicitly (PRD 01).
 
@@ -71,13 +71,13 @@ How the system runs: the **cloud/local split** (the search and the email side do
    - Paste both exports into local `.env`, each on one line. Then stage the inbox app's secrets from it with `fly secrets import --stage -a <inbox app>`, piping in only the lines for `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, the one Claude credential `.env` holds, which is the one the local Claude commands use (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`, never both; an `ANTHROPIC_API_KEY` from a Console workspace with a monthly spend limit is recommended, because it caps what a forged email could cost), `JSA_GWS_CREDENTIALS` (the owner's export), and `JSA_INBOX_GWS_CREDENTIALS` (the jobs mailbox's). The README carries the exact filter.
 5. **Smoke test:** `jsa deploy --smoke` (runs one ungated `jsa cron` on a throwaway machine, exits).
 6. **Schedule:** `jsa deploy` (creates the `hourly` machines on first run; the search machine self-gates to `search.toml`).
-7. **Updates:** `jsa deploy` again, after any code change, an accepted refine proposal (PRD 05), or a change to `config.toml`, `resume.docx`, or the cover letter the inbox should use.
+7. **Updates:** `jsa deploy` again, after any code change, an accepted refine proposal (PRD 05), or a change to `config.toml`, `resume.docx`, the cover letter, or the skills list the inbox should use.
 
 **`jsa deploy` (Priority: P0)** — local only; uses the user's `flyctl` session (no deploy token).
 1. **Validate before building:** assemble the search prompt and parse `search.toml` exactly as the cloud will (`XC-13`); any missing required fragment, invalid schedule, or malformed runner or verification setting aborts before a build. Model and agent IDs are not checked against a list (`XC-14`) — `--smoke` is where a rejected ID surfaces. Warns (does not abort) on a schedule whose windows leave part of the week unsearched (each search covers the `window_hours` before its day's `run_at`, and hours no window covers are never searched), on a `run_at` after 22:59 (a slipped wake can cross midnight and miss the day, PRD 01), and on a pending refine proposal (it will not ship). It aborts when the search app lacks a secret the schedule needs (read from `fly secrets list`): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, and the key of each scheduled agent (`PERPLEXITY_API_KEY`, `JSA_SEARCH_ANTHROPIC_API_KEY`, `GEMINI_API_KEY`), because the machine has no other credential to fall back on. When `[inbox]` is set, it also validates everything the inbox needs — `resume.docx`, `tracker_spreadsheet_id`, `[agents.checklist]`, `[agents.redline]`, and `[inbox]` itself — and aborts when the inbox app lacks any of its secrets or holds both Claude credentials, because the CLI prefers the API key and fails the OAuth flow with a 401 (read from `fly secrets list`; deploy never sets one).
 2. **Build and push:** `fly deploy --build-only --push --image-label <UTC stamp> -a <app>`.
 3. **Swap in place:** find the machine carrying the `hourly` schedule. None → create it (`fly machine run <image> --schedule hourly --vm-memory 1024 --region <region>`). One → `fly machine update <id> --image <image> --vm-memory 1024 --schedule hourly`; re-asserting the schedule on every update means an image swap can never drop it. Every launch of the pushed image (create, update, and the `--smoke` machine) retries for registry lag, because Fly's registry can trail a push by a few seconds and a launch in that window fails with a missing manifest. Whatever the update does to Fly's interval anchor is harmless, because the run time comes from the gate, not the anchor (PRD 01). More than one → error (ambiguous; the user resolves it in Fly).
-4. **The inbox machine** (when `[inbox]` is set): the same swap in the inbox app, with `--entrypoint "jsa inbox"`. Every create and update also sets `config.toml`, `resume.docx`, and the cover letter when the profile has one as machine files (`--file-local`), so a deploy is how a changed resume, cover letter, or config reaches the inbox, and a cover letter removed from the profile leaves the machine too; they never enter the build context or the image (`XC-11`). The same image runs in both apps; how it reaches the inbox app's registry is the engineers' call.
+4. **The inbox machine** (when `[inbox]` is set): the same swap in the inbox app, with `--entrypoint "jsa inbox"`. Every create and update also sets `config.toml`, `resume.docx`, and the cover letter and `resume_skills.md` when the profile has them as machine files (`--file-local`), so a deploy is how a changed resume, cover letter, skills list, or config reaches the inbox, and a cover letter or skills list removed from the profile leaves the machine too; they never enter the build context or the image (`XC-11`). The same image runs in both apps; how it reaches the inbox app's registry is the engineers' call.
 - **`--dry-run`:** step 1 plus the list of profile files that would ship, in the image and, when `[inbox]` is set, as the inbox machine's files; no build.
 - **`--smoke`:** steps 1–2, then one `jsa cron --ungated` on a `--rm` machine (retrying for registry lag, as in step 3): it skips the time-of-day gate and the daily claim (so it never consumes the day's scheduled run) and runs today's scheduled searches or, when nothing is scheduled today, the next scheduled day's, so every smoke exercises real runners. It costs one day's searches, and its postings and findings are real and land in the shared DB. The scheduled machines are untouched.
 - **Never sets secrets** — those stay a user-run step (above).
@@ -104,7 +104,7 @@ How the system runs: the **cloud/local split** (the search and the email side do
 *Environment — secrets and machine-local settings only* (every one listed, commented, in `.env.example`):
 - **Required everywhere:** `TURSO_DATABASE_URL` (raises if unset). `TURSO_AUTH_TOKEN` required for hosted Turso (omit for a `file:` dev URL).
 - **Command-specific:** `PERPLEXITY_API_KEY` / `GEMINI_API_KEY` (their runners' searches; validated lazily so other commands run without them); `JSA_SEARCH_ANTHROPIC_API_KEY` (production Claude searches; unset in development, where the runner uses the inherited credential); for the local Claude commands and the inbox's packets, `CLAUDE_CODE_OAUTH_TOKEN` *or* `ANTHROPIC_API_KEY` (the user's choice; read by the SDK's CLI from the inherited env — not by the app's config); for the inbox, `JSA_GWS_CREDENTIALS` (the owner's exported `gws` credential, for the tracker and the packets folder; wherever it is set, every owner `gws` call runs on it, and where it is unset `gws` uses its own login) and `JSA_INBOX_GWS_CREDENTIALS` (the jobs mailbox's, for Gmail; read only by `jsa inbox`). The inbox app requires both. Local `.env` holds them as the source the inbox app is staged from, so a local `JSA_GWS_CREDENTIALS` also applies to local `gws` calls.
-- **Optional overrides (default):** `JSA_PROFILE_DIR` (`./profile`), `JSA_GWS_BIN` (`gws`), `JSA_FLY_BIN` (`fly`), `JSA_PANDOC_BIN` (`pandoc`), `JSA_GENERATE_WORKERS` (3).
+- **Optional overrides (default):** `JSA_PROFILE_DIR` (`./profile`), `JSA_GWS_BIN` (`gws`), `JSA_FLY_BIN` (`fly`), `JSA_PANDOC_BIN` (`pandoc`), `JSA_SOFFICE_BIN` (`soffice`), `JSA_GENERATE_WORKERS` (3).
 
 *The profile — everything about the user* (gitignored in full; `profile.example/` is committed with the identical shape and a fictional candidate):
 
@@ -121,6 +121,8 @@ profile/
                                   the single base resume                    (PRD 04)
   cover_letter.<ext>      local + inbox machine file   optional; any file matching ^cover_letter\..+$,
                                   copied into each packet                    (PRD 04)
+  resume_skills.md        local + inbox machine file   optional; the skills the redline may draw on
+                                  in the resume's skills section             (PRD 04)
   search/                 SHIPS IN THE FLY IMAGE
     search.toml                 timezone; run_at; [schedule] weekday → ordered (agent, window_hours);
                                 [runners.claude] model + effort;
@@ -130,7 +132,7 @@ profile/
   refine/                 local   a pending refine proposal: rationale + conflict-marked fragments (PRD 05)
 ```
 
-- **Validated at load:** each TOML file is parsed into a typed config; an unknown key raises (a typo never silently falls back to a default), and a key a command needs but the profile lacks raises naming the file and pointing to `profile.example/`. Requiredness is per command: `tracker_spreadsheet_id` for `track`/`generate`/`refetch`; `resume.docx` for `packet`/`generate`/`refetch` (the cover letter is optional, and more than one match raises); `[fly]` for `deploy`; `[inbox]` for `inbox`, and for `deploy` when present; each `[agents.*]` for its command; `[runners.claude]` when Claude is scheduled, and `[verification] mode`, for `search`/`cron`/`deploy`. Model and effort values are checked for form only, never against a list of allowed models (`XC-14`); `profile.example/` carries the recommended defaults as comments.
+- **Validated at load:** each TOML file is parsed into a typed config; an unknown key raises (a typo never silently falls back to a default), and a key a command needs but the profile lacks raises naming the file and pointing to `profile.example/`. Requiredness is per command: `tracker_spreadsheet_id` for `track`/`generate`/`refetch`; `resume.docx` for `packet`/`generate`/`refetch` (the cover letter is optional, and more than one match raises; `resume_skills.md` is optional); `[fly]` for `deploy`; `[inbox]` for `inbox`, and for `deploy` when present; each `[agents.*]` for its command; `[runners.claude]` when Claude is scheduled, and `[verification] mode`, for `search`/`cron`/`deploy`. Model and effort values are checked for form only, never against a list of allowed models (`XC-14`); `profile.example/` carries the recommended defaults as comments.
 - **The profile is only data.** No profile file is executable or imported as code; the app reads it only through its config loading and prompt assembly (`XC-13`).
 
 **Complete user-setup inventory (Priority: P0)** — the consolidated home; other PRDs reference this:
@@ -142,9 +144,9 @@ profile/
 - Fly secrets on the search app (`--stage`): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `PERPLEXITY_API_KEY` (if used), `GEMINI_API_KEY` (if used), `JSA_SEARCH_ANTHROPIC_API_KEY` (if used).
 - Fly secrets on the inbox app (`--stage`, if used): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, one of `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`, `JSA_GWS_CREDENTIALS`, `JSA_INBOX_GWS_CREDENTIALS`.
 
-*Local tools:* Google Chrome (review); Microsoft Word (redline review); the `gws` CLI + `gws auth login` (Sheets — note the testing-status OAuth 7-day token expiry until the consent screen is published); `flyctl` + `fly auth login` (deploy); `uv`; the Claude Code CLI (for local Claude-driven commands); `pandoc` and `typst` (`generate`'s checklist PDF); Google Drive for Desktop (with the inbox: `packets_dir` mirrors the Drive packets folder).
+*Local tools:* Google Chrome (review); Microsoft Word (redline review); the `gws` CLI + `gws auth login` (Sheets — note the testing-status OAuth 7-day token expiry until the consent screen is published); `flyctl` + `fly auth login` (deploy); `uv`; the Claude Code CLI (for local Claude-driven commands); `pandoc` and `typst` (`generate`'s checklist PDF); LibreOffice (the packet's resume and cover letter PDFs); Google Drive for Desktop (with the inbox: `packets_dir` mirrors the Drive packets folder).
 
-*The profile the user seeds (`XC-11`)* — `cp -r profile.example profile`, then replace the fictional candidate: `config.toml`; the six search fragments and `search.toml`; `resume.docx` (the single base resume); optionally `cover_letter.<ext>`. No app prompt needs an edit.
+*The profile the user seeds (`XC-11`)* — `cp -r profile.example profile`, then replace the fictional candidate: `config.toml`; the six search fragments and `search.toml`; `resume.docx` (the single base resume); optionally `cover_letter.<ext>` and `resume_skills.md`. No app prompt needs an edit.
 
 *Outside the profile:* the Google Sheet (Applications tab, A:H header, and the Status dropdown / data-validation applied to all of column H, so appended rows can never run past the pre-formatted range).
 
@@ -185,7 +187,7 @@ profile/
 - **`turso_serverless` over HTTP (`XC-2`, PRD 02)** is what makes the same DB reachable identically from Fly and locally.
 - **No inbound surface:** both machines only make outbound calls. The jobs mailbox is the inbox machine's queue, so there is no endpoint, token, or run table to secure.
 - **Two Google credentials, each scoped to its job:** a credential that can read a mailbox can read password resets. So the inbox reads a mailbox used for nothing else, and the owner's credential reaches only the files the app created: the packets folder and the tracker.
-- **Inputs are re-asserted, not synced:** `config.toml`, `resume.docx`, and the cover letter reach the inbox machine only through `jsa deploy`, as its image and schedule do; no sync process runs.
+- **Inputs are re-asserted, not synced:** `config.toml`, `resume.docx`, the cover letter, and the skills list reach the inbox machine only through `jsa deploy`, as its image and schedule do; no sync process runs.
 
 -----
 #### Integration Points
