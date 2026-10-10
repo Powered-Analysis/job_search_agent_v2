@@ -18,7 +18,7 @@ from claude_agent_sdk import (
 )
 
 from jsa.errors import JsaError
-from jsa.profile import AgentSettings
+from jsa.profile import AgentSettings, ModelSettings
 from jsa.runners import Deadline, WallClockExceeded
 
 
@@ -96,7 +96,7 @@ async def _drive(
 
 def run_agent(
     prompt: str,
-    settings: AgentSettings,
+    settings: ModelSettings,
     *,
     tools: list[str],
     max_turns: int,
@@ -136,6 +136,7 @@ def run_single_turn(prompt: str, settings: AgentSettings, *, agent: str) -> str:
         tools=[],
         max_turns=1,
         permission_mode="dontAsk",
+        wall_clock_seconds=settings.wall_clock_seconds,
     )
     text = result.text.strip()
     if not text:
