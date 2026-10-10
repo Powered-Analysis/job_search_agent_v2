@@ -35,10 +35,17 @@ def profile_dir() -> Path:
     return Path(os.environ.get("JSA_PROFILE_DIR") or "profile")
 
 
-class AgentSettings(BaseModel):
+class ModelSettings(BaseModel):
     model_config = _STRICT
     model: NonEmptyStr
     effort: Effort
+
+
+class AgentSettings(ModelSettings):
+    """The checklist and redline run unattended on the inbox machine, so they may carry a hard stop (PRD 04)."""
+
+    # XC-14: no default number, because the right one depends on the model and effort the user chose.
+    wall_clock_seconds: Annotated[float, Field(strict=True, gt=0)] | None = None
 
 
 class ScheduledSearch(BaseModel):
@@ -73,7 +80,7 @@ class Runners(BaseModel):
     """Claude is the one search runner with settings; Perplexity and Gemini are pinned (XC-14)."""
 
     model_config = _STRICT
-    claude: AgentSettings | None = None
+    claude: ModelSettings | None = None
 
 
 class Verification(BaseModel):
@@ -142,7 +149,7 @@ class AgentsConfig(BaseModel):
     model_config = _STRICT
     checklist: AgentSettings | None = None
     redline: AgentSettings | None = None
-    refine: AgentSettings | None = None
+    refine: ModelSettings | None = None
 
 
 class Config(BaseModel):
@@ -200,7 +207,7 @@ def load_search_config() -> SearchConfig:
     return _load(SEARCH_TOML, SearchConfig)
 
 
-def claude_settings(config: SearchConfig) -> AgentSettings:
+def claude_settings(config: SearchConfig) -> ModelSettings:
     if config.runners.claude is None:
         raise JsaError(
             f"{profile_dir() / SEARCH_TOML} has no [runners.claude] table. "
@@ -254,7 +261,7 @@ def packet_sources() -> PacketSources:
     return PacketSources(base_resume(), cover_letter())
 
 
-def _agent_settings(config: Config, name: str) -> AgentSettings:
+def _agent_settings(config: Config, name: str) -> ModelSettings:
     """An agent's model and effort (XC-14); a missing table raises before any model call."""
     settings = getattr(config.agents, name)
     if settings is None:
@@ -323,5 +330,5 @@ def packet_agents(config: Config) -> PacketAgents:
     return PacketAgents(checklist_settings(config), redline_settings(config))
 
 
-def refine_settings(config: Config) -> AgentSettings:
+def refine_settings(config: Config) -> ModelSettings:
     return _agent_settings(config, "refine")
