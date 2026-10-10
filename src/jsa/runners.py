@@ -12,7 +12,7 @@ from jsa.errors import JsaError
 WALL_CLOCK_CEILING_SECONDS = 3600
 # The longest a streamed runner waits for its connection to send anything, so a half-open one
 # surfaces as a transport error. Each request is also capped by the time left on the ceiling,
-# and `within` abandons a read still blocked when the ceiling passes.
+# and `within` abandons a read still blocked when the ceiling passes, aborting its connection.
 READ_TIMEOUT_SECONDS = 1800
 # How often a streamed runner logs that it is still working.
 HEARTBEAT_SECONDS = 5
@@ -94,8 +94,9 @@ def within[T](events: Iterable[T], deadline: Deadline) -> Iterator[T]:
     """Yield `events`, raising WallClockExceeded the moment the ceiling passes, even while the source is blocked in a read.
 
     A stalled stream sends nothing, so the ceiling cannot be checked between its events. The source is read in a
-    worker thread that the caller waits on only until the ceiling; if the read never returns, the thread is
-    abandoned (it is a daemon, and its own read timeout ends it) and the source is closed once that read ends.
+    worker thread that the caller waits on only until the ceiling. If the read never returns, the thread is
+    abandoned (it is a daemon) and the source's `abort`, where it has one, drops the connection at once so the
+    provider stops working; the source is closed once that read ends.
     """
     source = iter(events)
     pulls: queue.SimpleQueue[bool] = queue.SimpleQueue()
@@ -134,6 +135,9 @@ def within[T](events: Iterable[T], deadline: Deadline) -> Iterator[T]:
                 raise value
     finally:
         pulls.put(False)
-        if not reading:
+        if reading:
+            if abort := getattr(source, "abort", None):
+                abort()
+        else:
             # Idle, so the source is closed before the caller goes on (a stream left open keeps the provider working).
             worker.join()
