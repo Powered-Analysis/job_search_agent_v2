@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 import httpx
 
 from jsa.config import SEARCH_AGENT_KEYS, api_key
-from jsa.http import post_sse
+from jsa.http import SseEvents
 from jsa.runners import Deadline, RunnerError, RunnerResult, within
 from jsa.search_output import output_json_schema
 
@@ -84,7 +84,7 @@ class PerplexityRunner:
         # this block is left, however it is left (PRD 01).
         with closing(
             within(
-                post_sse(
+                SseEvents(
                     self._client,
                     URL,
                     request_body(prompt),
