@@ -5,6 +5,7 @@ documented seams: HTTP at the transport, Claude at `agent_loop.query`, and `gws`
 reached through `JSA_GWS_BIN`. The profile and the packets directory are temporary directories.
 """
 
+import asyncio
 import json
 import os
 import re
@@ -1725,4 +1726,132 @@ def test_a_resume_copy_with_unresolved_tracked_changes_is_not_redlined_and_the_r
     assert code == 0
     assert "warning" in output.lower()
     assert REDLINE_DOC not in entries(folder)
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+# --- the optional wall-clock limit (issue #121; PRD 04 "Resume checklist", "Resume redline") ---
+
+
+def limit_config(profile, packets, *, checklist="", redline=""):
+    text = CONFIG.format(packets=packets).replace(
+        'effort = "low"', f'effort = "low"\n{checklist}'
+    )
+    text = text.replace('effort = "medium"', f'effort = "medium"\n{redline}')
+    write_config_toml(profile, text)
+
+
+def hang_for(monkeypatch, agent, model):
+    """Runs on `model` never answer; every other run is answered by the stand-in."""
+
+    async def query(*, prompt, options=None, **ignored):
+        if options.model == model:
+            agent.calls.append(SimpleNamespace(prompt=prompt, options=options))
+            await asyncio.sleep(3600)
+        async for message in agent.query(prompt=prompt, options=options, **ignored):
+            yield message
+
+    monkeypatch.setattr(agent_loop, "query", query)
+
+
+def test_a_checklist_that_runs_past_its_limit_flags_the_row_and_leaves_it_in_the_queue(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    profile, packets = env
+    limit_config(profile, packets, checklist="wall_clock_seconds = 0.05")
+    posting_id = seed(gdb)
+    hang_for(monkeypatch, agent, "claude-sonnet-5-5")
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert str(posting_id) in output
+    assert not gws.exists()
+    assert column(gdb, posting_id, "added_to_tracker") == 0
+    assert "resume_checklist.md" not in entries(packets / PLAIN)
+    assert agent.redline_calls == []
+
+
+def test_a_timed_out_checklist_does_not_stop_the_other_rows(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    profile, packets = env
+    limit_config(profile, packets, checklist="wall_clock_seconds = 0.2")
+    slow = seed(gdb, company="Slow Labs", jd="# Role\n\nSLOW-JD-MARKER\n")
+    fine = seed(gdb, company="Fine Labs")
+
+    async def query(*, prompt, options=None, **ignored):
+        if "SLOW-JD-MARKER" in prompt and options.model != REDLINE_MODEL:
+            await asyncio.sleep(3600)
+        async for message in agent.query(prompt=prompt, options=options, **ignored):
+            yield message
+
+    monkeypatch.setattr(agent_loop, "query", query)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert str(slow) in output
+    assert column(gdb, slow, "added_to_tracker") == 0
+    assert column(gdb, fine, "added_to_tracker") == 1
+
+
+def test_a_redline_that_runs_past_its_limit_flags_the_row_and_keeps_the_checklist(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    profile, packets = env
+    limit_config(profile, packets, redline="wall_clock_seconds = 0.05")
+    posting_id = seed(gdb)
+    hang_for(monkeypatch, agent, REDLINE_MODEL)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert str(posting_id) in output
+    assert not gws.exists()
+    assert column(gdb, posting_id, "added_to_tracker") == 0
+    assert "resume_checklist.md" in entries(packets / PLAIN)
+    assert REDLINE_EDITS not in entries(packets / PLAIN)
+
+
+def test_a_rerun_after_a_timed_out_redline_resumes_at_the_redline(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    profile, packets = env
+    limit_config(profile, packets, redline="wall_clock_seconds = 0.05")
+    posting_id = seed(gdb)
+    hang_for(monkeypatch, agent, REDLINE_MODEL)
+    jsa_generate(monkeypatch, capsys)
+    monkeypatch.setattr(agent_loop, "query", agent.query)
+    agent.calls.clear()
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert agent.checklist_calls == []
+    assert len(agent.redline_calls) == 1
+    assert REDLINE_EDITS in entries(packets / PLAIN)
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_a_rerun_after_a_timed_out_checklist_builds_the_packet(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    profile, packets = env
+    limit_config(profile, packets, checklist="wall_clock_seconds = 0.05")
+    posting_id = seed(gdb)
+    hang_for(monkeypatch, agent, "claude-sonnet-5-5")
+    jsa_generate(monkeypatch, capsys)
+    monkeypatch.setattr(agent_loop, "query", agent.query)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert "resume_checklist.md" in entries(packets / PLAIN)
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_a_run_inside_its_limit_completes_the_packet(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    profile, packets = env
+    limit_config(
+        profile,
+        packets,
+        checklist="wall_clock_seconds = 60",
+        redline="wall_clock_seconds = 60",
+    )
+    posting_id = seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets / PLAIN) >= {"resume_checklist.md", REDLINE_EDITS}
     assert column(gdb, posting_id, "added_to_tracker") == 1
