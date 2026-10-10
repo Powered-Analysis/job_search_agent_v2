@@ -7,20 +7,20 @@ from jsa.naming import normalize_company, title_slug
 HOSTILE = '/\\:*?"<>|'
 
 
-def test_company_suffix_stripped_and_title_cased():
+def test_company_suffix_stripped():
     assert normalize_company("Acme Widgets, Inc.") == "Acme Widgets"
 
 
 @pytest.mark.parametrize(
     "company, expected",
     [
-        ("acme widgets llc", "Acme Widgets"),
-        ("ACME WIDGETS", "Acme Widgets"),
+        ("acme widgets llc", "acme widgets"),
+        ("ACME WIDGETS", "ACME WIDGETS"),
         ("Acme Widgets Inc", "Acme Widgets"),
         ("Acme Widgets Ltd.", "Acme Widgets"),
     ],
 )
-def test_company_title_case_and_suffixes(company, expected):
+def test_company_suffixes_stripped_and_case_kept(company, expected):
     assert normalize_company(company) == expected
 
 
@@ -93,7 +93,6 @@ def test_naming_pure_no_network(monkeypatch):
         "Acme & Co",
         "Acme and Co.",
         "Acme AND CO",
-        "acme & co.",
         "Acme, and Co",
         "Acme & Co, Inc.",
         "Acme and Co Ltd",
@@ -105,13 +104,17 @@ def test_company_connector_trimmed_with_suffix(company):
     assert normalize_company(company) == "Acme"
 
 
+def test_company_connector_trimmed_with_suffix_case_kept():
+    assert normalize_company("acme & co.") == "acme"
+
+
 @pytest.mark.parametrize(
     "company, expected",
     [
         ("Black & Decker", "Black & Decker"),
-        ("Johnson and Johnson", "Johnson And Johnson"),
+        ("Johnson and Johnson", "Johnson and Johnson"),
         ("Procter & Gamble", "Procter & Gamble"),
-        ("Fish and Chips Inc", "Fish And Chips"),
+        ("Fish and Chips Inc", "Fish and Chips"),
         ("Acme Widgets, Inc.", "Acme Widgets"),
         ("Brand Co", "Brand"),
         ("Sand Inc", "Sand"),

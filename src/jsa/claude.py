@@ -15,7 +15,7 @@ from claude_agent_sdk import (
 
 from jsa import agent_loop
 from jsa.config import search_anthropic_api_key
-from jsa.profile import AgentSettings
+from jsa.profile import ModelSettings
 from jsa.runners import WALL_CLOCK_CEILING_SECONDS, RunnerResult, clip
 
 log = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ def _trace(message: Message) -> None:
 
 
 class ClaudeRunner:
-    def __init__(self, settings: AgentSettings) -> None:
+    def __init__(self, settings: ModelSettings) -> None:
         self._settings = settings
 
     def run(self, prompt: str) -> RunnerResult:
