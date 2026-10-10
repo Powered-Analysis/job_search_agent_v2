@@ -968,6 +968,20 @@ def test_a_silent_perplexity_stream_is_closed_once_its_read_ends(
     assert body.closed.wait(FEW_SECONDS)
 
 
+def test_a_perplexity_stream_blocked_in_a_read_is_closed_at_the_ceiling_not_when_the_read_ends(
+    web, profile, silent_stream, monkeypatch
+):
+    ceiling_of(monkeypatch, 0.5)
+    body = silent_stream([(STEP_EVENT, {})])
+    started = time.monotonic()
+    with make_client() as client, pytest.raises(WallClockExceeded):
+        PerplexityRunner(client).run("a prompt")
+    # The body is never released, so its read is still blocked here.
+    assert not body.release.is_set()
+    assert body.closed.wait(FEW_SECONDS)
+    assert time.monotonic() - started < 0.5 + FEW_SECONDS
+
+
 def test_a_search_whose_stream_goes_silent_fails_at_the_ceiling_and_inserts_nothing(
     world, silent_stream, monkeypatch, capsys
 ):
