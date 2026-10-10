@@ -26,11 +26,15 @@ region = "iad"
 [agents.checklist]
 model  = "claude-fable-5-1"
 effort = "medium"
+# Optional hard stop, in seconds, so a hung run can't bill the inbox machine indefinitely. Unset means no limit.
+# wall_clock_seconds = 600
 
 # Recommended: claude-fable-5-1 at "medium" for the ATS redline.
 [agents.redline]
 model  = "claude-fable-5-1"
 effort = "medium"
+# Optional hard stop, in seconds. Unset means no limit.
+# wall_clock_seconds = 600
 
 # Recommended: claude-opus-5-5 at "high" for refine.
 [agents.refine]
