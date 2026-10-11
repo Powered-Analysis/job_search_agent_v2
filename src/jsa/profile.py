@@ -261,9 +261,8 @@ def packet_sources() -> PacketSources:
     return PacketSources(base_resume(), cover_letter())
 
 
-def _agent_settings(config: Config, name: str) -> ModelSettings:
+def _agent_settings[T: ModelSettings](settings: T | None, name: str) -> T:
     """An agent's model and effort (XC-14); a missing table raises before any model call."""
-    settings = getattr(config.agents, name)
     if settings is None:
         raise JsaError(
             f"{profile_dir() / 'config.toml'} has no [agents.{name}] table. "
@@ -312,11 +311,11 @@ def inbox_drive_folder(config: Config) -> str:
 
 
 def checklist_settings(config: Config) -> AgentSettings:
-    return _agent_settings(config, "checklist")
+    return _agent_settings(config.agents.checklist, "checklist")
 
 
 def redline_settings(config: Config) -> AgentSettings:
-    return _agent_settings(config, "redline")
+    return _agent_settings(config.agents.redline, "redline")
 
 
 class PacketAgents(NamedTuple):
@@ -331,4 +330,4 @@ def packet_agents(config: Config) -> PacketAgents:
 
 
 def refine_settings(config: Config) -> ModelSettings:
-    return _agent_settings(config, "refine")
+    return _agent_settings(config.agents.refine, "refine")
