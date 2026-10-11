@@ -35,7 +35,7 @@ from jsa.profile import (
     packet_sources,
     tracker_spreadsheet_id,
 )
-from jsa.redline import edits_applied, redline_resume
+from jsa.redline import edits_applied, parse_skills, redline_resume
 from jsa.resume import render_resume
 from jsa.tracker import append_tracked, today
 from jsa.verify import CLOSED_OUTCOMES, Verifier, recheck
@@ -75,8 +75,14 @@ def _build_redline(
     directory: Path,
     copy: Path,
     settings: AgentSettings,
+    skills_file: Path | None,
 ) -> None:
-    result = redline_resume(copy, directory / REDLINE_EDITS, job_description, settings)
+    skills = (
+        parse_skills(skills_file.read_text(encoding="utf-8")) if skills_file else []
+    )
+    result = redline_resume(
+        copy, directory / REDLINE_EDITS, job_description, settings, skills
+    )
     if result is None:
         print(
             f"warning: posting {job.id}: the resume copy has unresolved tracked changes, "
@@ -87,6 +93,11 @@ def _build_redline(
         print(
             f"redline: posting {job.id}: {result.applied} applied, {result.dropped} dropped"
         )
+        if not result.has_skills_section:
+            print(
+                f"warning: posting {job.id}: the resume copy has no single `Skills` paragraph, "
+                "so it has no skills section; every paragraph was held to the ordinary rules"
+            )
         # PRD 04: a PDF stands for a resume the redline left unchanged; an edited one is reviewed first.
         if result.applied == 0:
             ensure_pdf(copy)
@@ -123,7 +134,9 @@ def build_packet(
     elif not pdf.exists():
         render_checklist_pdf(checklist, pdf)
     if need_redline:
-        _build_redline(job_description, job, directory, copy, agents.redline)
+        _build_redline(
+            job_description, job, directory, copy, agents.redline, sources.skills
+        )
     elif not edits_applied(edits_file):
         # Re-entry: the redline finished, but the run died before the unchanged copy's PDF.
         ensure_pdf(copy)

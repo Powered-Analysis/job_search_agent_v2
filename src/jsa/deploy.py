@@ -26,6 +26,7 @@ from jsa.profile import (
     load_search_config,
     profile_dir,
     redline_settings,
+    resume_skills,
     tracker_spreadsheet_id,
 )
 from jsa.refine import proposal_pending, refine_dir
@@ -368,8 +369,8 @@ def _swap_in(
 def inbox_machine_files() -> dict[str, Path]:
     """Where each inbox machine file lands in the machine, and the profile file it comes from."""
     sources = [profile_dir() / name for name in INBOX_FILES]
-    if (letter := cover_letter()) is not None:
-        sources.append(letter)
+    optional = (cover_letter(), resume_skills())
+    sources.extend(path for path in optional if path is not None)
     return {f"{MACHINE_PROFILE_DIR}/{source.name}": source for source in sources}
 
 
