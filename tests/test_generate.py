@@ -2115,3 +2115,215 @@ def test_generate_never_fills_an_existing_copy_a_second_time(
         for name, content in kept.items():
             assert (folder / name).read_bytes() == content
             assert "[COMPANY]" in docx.Document(str(folder / name)).paragraphs[1].text
+
+
+# --- the skills section (issue #132; PRD 04 "Skills section") -----------------------
+
+SKILLS_LINE = "Excel, Looker"
+SK_EDIT = {
+    "paragraph": 3,
+    "find": "Looker",
+    "replace": "Looker, Python",
+    "goal": "narrative",
+    "jd_quote": None,
+    "reason": "GEN-SK-REASON-MARKER",
+}
+EXAMPLE_SKILLS = {
+    "SQL",
+    "dbt",
+    "Looker",
+    "Tableau",
+    "Python",
+    "A/B testing",
+    "experimentation",
+    "Data modeling",
+    "Airflow",
+    "BigQuery",
+    "Snowflake",
+    "Excel",
+    "Stakeholder reporting",
+}
+
+
+def write_resume_with(profile: Path, *blocks: str) -> None:
+    """The base resume: the name, the distinctive line, then these paragraphs."""
+    document = docx.Document()
+    document.add_paragraph().add_run("Riley Resumeperson").bold = True
+    document.add_paragraph(BASE_LINE)
+    for text in blocks:
+        document.add_paragraph(text)
+    document.save(profile / "resume.docx")
+
+
+def skills_reply(*skills_edits, edits=()):
+    explanation = None if edits or skills_edits else NO_EDITS_EXPLANATION
+    return lambda prompt: result_message(
+        result=json.dumps(
+            {
+                "edits": list(edits),
+                "skills_edits": list(skills_edits),
+                "explanation": explanation,
+            }
+        )
+    )
+
+
+def skills_warnings(output: str) -> list[str]:
+    return [
+        line
+        for line in output.splitlines()
+        if "warning" in line.lower() and "skills" in line.lower()
+    ]
+
+
+def test_the_skills_list_in_the_profile_reaches_the_redline_prompt_one_item_per_line(
+    gdb, agent, monkeypatch, capsys
+):
+    seed(gdb)
+    jsa_generate(monkeypatch, capsys)
+    (prompt,) = agent.redline_prompts
+    assert EXAMPLE_SKILLS <= set(prompt.splitlines())
+    assert "{{" not in prompt and "}}" not in prompt
+
+
+def test_a_skills_file_in_either_format_is_parsed_into_the_prompt(
+    gdb, env, agent, monkeypatch, capsys
+):
+    profile, _ = env
+    (profile / "resume_skills.md").write_text("Rust\n- Go, Zig\n* rust\n")
+    seed(gdb)
+    jsa_generate(monkeypatch, capsys)
+    (prompt,) = agent.redline_prompts
+    lines = prompt.splitlines()
+    assert {"Rust", "Go", "Zig"} <= set(lines)
+    assert lines.count("Rust") == 1
+    assert "Stakeholder reporting" not in prompt
+
+
+@pytest.mark.parametrize(
+    "content", [None, "", "  \n,\n -\n"], ids=["absent", "empty", "no-items"]
+)
+def test_without_a_skills_list_the_prompt_carries_none_and_a_skills_edit_is_dropped(
+    gdb, env, agent, monkeypatch, capsys, content
+):
+    profile, packets = env
+    write_resume_with(profile, "Skills", SKILLS_LINE)
+    skills_file = profile / "resume_skills.md"
+    if content is None:
+        skills_file.unlink()
+    else:
+        skills_file.write_text(content)
+    seed(gdb)
+    agent.respond_redline = skills_reply(SK_EDIT)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    (prompt,) = agent.redline_prompts
+    assert "Stakeholder reporting" not in prompt
+    assert "{{" not in prompt and "}}" not in prompt
+    folder = packets / PLAIN
+    (entry,) = proposed(folder)["skills_edits"]
+    assert isinstance(entry["validation"], str) and entry["validation"]
+    assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_PDF).is_file()
+
+
+def test_a_skills_edit_is_written_into_the_resume_copy_and_the_resume_gets_no_pdf(
+    gdb, env, agent, soffice, monkeypatch, capsys
+):
+    profile, packets = env
+    write_resume_with(profile, "Skills", SKILLS_LINE)
+    posting_id = seed(gdb)
+    agent.respond_redline = skills_reply(SK_EDIT)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    folder = packets / PLAIN
+    record = proposed(folder)
+    assert record["explanation"] is None and record["edits"] == []
+    (entry,) = record["skills_edits"]
+    assert entry["validation"] is None
+    with zipfile.ZipFile(folder / RESUME_COPY) as archive:
+        body = archive.read("word/document.xml").decode("utf-8")
+        comments = archive.read("word/comments.xml").decode("utf-8")
+    assert "<w:ins " in body and "<w:del " in body and "Claude (ATS)" in body
+    assert "GEN-SK-REASON-MARKER" in comments
+    assert RESUME_PDF not in entries(folder)
+    assert rendered(soffice) == []
+    assert re.search(r"\b1\b[^\n\d]*applied[^\n\d]*\b0\b[^\n\d]*dropped", output)
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_the_applied_and_dropped_counts_include_skills_edits(
+    gdb, env, agent, monkeypatch, capsys
+):
+    profile, _ = env
+    write_resume_with(profile, "Skills", SKILLS_LINE)
+    seed(gdb)
+    bad = {**SK_EDIT, "replace": "Looker, Rust"}
+    agent.respond_redline = skills_reply(SK_EDIT, bad)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert re.search(r"\b1\b[^\n\d]*applied[^\n\d]*\b1\b[^\n\d]*dropped", output)
+
+
+def test_a_skills_edit_that_fails_validation_leaves_the_copy_and_renders_its_pdf(
+    gdb, env, agent, monkeypatch, capsys
+):
+    profile, packets = env
+    write_resume_with(profile, "Skills", SKILLS_LINE)
+    seed(gdb)
+    agent.respond_redline = skills_reply({**SK_EDIT, "replace": "Looker, Rust"})
+    jsa_generate(monkeypatch, capsys)
+    folder = packets / PLAIN
+    assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_PDF).is_file()
+
+
+def test_a_resume_with_no_skills_paragraph_warns_naming_the_row_and_still_builds_the_packet(
+    gdb, agent, gws, monkeypatch, capsys
+):
+    posting_id = seed(gdb)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    warnings = skills_warnings(output)
+    assert any(str(posting_id) in line for line in warnings)
+    assert gws.exists()
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_a_resume_with_two_skills_paragraphs_warns(gdb, env, monkeypatch, capsys):
+    profile, _ = env
+    write_resume_with(profile, "Skills", SKILLS_LINE, "Skills:", "Python")
+    posting_id = seed(gdb)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert any(str(posting_id) in line for line in skills_warnings(output))
+
+
+def test_a_resume_with_one_skills_paragraph_draws_no_skills_warning(
+    gdb, env, monkeypatch, capsys
+):
+    profile, _ = env
+    write_resume_with(profile, "Skills", SKILLS_LINE)
+    seed(gdb)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert skills_warnings(output) == []
+
+
+def test_a_resume_without_a_skills_section_holds_every_paragraph_to_the_ordinary_rules(
+    gdb, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    seed(gdb, jd=QUUX_JD)
+    skill = {
+        **SK_EDIT,
+        "paragraph": 1,
+        "find": "Quuxlate platform",
+        "replace": "Quuxlate platform, Python",
+    }
+    agent.respond_redline = skills_reply(skill, edits=[QUUX_EDIT])
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    record = proposed(packets / PLAIN)
+    assert record["edits"][0]["validation"] is None
+    assert record["skills_edits"][0]["validation"]

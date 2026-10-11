@@ -2569,3 +2569,65 @@ def test_missing_search_secrets_does_not_change_what_it_is_given():
 )
 def test_readme_walkthrough_covers_the_inbox_setup(item):
     assert item in readme_walkthrough()
+
+
+def test_a_skills_list_removed_from_the_profile_leaves_the_inbox_machine(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    (profile / "resume_skills.md").unlink(missing_ok=True)
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv(
+        "STUB_INBOX_MACHINES",
+        held(
+            "m0",
+            "/app/profile/config.toml",
+            "/app/profile/resume.docx",
+            "/app/profile/resume_skills.md",
+        ),
+    )
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    (update,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
+    files = machine_files(update)
+    # Fly removes a machine file that is set to an empty source.
+    assert files["/app/profile/resume_skills.md"] == ""
+    assert files["/app/profile/config.toml"]
+    assert files["/app/profile/resume.docx"]
+
+
+def test_a_kept_skills_list_is_not_cleared_from_the_inbox_machine(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    (profile / "resume_skills.md").write_text("Python\n")
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv(
+        "STUB_INBOX_MACHINES", held("m0", "/app/profile/resume_skills.md")
+    )
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    (update,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
+    assert machine_files(update)["/app/profile/resume_skills.md"] == str(
+        profile / "resume_skills.md"
+    )
+
+
+def test_dry_run_lists_the_skills_list_among_the_inbox_machine_files(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    (profile / "resume_skills.md").write_text("Python\n")
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert launched_nothing(calls(log))
+    last_image_file = max(output.index(path) for path in shipped_search_files(profile))
+    assert output.index("resume_skills.md") > last_image_file
+
+
+def test_dry_run_without_a_skills_list_lists_none(inbox, monkeypatch, capsys):
+    profile, _ = inbox
+    (profile / "resume_skills.md").unlink(missing_ok=True)
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert "resume_skills" not in output

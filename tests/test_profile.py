@@ -7,7 +7,9 @@ import zipfile
 from datetime import time
 from xml.etree import ElementTree
 
+import docx
 import pytest
+from conftest import REPO_ROOT
 from profile_helpers import (
     CONFIG_TOML,
     EXAMPLE_DIR,
@@ -20,6 +22,8 @@ from profile_helpers import (
 
 from jsa.errors import JsaError
 from jsa.profile import load_config, load_search_config, profile_dir
+from jsa.redline import parse_skills
+from jsa.redline_docx import skills_section
 
 
 @pytest.fixture
@@ -534,3 +538,29 @@ def test_an_invalid_config_value_raises_at_load(profile, replacements):
 def test_any_non_empty_agent_model_is_accepted_in_config(profile, model):
     config_with(profile, {'model = "claude-fable-5-1"': f'model = "{model}"'})
     assert load_config().agents.checklist.model == model
+
+
+# --- resume_skills.md (issue #132; PRD 04 "Skills section", PRD 06 "Configuration surface") ---
+
+
+def test_the_example_profile_has_a_skills_list_of_fictional_skills():
+    items = parse_skills((EXAMPLE_DIR / "resume_skills.md").read_text(encoding="utf-8"))
+    assert len(items) >= 4
+    assert len({item.casefold() for item in items}) == len(items)
+
+
+def test_the_example_skills_list_uses_both_line_breaks_and_commas():
+    text = (EXAMPLE_DIR / "resume_skills.md").read_text(encoding="utf-8")
+    assert "," in text and len(text.strip().splitlines()) > 1
+
+
+def test_the_example_resume_has_a_single_skills_paragraph_for_the_live_check():
+    section = skills_section(docx.Document(str(EXAMPLE_DIR / "resume.docx")))
+    assert section is not None and len(section) > 0
+
+
+def test_the_readme_describes_the_skills_file_and_its_two_formats():
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "resume_skills.md" in text
+    near = text[text.index("resume_skills.md") :].lower()
+    assert "comma" in near and ("line" in near or "newline" in near)

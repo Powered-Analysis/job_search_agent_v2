@@ -19,7 +19,17 @@ from test_claude_runner import result_message
 from jsa import agent_loop
 from jsa.errors import JsaError
 from jsa.profile import AgentSettings
-from jsa.redline import Edit, redline_resume, validate_edits
+from jsa.redline import (
+    Edit,
+    SkillsEdit,
+    assemble_redline_prompt,
+    edits_applied,
+    parse_skills,
+    redline_resume,
+    validate_edits,
+    validate_skills_edits,
+)
+from jsa.redline_docx import skills_section
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W}
@@ -371,7 +381,7 @@ def reply_object(edits, explanation=None, skills_edits=()):
     )
 
 
-def run(tmp_path, stand_in, reply, *, build=None, jd=JD):
+def run(tmp_path, stand_in, reply, *, build=None, jd=JD, skills=()):
     """`reply` is raw text, or a list of edit dicts sent as `{edits, skills_edits, explanation}`."""
     if isinstance(reply, list):
         reply = reply_object(reply, None if reply else EXPLANATION)
@@ -381,7 +391,7 @@ def run(tmp_path, stand_in, reply, *, build=None, jd=JD):
     original = tmp_path / "original.docx"
     original.write_bytes(before)
     edits_file = tmp_path / "redline_edits.json"
-    outcome = redline_resume(copy, edits_file, jd, SETTINGS)
+    outcome = redline_resume(copy, edits_file, jd, SETTINGS, skills)
     return SimpleNamespace(
         outcome=outcome,
         copy=copy,
@@ -1057,3 +1067,906 @@ def test_the_redline_document_is_a_valid_docx_python_docx_can_reopen(
     reopened = docx.Document(str(ran.copy))
     assert len(reopened.paragraphs) == len(PARAGRAPHS)
     assert re.search(r"Riley", reopened.paragraphs[0].text)
+
+
+# --- the skills list and the skills section (issue #132; PRD 04 "Skills section") ----
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Python\nSQL, RDMS\nNotion\n", ["Python", "SQL", "RDMS", "Notion"]),
+        ("Python, SQL, Notion", ["Python", "SQL", "Notion"]),
+        ("Python\r\nSQL\r\nNotion", ["Python", "SQL", "Notion"]),
+        ("  Python  ,\t SQL \n   Notion   ", ["Python", "SQL", "Notion"]),
+        ("- Python\n* SQL\n+ Notion", ["Python", "SQL", "Notion"]),
+        ("-   Python, - SQL", ["Python", "SQL"]),
+        ("Python,,\n\n,SQL,\n   \n", ["Python", "SQL"]),
+        ("Python\npython\nPYTHON, SQL", ["Python", "SQL"]),
+        ("Data modeling, data Modeling", ["Data modeling"]),
+        ("A/B testing, CI/CD", ["A/B testing", "CI/CD"]),
+        ("", []),
+        ("   \n\n , ,\n", []),
+        ("-\n*\n", []),
+    ],
+    ids=[
+        "the-prd-example",
+        "commas-only",
+        "crlf-line-breaks",
+        "whitespace-trimmed",
+        "list-markers-dropped",
+        "marker-after-a-comma",
+        "empty-items-dropped",
+        "case-only-repeats-kept-once",
+        "case-only-repeat-of-a-phrase",
+        "slashes-stay-inside-an-item",
+        "empty-file",
+        "only-separators",
+        "only-markers",
+    ],
+)
+def test_the_skills_file_is_parsed_into_trimmed_unique_items(text, expected):
+    assert parse_skills(text) == expected
+
+
+def test_the_prd_example_file_gives_four_items():
+    assert len(parse_skills("Python\nSQL, RDMS\nNotion\n")) == 4
+
+
+def bold_paragraph(document, text):
+    document.add_paragraph().add_run(text).bold = True
+
+
+def doc_with(*blocks):
+    """A document from `(kind, text)` blocks: `p` plain, `h` Word heading, `b` wholly bold."""
+    document = docx.Document()
+    for kind, text in blocks:
+        if kind == "h":
+            document.add_heading(text, level=1)
+        elif kind == "b":
+            bold_paragraph(document, text)
+        else:
+            document.add_paragraph(text)
+    return document
+
+
+@pytest.mark.parametrize(
+    ("blocks", "expected"),
+    [
+        (
+            [("p", "Name"), ("p", "Skills"), ("p", "A"), ("p", "B"), ("h", "Jobs")],
+            [2, 3],
+        ),
+        ([("p", "Name"), ("p", "Skills"), ("p", "A"), ("p", "B")], [2, 3]),
+        ([("p", "SKILLS"), ("p", "A"), ("h", "Jobs"), ("p", "C")], [1]),
+        ([("p", "skills:"), ("p", "A"), ("p", "B")], [1, 2]),
+        ([("p", "  Skills:  "), ("p", "A")], [1]),
+        ([("h", "Skills"), ("p", "A"), ("p", "B"), ("h", "Jobs")], [1, 2]),
+        ([("b", "Skills"), ("p", "A"), ("b", "Jobs"), ("p", "C")], [1]),
+        ([("p", "Skills"), ("p", "A"), ("b", "Jobs")], [1]),
+        ([("p", "Skills"), ("h", "Jobs"), ("p", "C")], []),
+    ],
+    ids=[
+        "ends-at-a-heading",
+        "ends-at-the-end-of-the-document",
+        "case-ignored",
+        "trailing-colon",
+        "surrounding-spaces",
+        "the-skills-paragraph-may-itself-be-a-heading",
+        "ends-at-a-wholly-bold-paragraph",
+        "bold-paragraph-ends-it-directly",
+        "empty-section",
+    ],
+)
+def test_the_skills_section_runs_from_the_skills_paragraph_to_the_next_heading_or_bold_paragraph(
+    blocks, expected
+):
+    section = skills_section(doc_with(*blocks))
+    assert section is not None and list(section) == expected
+
+
+def test_a_paragraph_only_partly_bold_does_not_end_the_section():
+    document = doc_with(("p", "Skills"), ("p", "A"))
+    mixed = document.add_paragraph()
+    mixed.add_run("Languages: ").bold = True
+    mixed.add_run("Python")
+    document.add_paragraph("C")
+    assert list(skills_section(document)) == [1, 2, 3]
+
+
+def test_a_non_bold_paragraph_with_a_bold_run_among_blank_runs_is_not_wholly_bold():
+    document = doc_with(("p", "Skills"))
+    paragraph = document.add_paragraph()
+    paragraph.add_run("Python, ")
+    paragraph.add_run("SQL").bold = True
+    document.add_paragraph("C")
+    assert list(skills_section(document)) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        [("p", "Name"), ("p", "A")],
+        [("p", "Name"), ("p", "Technical Skills"), ("p", "A")],
+        [("p", "Skills and tools"), ("p", "A")],
+        [("p", "Skills"), ("p", "A"), ("p", "Skills"), ("p", "B")],
+        [("p", "Skills"), ("p", "A"), ("h", "Jobs"), ("p", "skills:"), ("p", "B")],
+        [],
+    ],
+    ids=[
+        "no-skills-paragraph",
+        "heading-text-is-not-the-whole-paragraph",
+        "skills-with-more-words",
+        "two-skills-paragraphs",
+        "two-skills-paragraphs-differing-in-case-and-colon",
+        "empty-document",
+    ],
+)
+def test_a_resume_without_exactly_one_skills_paragraph_has_no_skills_section(blocks):
+    assert skills_section(doc_with(*blocks)) is None
+
+
+# --- validating skills edits (PRD 04 "Skills section", "Validation") ------------------
+
+SK_LIST = ["Python", "SQL", "Notion", "Excel", "Looker", "Tableau"]
+SK_PARAS = [
+    "Riley Resumeperson",
+    "Skills",
+    "Python, SQL | Notion",
+    "Excel, Looker",
+    "Experience",
+    "Built the Quuxlate platform from scratch.",
+]
+SK_SECTION = range(2, 4)
+SK_JD = JD + "\nBuild Airflow pipelines with Looker Studio, using Python 4."
+
+
+def skills_edit(**overrides) -> SkillsEdit:
+    fields = {
+        "paragraph": 3,
+        "find": "Looker",
+        "replace": "Looker, Airflow",
+        "goal": "ats",
+        "jd_quote": "Airflow pipelines",
+        "reason": "the posting names Airflow",
+    }
+    return SkillsEdit(**{**fields, **overrides})
+
+
+def sk_dict(e: SkillsEdit, **overrides) -> dict:
+    return {**e.__dict__, **overrides}
+
+
+def skills_results(
+    *edits, paragraphs=SK_PARAS, jd=SK_JD, skills=SK_LIST, section=SK_SECTION
+):
+    return validate_skills_edits(list(edits), paragraphs, jd, skills, section)
+
+
+def test_a_skills_edit_that_meets_every_rule_passes():
+    assert skills_results(skills_edit()) == [None]
+
+
+def test_each_skills_result_lines_up_with_its_edit_in_proposal_order():
+    out = skills_results(
+        skills_edit(paragraph=5), skills_edit(), skills_edit(goal="style")
+    )
+    assert len(out) == 3
+    assert out[0] and out[1] is None and out[2]
+
+
+def test_every_dropped_skills_edit_carries_a_non_empty_reason():
+    out = skills_results(
+        skills_edit(paragraph=5),
+        skills_edit(find="Nope"),
+        skills_edit(goal="style"),
+        skills_edit(reason=""),
+        skills_edit(replace="Looker"),
+    )
+    assert all(isinstance(reason, str) and reason.strip() for reason in out)
+
+
+@pytest.mark.parametrize(
+    ("paragraph", "passes"),
+    [(0, False), (1, False), (2, True), (3, True), (4, False), (5, False)],
+    ids=["name", "heading", "first", "last", "next-heading", "after-section"],
+)
+def test_a_skills_edit_must_name_a_paragraph_in_the_skills_section(paragraph, passes):
+    paragraphs = [*SK_PARAS[:2], "Excel, Looker", "Excel, Looker", *SK_PARAS[4:]]
+    (result,) = skills_results(skills_edit(paragraph=paragraph), paragraphs=paragraphs)
+    assert (result is None) is passes
+
+
+@pytest.mark.parametrize("paragraph", [-1, 6, 99])
+def test_a_skills_edit_outside_the_document_is_dropped(paragraph):
+    (result,) = skills_results(skills_edit(paragraph=paragraph))
+    assert result
+
+
+@pytest.mark.parametrize("skills", [[], ()], ids=["empty-list", "empty-tuple"])
+def test_every_skills_edit_is_dropped_while_no_skills_list_is_in_use(skills):
+    out = skills_results(
+        skills_edit(), skills_edit(goal="narrative", jd_quote=None), skills=skills
+    )
+    assert all(isinstance(reason, str) and reason.strip() for reason in out)
+    assert len(out) == 2
+
+
+def test_every_skills_edit_is_dropped_when_the_resume_has_no_skills_section():
+    (result,) = skills_results(skills_edit(), section=())
+    assert result
+
+
+def test_find_must_occur_in_the_paragraph_for_a_skills_edit():
+    (result,) = skills_results(skills_edit(find="Kubernetes"))
+    assert result
+
+
+def test_a_skills_edits_find_is_matched_exactly_not_case_folded():
+    (result,) = skills_results(skills_edit(find="looker"))
+    assert result
+
+
+def test_a_skills_edits_find_that_occurs_twice_is_dropped_and_a_single_one_passes():
+    paragraphs = [*SK_PARAS[:2], "Python, SQL, Python", *SK_PARAS[3:]]
+    twice = skills_edit(paragraph=2, find="Python", replace="")
+    once = skills_edit(paragraph=2, find="SQL", replace="")
+    out = skills_results(twice, once, paragraphs=paragraphs)
+    assert out[0] and out[1] is None
+
+
+def test_a_skills_edit_overlapping_an_earlier_passing_edit_is_dropped():
+    first = skills_edit(paragraph=2, find="Python, SQL", replace="Python")
+    second = skills_edit(paragraph=2, find="SQL | Notion", replace="Notion")
+    out = skills_results(first, second)
+    assert out[0] is None and out[1]
+
+
+def test_a_skills_edit_overlapping_an_earlier_dropped_edit_still_passes():
+    dropped = skills_edit(
+        paragraph=2, find="Python, SQL", replace="Python", jd_quote=None
+    )
+    second = skills_edit(paragraph=2, find="SQL | Notion", replace="Notion")
+    out = skills_results(dropped, second)
+    assert out[0] and out[1] is None
+
+
+def test_skills_edits_in_one_paragraph_that_do_not_overlap_both_pass():
+    first = skills_edit(
+        paragraph=2, find="Python,", replace="", goal="narrative", jd_quote=None
+    )
+    second = skills_edit(
+        paragraph=2, find="Notion", replace="", goal="narrative", jd_quote=None
+    )
+    assert skills_results(first, second) == [None, None]
+
+
+def test_skills_edit_overlap_is_per_paragraph():
+    first = skills_edit(paragraph=3, find="Looker", replace="")
+    second = skills_edit(paragraph=2, find="Python", replace="")
+    assert skills_results(first, second) == [None, None]
+
+
+def test_replace_must_differ_from_find_for_a_skills_edit():
+    (result,) = skills_results(skills_edit(replace="Looker"))
+    assert result
+
+
+def test_removing_a_skill_with_an_empty_replace_is_allowed():
+    assert skills_results(
+        skills_edit(find="Excel, ", replace="", goal="narrative", jd_quote=None)
+    ) == [None]
+
+
+def test_a_shorter_replace_is_allowed():
+    assert skills_results(
+        skills_edit(
+            paragraph=2,
+            find="Python, SQL",
+            replace="SQL",
+            goal="narrative",
+            jd_quote=None,
+        )
+    ) == [None]
+
+
+@pytest.mark.parametrize("goal", ["ats", "narrative"])
+def test_both_goals_are_accepted(goal):
+    assert skills_results(skills_edit(goal=goal)) == [None]
+
+
+@pytest.mark.parametrize("goal", ["style", "", "both", None, "ATS", 1])
+def test_a_goal_that_is_neither_ats_nor_narrative_is_dropped(goal):
+    (result,) = skills_results(skills_edit(goal=goal))
+    assert result
+
+
+def test_an_ats_edit_needs_a_jd_quote():
+    (result,) = skills_results(skills_edit(jd_quote=None, replace="Looker, Tableau"))
+    assert result
+
+
+def test_a_narrative_edit_may_have_no_jd_quote_when_every_word_is_on_the_list():
+    assert skills_results(
+        skills_edit(goal="narrative", jd_quote=None, replace="Looker, Tableau")
+    ) == [None]
+
+
+def test_a_narrative_edit_may_cite_a_quote():
+    assert skills_results(skills_edit(goal="narrative")) == [None]
+
+
+@pytest.mark.parametrize("goal", ["ats", "narrative"])
+def test_a_jd_quote_that_is_not_in_the_posting_is_dropped_for_either_goal(goal):
+    (result,) = skills_results(skills_edit(goal=goal, jd_quote="Spark clusters"))
+    assert result
+
+
+def test_a_skills_edits_jd_quote_is_matched_case_sensitively():
+    (result,) = skills_results(skills_edit(jd_quote="airflow pipelines"))
+    assert result
+
+
+def test_whitespace_runs_are_collapsed_in_a_skills_edits_quote_and_the_posting():
+    jd = "Build   Airflow\n\npipelines   every day."
+    quote = "Airflow   pipelines every\tday"
+    assert skills_results(skills_edit(jd_quote=quote), jd=jd) == [None]
+
+
+def test_an_inserted_word_on_the_list_passes_without_being_in_the_quote_or_find():
+    assert skills_results(
+        skills_edit(goal="narrative", jd_quote=None, replace="Looker Tableau")
+    ) == [None]
+
+
+def test_an_inserted_word_in_the_quote_passes_without_being_on_the_list():
+    assert skills_results(skills_edit()) == [None]
+
+
+def test_an_inserted_word_in_find_passes_without_being_on_the_list():
+    paragraphs = [*SK_PARAS[:3], "Excel, Looker, Rust", *SK_PARAS[4:]]
+    edit_ = skills_edit(
+        find="Excel, Looker, Rust",
+        replace="Rust, Excel, Looker",
+        goal="narrative",
+        jd_quote=None,
+    )
+    assert skills_results(edit_, paragraphs=paragraphs) == [None]
+
+
+def test_an_inserted_word_on_the_list_comparison_ignores_case_and_edge_punctuation():
+    assert skills_results(
+        skills_edit(goal="narrative", jd_quote=None, replace="Looker, (tableau)")
+    ) == [None]
+
+
+def test_an_inserted_word_found_nowhere_is_dropped():
+    (result,) = skills_results(skills_edit(replace="Looker, Rust"))
+    assert result
+
+
+def test_a_word_in_the_posting_but_not_in_the_cited_quote_or_list_is_dropped():
+    (result,) = skills_results(
+        skills_edit(replace="Looker, Airflow", jd_quote="Looker Studio")
+    )
+    assert result
+
+
+def test_a_word_on_the_list_in_another_form_is_not_a_match():
+    (result,) = skills_results(
+        skills_edit(goal="narrative", jd_quote=None, replace="Looker, Tableaus")
+    )
+    assert result
+
+
+def test_one_bad_inserted_word_drops_an_edit_whose_other_words_are_fine():
+    (result,) = skills_results(
+        skills_edit(goal="narrative", jd_quote=None, replace="Looker, Tableau, Rust")
+    )
+    assert result
+
+
+@pytest.mark.parametrize("separator", ["|", "•", "-", "/", "·"])
+def test_a_separator_with_no_letter_or_digit_is_never_an_inserted_word(separator):
+    assert skills_results(
+        skills_edit(
+            paragraph=2,
+            find="Python, SQL",
+            replace=f"Python, {separator} SQL",
+            goal="narrative",
+            jd_quote=None,
+        )
+    ) == [None]
+
+
+@pytest.mark.parametrize("reason", ["", "   ", "\n"])
+def test_an_empty_or_blank_reason_is_dropped(reason):
+    (result,) = skills_results(skills_edit(reason=reason))
+    assert result
+
+
+def test_the_six_word_limit_does_not_apply_to_a_skills_edit():
+    paragraphs = [
+        *SK_PARAS[:2],
+        "Python, SQL, Notion, Excel, Looker, Tableau, Airflow, dbt",
+        *SK_PARAS[3:],
+    ]
+    long = skills_edit(
+        paragraph=2,
+        find="Python, SQL, Notion, Excel, Looker, Tableau, Airflow, dbt",
+        replace="Python, SQL",
+        goal="narrative",
+        jd_quote=None,
+    )
+    assert skills_results(long, paragraphs=paragraphs) == [None]
+
+
+def test_the_number_rule_does_not_apply_to_a_skills_edit():
+    paragraphs = [*SK_PARAS[:2], "Python 3, SQL", *SK_PARAS[3:]]
+    changed = skills_edit(
+        paragraph=2, find="Python 3", replace="Python 4", jd_quote="Python 4"
+    )
+    dropped = skills_edit(
+        paragraph=2, find="SQL", replace="", goal="narrative", jd_quote=None
+    )
+    assert skills_results(changed, dropped, paragraphs=paragraphs) == [None, None]
+
+
+def test_a_number_inserted_into_a_skills_edit_still_has_to_come_from_the_list_quote_or_find():
+    paragraphs = [*SK_PARAS[:2], "Python 3, SQL", *SK_PARAS[3:]]
+    (result,) = skills_results(
+        skills_edit(
+            paragraph=2, find="Python 3", replace="Python 5", jd_quote="Python 4"
+        ),
+        paragraphs=paragraphs,
+    )
+    assert result
+
+
+# --- which rules apply is decided by the paragraph index ----------------------------
+
+
+def ordinary_in_section(**overrides) -> Edit:
+    return edit(
+        paragraph=3,
+        find="Looker",
+        replace="Looker Studio",
+        jd_quote="Looker Studio",
+        **overrides,
+    )
+
+
+def test_an_edits_entry_naming_a_skills_section_paragraph_is_dropped_while_the_list_is_in_use():
+    (result,) = validate_edits([ordinary_in_section()], SK_PARAS, SK_JD, SK_SECTION)
+    assert isinstance(result, str) and result.strip()
+
+
+def test_the_same_edit_passes_under_the_ordinary_rules_when_no_skills_section_is_given():
+    assert validate_edits([ordinary_in_section()], SK_PARAS, SK_JD) == [None]
+    assert validate_edits([ordinary_in_section()], SK_PARAS, SK_JD, ()) == [None]
+
+
+def test_an_edits_entry_outside_the_skills_section_is_unaffected_by_it():
+    outside = edit(paragraph=5)
+    assert validate_edits([outside], SK_PARAS, SK_JD, SK_SECTION) == [None]
+
+
+def test_the_ordinary_rules_still_apply_to_the_paragraphs_around_a_skills_section():
+    unquoted = edit(paragraph=5, jd_quote="text that is not in the posting")
+    (result,) = validate_edits([unquoted], SK_PARAS, SK_JD, SK_SECTION)
+    assert result
+
+
+def test_a_separator_token_is_not_a_word_under_the_ordinary_rules_either():
+    bulleted = edit(paragraph=5, find="Quuxlate platform", replace="Quuxlate • system")
+    assert validate_edits([bulleted], SK_PARAS, SK_JD) == [None]
+
+
+# --- the redline document with a skills list ----------------------------------------
+
+
+def skills_resume(document):
+    for text in SK_PARAS[:2]:
+        document.add_paragraph(text)
+    for text in SK_PARAS[2:4]:
+        document.add_paragraph(text)
+    document.add_heading(SK_PARAS[4], level=1)
+    document.add_paragraph(SK_PARAS[5])
+
+
+def two_skills_resume(document):
+    for text in [
+        "Riley Resumeperson",
+        "Skills",
+        "Python, SQL | Notion",
+        "Skills:",
+        "Excel, Looker",
+    ]:
+        document.add_paragraph(text)
+
+
+def run_skills(
+    tmp_path,
+    stand_in,
+    *,
+    edits=(),
+    skills_edits=(),
+    build=skills_resume,
+    skills=SK_LIST,
+):
+    reply = reply_object(
+        list(edits), None if edits or skills_edits else EXPLANATION, skills_edits
+    )
+    return run(tmp_path, stand_in, reply, build=build, jd=SK_JD, skills=skills)
+
+
+def record_of(ran):
+    return json.loads(ran.edits_file.read_text(encoding="utf-8"))
+
+
+def test_a_passing_skills_edit_is_a_tracked_change_that_accepts_and_rejects_cleanly(
+    tmp_path, stand_in
+):
+    ran = run_skills(tmp_path, stand_in, skills_edits=[sk_dict(skills_edit())])
+    assert (ran.outcome.applied, ran.outcome.dropped) == (1, 0)
+    original = SK_PARAS
+    assert view_of(ran.copy, "reject") == original
+    accepted = view_of(ran.copy, "accept")
+    assert accepted[3] == "Excel, Looker, Airflow"
+    assert [p for i, p in enumerate(accepted) if i != 3] == [
+        p for i, p in enumerate(original) if i != 3
+    ]
+    body = body_of(ran.copy)
+    inserted = body.xpath("//w:ins", namespaces=NS)
+    deleted = body.xpath("//w:del", namespaces=NS) + inserted
+    assert inserted
+    assert {node.get(f"{{{W}}}author") for node in deleted} == {AUTHOR}
+
+
+def test_a_removal_is_written_as_a_tracked_deletion(tmp_path, stand_in):
+    removal = skills_edit(find="Excel, ", replace="", goal="narrative", jd_quote=None)
+    ran = run_skills(tmp_path, stand_in, skills_edits=[sk_dict(removal)])
+    assert ran.outcome.applied == 1
+    assert view_of(ran.copy, "accept")[3] == "Looker"
+    assert view_of(ran.copy, "reject")[3] == "Excel, Looker"
+
+
+def comment_texts(path):
+    return [
+        "".join(comment.itertext())
+        for comment in comments_of(path).findall("w:comment", NS)
+    ]
+
+
+def test_an_ats_skills_edits_comment_names_the_goal_quotes_the_posting_and_gives_the_reason(
+    tmp_path, stand_in
+):
+    ran = run_skills(
+        tmp_path,
+        stand_in,
+        skills_edits=[sk_dict(skills_edit(reason="SK-REASON-MARKER"))],
+    )
+    (text,) = comment_texts(ran.copy)
+    assert "ats" in text.lower()
+    assert "Airflow pipelines" in text
+    assert "SK-REASON-MARKER" in text
+
+
+def test_a_narrative_skills_edit_without_a_quote_gets_a_comment_with_its_goal_and_reason_only(
+    tmp_path, stand_in
+):
+    narrative = skills_edit(
+        replace="Looker, Tableau",
+        goal="narrative",
+        jd_quote=None,
+        reason="SK-NARRATIVE-MARKER",
+    )
+    ran = run_skills(tmp_path, stand_in, skills_edits=[sk_dict(narrative)])
+    (text,) = comment_texts(ran.copy)
+    assert "narrative" in text.lower()
+    assert "SK-NARRATIVE-MARKER" in text
+    assert "None" not in text and "null" not in text
+
+
+def test_a_narrative_skills_edit_with_a_quote_has_it_in_the_comment(tmp_path, stand_in):
+    ran = run_skills(
+        tmp_path,
+        stand_in,
+        skills_edits=[sk_dict(skills_edit(goal="narrative"))],
+    )
+    (text,) = comment_texts(ran.copy)
+    assert "narrative" in text.lower() and "Airflow pipelines" in text
+
+
+def test_a_skills_edit_and_an_ordinary_edit_each_get_a_comment(tmp_path, stand_in):
+    ran = run_skills(
+        tmp_path,
+        stand_in,
+        edits=[as_dict(edit(paragraph=5, why_same_meaning="ORD-WHY-MARKER"))],
+        skills_edits=[sk_dict(skills_edit(reason="SK-WHY-MARKER"))],
+    )
+    texts = comment_texts(ran.copy)
+    assert len(texts) == 2
+    assert any("ORD-WHY-MARKER" in t for t in texts)
+    assert any("SK-WHY-MARKER" in t for t in texts)
+    assert (ran.outcome.applied, ran.outcome.dropped) == (2, 0)
+
+
+def test_the_record_holds_skills_edits_with_each_entrys_validation_and_counts_both_kinds(
+    tmp_path, stand_in
+):
+    good_skill = skills_edit()
+    bad_skill = skills_edit(paragraph=5)
+    ran = run_skills(
+        tmp_path,
+        stand_in,
+        edits=[as_dict(edit(paragraph=5))],
+        skills_edits=[sk_dict(bad_skill), sk_dict(good_skill)],
+    )
+    record = record_of(ran)
+    assert set(record) == {"explanation", "edits", "skills_edits"}
+    assert record["explanation"] is None
+    assert len(record["edits"]) == 1 and record["edits"][0]["validation"] is None
+    fields = {"paragraph", "find", "replace", "goal", "jd_quote", "reason"}
+    entries_ = record["skills_edits"]
+    assert len(entries_) == 2
+    for entry, original in zip(entries_, [bad_skill, good_skill], strict=True):
+        assert set(entry) == fields | {"validation"}
+        assert {name: entry[name] for name in fields} == sk_dict(original)
+    assert isinstance(entries_[0]["validation"], str) and entries_[0]["validation"]
+    assert entries_[1]["validation"] is None
+    assert (ran.outcome.applied, ran.outcome.dropped) == (2, 1)
+
+
+def test_dropped_skills_edits_are_in_the_record_and_absent_from_the_document(
+    tmp_path, stand_in
+):
+    bad = skills_edit(replace="Looker, Rust", reason="DROPPED-SK-MARKER")
+    ran = run_skills(
+        tmp_path,
+        stand_in,
+        edits=[as_dict(edit(paragraph=5))],
+        skills_edits=[sk_dict(bad)],
+    )
+    with zipfile.ZipFile(ran.copy) as archive:
+        body = archive.read("word/document.xml").decode("utf-8")
+        comments = archive.read("word/comments.xml").decode("utf-8")
+    assert "Rust" not in body and "DROPPED-SK-MARKER" not in comments
+    assert record_of(ran)["skills_edits"][0]["validation"]
+
+
+def test_a_copy_whose_every_skills_edit_failed_is_untouched_but_the_record_is_written(
+    tmp_path, stand_in
+):
+    ran = run_skills(
+        tmp_path, stand_in, skills_edits=[sk_dict(skills_edit(replace="Looker, Rust"))]
+    )
+    assert ran.copy.read_bytes() == ran.before
+    assert record_of(ran)["explanation"] is None
+    assert (ran.outcome.applied, ran.outcome.dropped) == (0, 1)
+    assert not edits_applied(ran.edits_file)
+
+
+def test_an_applied_skills_edit_alone_marks_the_redline_as_having_applied_an_edit(
+    tmp_path, stand_in
+):
+    ran = run_skills(tmp_path, stand_in, skills_edits=[sk_dict(skills_edit())])
+    assert edits_applied(ran.edits_file)
+
+
+def test_only_the_resume_copy_and_the_record_are_left_after_a_skills_redline(
+    tmp_path, stand_in
+):
+    ran = run_skills(tmp_path, stand_in, skills_edits=[sk_dict(skills_edit())])
+    assert {p.name for p in tmp_path.iterdir()} == {
+        "resume.docx",
+        "original.docx",
+        "redline_edits.json",
+    }
+    assert docx.Document(str(ran.copy)).paragraphs
+
+
+def test_a_skills_only_result_needs_no_explanation(tmp_path, stand_in):
+    ran = run_skills(tmp_path, stand_in, skills_edits=[sk_dict(skills_edit())])
+    assert record_of(ran)["explanation"] is None
+
+
+def test_every_skills_edit_is_dropped_with_no_skills_list_and_the_section_is_held_to_the_ordinary_rules(
+    tmp_path, stand_in
+):
+    ordinary = edit(
+        paragraph=3, find="Looker", replace="Looker Studio", jd_quote="Looker Studio"
+    )
+    ran = run_skills(
+        tmp_path,
+        stand_in,
+        edits=[as_dict(ordinary)],
+        skills_edits=[sk_dict(skills_edit())],
+        skills=(),
+    )
+    record = record_of(ran)
+    assert record["edits"][0]["validation"] is None
+    assert record["skills_edits"][0]["validation"]
+    assert (ran.outcome.applied, ran.outcome.dropped) == (1, 1)
+    assert view_of(ran.copy, "accept")[3] == "Excel, Looker Studio"
+
+
+def test_with_a_skills_list_an_edits_entry_in_the_section_is_dropped_and_one_outside_applies(
+    tmp_path, stand_in
+):
+    inside = edit(
+        paragraph=3, find="Looker", replace="Looker Studio", jd_quote="Looker Studio"
+    )
+    ran = run_skills(
+        tmp_path, stand_in, edits=[as_dict(inside), as_dict(edit(paragraph=5))]
+    )
+    record = record_of(ran)
+    assert record["edits"][0]["validation"]
+    assert record["edits"][1]["validation"] is None
+    assert view_of(ran.copy, "accept")[3] == "Excel, Looker"
+
+
+def test_a_skills_edit_naming_a_paragraph_outside_the_section_is_dropped(
+    tmp_path, stand_in
+):
+    outside = skills_edit(
+        paragraph=5,
+        find="Quuxlate platform",
+        replace="Quuxlate system",
+        jd_quote="Quuxlate system",
+    )
+    ran = run_skills(tmp_path, stand_in, skills_edits=[sk_dict(outside)])
+    assert record_of(ran)["skills_edits"][0]["validation"]
+    assert ran.copy.read_bytes() == ran.before
+
+
+def test_a_resume_with_no_skills_paragraph_has_no_skills_section_and_ordinary_rules_apply_everywhere(
+    tmp_path, stand_in
+):
+    skill = skills_edit(
+        paragraph=2,
+        find="SQL daily",
+        replace="SQL daily, Tableau",
+        goal="narrative",
+        jd_quote=None,
+    )
+    ordinary = edit(
+        paragraph=2,
+        find="Led data work",
+        replace="Led data engineering work",
+        jd_quote="data engineering work",
+    )
+    ran = run(
+        tmp_path,
+        stand_in,
+        reply_object([as_dict(ordinary)], None, [sk_dict(skill)]),
+        jd=SK_JD,
+        skills=SK_LIST,
+    )
+    record = record_of(ran)
+    assert record["edits"][0]["validation"] is None
+    assert record["skills_edits"][0]["validation"]
+    assert (ran.outcome.applied, ran.outcome.dropped) == (1, 1)
+
+
+def test_a_resume_with_two_skills_paragraphs_has_no_skills_section(tmp_path, stand_in):
+    skill = skills_edit(paragraph=4)
+    ordinary = edit(
+        paragraph=4, find="Looker", replace="Looker Studio", jd_quote="Looker Studio"
+    )
+    ran = run_skills(
+        tmp_path,
+        stand_in,
+        edits=[as_dict(ordinary)],
+        skills_edits=[sk_dict(skill)],
+        build=two_skills_resume,
+    )
+    record = record_of(ran)
+    assert record["edits"][0]["validation"] is None
+    assert record["skills_edits"][0]["validation"]
+
+
+# --- the agent's output with skills edits --------------------------------------------
+
+
+def test_a_skills_edits_only_result_with_a_null_explanation_is_accepted(
+    tmp_path, stand_in
+):
+    ran = run_skills(tmp_path, stand_in, skills_edits=[sk_dict(skills_edit())])
+    assert ran.outcome is not None
+
+
+@pytest.mark.parametrize(
+    "explanation", [EXPLANATION, "", 7], ids=["text", "empty", "number"]
+)
+def test_skills_edits_with_an_explanation_or_an_empty_one_raise(
+    tmp_path, stand_in, explanation
+):
+    copy = make_resume(tmp_path / "resume.docx", skills_resume)
+    stand_in.reply = reply_object([], explanation, [sk_dict(skills_edit())])
+    edits_file = tmp_path / "e.json"
+    with pytest.raises(JsaError):
+        redline_resume(copy, edits_file, SK_JD, SETTINGS, SK_LIST)
+    assert not edits_file.exists()
+
+
+@pytest.mark.parametrize(
+    "missing", ["paragraph", "find", "replace", "goal", "jd_quote", "reason"]
+)
+def test_a_skills_edit_object_missing_a_field_raises(tmp_path, stand_in, missing):
+    copy = make_resume(tmp_path / "resume.docx", skills_resume)
+    partial = sk_dict(skills_edit())
+    del partial[missing]
+    stand_in.reply = reply_object([], None, [partial])
+    with pytest.raises(JsaError):
+        redline_resume(copy, tmp_path / "e.json", SK_JD, SETTINGS, SK_LIST)
+    assert not (tmp_path / "e.json").exists()
+
+
+# --- the redline prompt (PRD 04 "Prompt") --------------------------------------------
+
+
+def test_the_prompt_carries_the_skills_list_one_item_per_line():
+    prompt = assemble_redline_prompt(SK_JD, SK_PARAS, SK_LIST, [2, 3])
+    assert set(SK_LIST) <= set(prompt.splitlines())
+    assert "{{" not in prompt and "}}" not in prompt
+
+
+def test_the_prompt_has_no_unfilled_marker_and_no_skills_without_a_list_or_a_section():
+    prompt = assemble_redline_prompt(SK_JD, SK_PARAS)
+    assert "{{" not in prompt and "}}" not in prompt
+    assert "Tableau" not in prompt
+    assert prompt != assemble_redline_prompt(SK_JD, SK_PARAS, SK_LIST, [2, 3])
+
+
+def test_the_prompt_changes_with_the_skills_sections_paragraphs():
+    one = assemble_redline_prompt(SK_JD, SK_PARAS, SK_LIST, [2, 3])
+    other = assemble_redline_prompt(SK_JD, SK_PARAS, SK_LIST, [5])
+    assert one != other
+    assert "{{" not in other
+
+
+def test_the_prompt_degrades_when_only_the_section_or_only_the_list_is_missing():
+    no_section = assemble_redline_prompt(SK_JD, SK_PARAS, SK_LIST, [])
+    no_list = assemble_redline_prompt(SK_JD, SK_PARAS, [], [2, 3])
+    for prompt in (no_section, no_list):
+        assert "{{" not in prompt and "}}" not in prompt
+
+
+def test_the_template_states_both_goals_the_skills_edit_fields_and_the_output_keys(
+    tmp_path, stand_in
+):
+    run_skills(tmp_path, stand_in)
+    (call,) = stand_in.calls
+    prompt = call.prompt
+    lowered = prompt.lower()
+    for term in (
+        "skills_edits",
+        "goal",
+        "ats",
+        "narrative",
+        "jd_quote",
+        "reason",
+        "explanation",
+    ):
+        assert term in lowered
+    assert lowered.index("ats") < lowered.index("narrative")
+
+
+def test_the_prompt_the_agent_receives_carries_the_list_and_the_located_section(
+    tmp_path, stand_in
+):
+    run_skills(tmp_path, stand_in)
+    (call,) = stand_in.calls
+    assert set(SK_LIST) <= set(call.prompt.splitlines())
+    assert call.prompt != assemble_redline_prompt(SK_JD, SK_PARAS, SK_LIST, [])
+    assert "{{" not in call.prompt
+
+
+def test_the_prompt_the_agent_receives_without_a_list_holds_none_of_it(
+    tmp_path, stand_in
+):
+    run_skills(tmp_path, stand_in, skills=())
+    (call,) = stand_in.calls
+    assert "Tableau" not in call.prompt
+    assert "{{" not in call.prompt
