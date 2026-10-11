@@ -69,6 +69,7 @@ REDLINE_JSON = json.dumps(
                 "why_same_meaning": "the same thing",
             }
         ],
+        "skills_edits": [],
         "explanation": None,
     }
 )
@@ -1406,7 +1407,9 @@ QUUX_EDIT = {
 
 def redline_reply(*edits, explanation=None):
     return lambda prompt: result_message(
-        result=json.dumps({"edits": list(edits), "explanation": explanation})
+        result=json.dumps(
+            {"edits": list(edits), "skills_edits": [], "explanation": explanation}
+        )
     )
 
 
@@ -1522,6 +1525,7 @@ def test_a_run_where_the_agent_proposes_no_edits_records_why_and_renders_the_res
     assert proposed(packets / PLAIN) == {
         "explanation": NO_EDITS_EXPLANATION,
         "edits": [],
+        "skills_edits": [],
     }
     folder = packets / PLAIN
     assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
@@ -1581,8 +1585,9 @@ def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_bas
         "",
         "   \n",
         "[]",
-        json.dumps({"edits": [], "explanation": None}),
-        json.dumps({"edits": [], "explanation": ""}),
+        json.dumps({"edits": [], "skills_edits": [], "explanation": None}),
+        json.dumps({"edits": [], "skills_edits": [], "explanation": ""}),
+        json.dumps({"edits": [], "explanation": NO_EDITS_EXPLANATION}),
     ],
     ids=[
         "prose",
@@ -1592,6 +1597,7 @@ def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_bas
         "bare-array",
         "no-edits-null-explanation",
         "no-edits-empty-explanation",
+        "no-skills-edits-key",
     ],
 )
 def test_a_redline_result_that_is_not_an_edits_and_explanation_object_flags_the_row_and_exits_non_zero(
@@ -1667,7 +1673,10 @@ def test_the_queue_path_skips_the_redline_when_the_record_exists(
     folder.mkdir(parents=True)
     (folder / "resume_checklist.md").write_text("MY OLD CHECKLIST", encoding="utf-8")
     (folder / REDLINE_EDITS).write_text(
-        json.dumps({"explanation": NO_EDITS_EXPLANATION, "edits": []}), encoding="utf-8"
+        json.dumps(
+            {"explanation": NO_EDITS_EXPLANATION, "edits": [], "skills_edits": []}
+        ),
+        encoding="utf-8",
     )
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
@@ -1704,7 +1713,11 @@ def test_an_id_reruns_the_redline_once_the_record_is_deleted(
 def applied_record() -> str:
     """A redline record in which one edit was applied."""
     return json.dumps(
-        {"explanation": None, "edits": [{**QUUX_EDIT, "validation": None}]}
+        {
+            "explanation": None,
+            "edits": [{**QUUX_EDIT, "validation": None}],
+            "skills_edits": [],
+        }
     )
 
 
@@ -1743,7 +1756,9 @@ def test_a_record_with_no_applied_edit_and_no_resume_pdf_gets_the_pdf_without_a_
     folder.mkdir(parents=True)
     shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
     (folder / "resume_checklist.md").write_text("MY OLD CHECKLIST", encoding="utf-8")
-    record = json.dumps({"explanation": NO_EDITS_EXPLANATION, "edits": []})
+    record = json.dumps(
+        {"explanation": NO_EDITS_EXPLANATION, "edits": [], "skills_edits": []}
+    )
     (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
     extra = ("--id", posting_id) if args == "id" else ()
     code, _ = jsa_generate(monkeypatch, capsys, *extra)
@@ -1765,7 +1780,9 @@ def test_an_existing_resume_pdf_is_never_replaced_or_refreshed(
     shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
     (folder / RESUME_PDF).write_bytes(b"MY OWN EXPORT")
     (folder / REDLINE_EDITS).write_text(
-        json.dumps({"explanation": NO_EDITS_EXPLANATION, "edits": []}),
+        json.dumps(
+            {"explanation": NO_EDITS_EXPLANATION, "edits": [], "skills_edits": []}
+        ),
         encoding="utf-8",
     )
     extra = ("--id", posting_id) if args == "id" else ()
@@ -1797,6 +1814,21 @@ def test_a_failed_resume_render_flags_the_row_leaves_no_partial_pdf_and_keeps_it
     monkeypatch.setenv(
         "SOFFICE_FAIL" if failure == "exits non-zero" else "SOFFICE_NO_PDF", "1"
     )
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert str(posting_id) in output
+    assert not gws.exists()
+    assert column(gdb, posting_id, "added_to_tracker") == 0
+    assert RESUME_PDF not in entries(packets / PLAIN)
+    assert not list(packets.rglob(".soffice-*"))
+
+
+def test_a_missing_soffice_flags_the_row_leaves_no_partial_pdf_and_keeps_it_queued(
+    gdb, env, gws, tmp_path, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    monkeypatch.setenv("JSA_SOFFICE_BIN", str(tmp_path / "no-such-soffice"))
     code, output = jsa_generate(monkeypatch, capsys)
     assert code != 0
     assert str(posting_id) in output
@@ -1861,6 +1893,36 @@ def test_a_resume_copy_with_unresolved_tracked_changes_is_not_redlined_and_the_r
     assert RESUME_PDF not in entries(folder)
     assert copy.read_bytes() == skipped
     assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_the_checklist_reads_pending_tracked_changes_as_accepted(
+    gdb, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    document = docx.Document()
+    paragraph = document.add_paragraph("Built the ")
+    paragraph._p.append(
+        parse_xml(
+            f'<w:del xmlns:w="{namespace}" w:id="901" w:author="Someone" w:date="2026-01-01T00:00:00Z">'
+            "<w:r><w:delText>OLDWORDING platform</w:delText></w:r></w:del>"
+        )
+    )
+    paragraph._p.append(
+        parse_xml(
+            f'<w:ins xmlns:w="{namespace}" w:id="902" w:author="Someone" w:date="2026-01-01T00:00:00Z">'
+            "<w:r><w:t>NEWWORDING system</w:t></w:r></w:ins>"
+        )
+    )
+    document.save(folder / RESUME_COPY)
+    code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
+    assert code == 0
+    (prompt,) = agent.checklist_prompts
+    assert "Built the NEWWORDING system" in prompt
+    assert "OLDWORDING" not in prompt
 
 
 # --- the optional wall-clock limit (issue #121; PRD 04 "Resume checklist", "Resume redline") ---

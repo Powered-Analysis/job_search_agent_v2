@@ -365,12 +365,14 @@ def make_resume(path, build=None):
 EXPLANATION = "The resume already uses the posting's terms."
 
 
-def reply_object(edits, explanation=None):
-    return json.dumps({"edits": edits, "explanation": explanation})
+def reply_object(edits, explanation=None, skills_edits=()):
+    return json.dumps(
+        {"edits": edits, "skills_edits": list(skills_edits), "explanation": explanation}
+    )
 
 
 def run(tmp_path, stand_in, reply, *, build=None, jd=JD):
-    """`reply` is raw text, or a list of edit dicts sent as `{edits, explanation}`."""
+    """`reply` is raw text, or a list of edit dicts sent as `{edits, skills_edits, explanation}`."""
     if isinstance(reply, list):
         reply = reply_object(reply, None if reply else EXPLANATION)
     stand_in.reply = reply
@@ -398,7 +400,7 @@ def test_a_no_edit_result_records_the_explanation_and_an_empty_edit_list(
 ):
     ran = run(tmp_path, stand_in, [])
     record = json.loads(ran.edits_file.read_text(encoding="utf-8"))
-    assert record == {"explanation": EXPLANATION, "edits": []}
+    assert record == {"explanation": EXPLANATION, "edits": [], "skills_edits": []}
     assert ran.copy.read_bytes() == ran.before
     assert (ran.outcome.applied, ran.outcome.dropped) == (0, 0)
 
@@ -406,7 +408,7 @@ def test_a_no_edit_result_records_the_explanation_and_an_empty_edit_list(
 def test_a_result_with_edits_records_a_null_explanation(tmp_path, stand_in):
     ran = run(tmp_path, stand_in, [as_dict(edit())])
     record = json.loads(ran.edits_file.read_text(encoding="utf-8"))
-    assert set(record) == {"explanation", "edits"}
+    assert set(record) == {"explanation", "edits", "skills_edits"}
     assert record["explanation"] is None
     assert len(record["edits"]) == 1
 
@@ -429,7 +431,7 @@ def test_a_result_with_edits_records_a_null_explanation(tmp_path, stand_in):
         "```\n" + reply_object([], EXPLANATION) + "\n```",
         "Here you go: " + reply_object([], EXPLANATION),
         reply_object([], EXPLANATION) + "\nThanks!",
-        '{"edits": [], "explanation": "x"',
+        '{"edits": [], "skills_edits": [], "explanation": "x"',
     ],
     ids=[
         "empty",
@@ -484,16 +486,20 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
     [
         reply_object([], None),
         reply_object([], ""),
-        json.dumps({"edits": []}),
+        json.dumps({"edits": [], "skills_edits": []}),
         reply_object([], 7),
         reply_object([], "  \n "),
         json.dumps({"explanation": EXPLANATION}),
-        json.dumps({"edits": None, "explanation": EXPLANATION}),
-        json.dumps({"edits": {}, "explanation": EXPLANATION}),
+        json.dumps({"edits": None, "skills_edits": [], "explanation": EXPLANATION}),
+        json.dumps({"edits": {}, "skills_edits": [], "explanation": EXPLANATION}),
         reply_object([as_dict(edit())], EXPLANATION),
         reply_object([as_dict(edit())], ""),
-        json.dumps({"edits": [as_dict(edit())]}),
+        json.dumps({"edits": [as_dict(edit())], "skills_edits": []}),
         reply_object([as_dict(edit())], 7),
+        json.dumps({"edits": [], "explanation": EXPLANATION}),
+        json.dumps({"edits": [as_dict(edit())], "explanation": None}),
+        json.dumps({"edits": [], "skills_edits": None, "explanation": EXPLANATION}),
+        json.dumps({"edits": [], "skills_edits": {}, "explanation": EXPLANATION}),
     ],
     ids=[
         "no-edits-null-explanation",
@@ -508,6 +514,10 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
         "edits-with-an-empty-explanation",
         "edits-missing-explanation",
         "edits-with-numeric-explanation",
+        "no-skills-edits-key",
+        "edits-without-the-skills-edits-key",
+        "null-skills-edits",
+        "object-skills-edits",
     ],
 )
 def test_an_object_that_breaks_the_explanation_rule_or_shape_raises(
@@ -530,6 +540,7 @@ def test_the_prompt_tells_the_agent_to_return_edits_and_an_explanation_for_an_em
     (call,) = stand_in.calls
     assert "explanation" in call.prompt
     assert "edits" in call.prompt
+    assert "skills_edits" in call.prompt
     assert "null" in call.prompt
     assert "{{" not in call.prompt
 
@@ -986,6 +997,57 @@ def test_a_resume_with_unresolved_tracked_changes_is_skipped_and_the_agent_never
     assert stand_in.calls == []
     assert copy.read_bytes() == before
     assert not (tmp_path / "e.json").exists()
+
+
+def test_a_failure_while_writing_leaves_the_previous_copy_intact_and_no_record(
+    tmp_path, stand_in, monkeypatch
+):
+    from docx.document import Document
+
+    def broken_save(self, path_or_stream):
+        with open(path_or_stream, "wb") as partial:
+            partial.write(b"PK-half-a-docx")
+        raise OSError("disk full")
+
+    stand_in.reply = reply_object([as_dict(edit())])
+    copy = make_resume(tmp_path / "resume.docx")
+    before = copy.read_bytes()
+    monkeypatch.setattr(Document, "save", broken_save)
+    with pytest.raises(OSError):
+        redline_resume(copy, tmp_path / "e.json", JD, SETTINGS)
+    assert copy.read_bytes() == before
+    assert not (tmp_path / "e.json").exists()
+    assert docx.Document(str(copy)).paragraphs[1].text == PARAGRAPHS[1]
+
+
+def test_a_failure_while_swapping_the_copy_in_leaves_the_previous_copy_intact_and_no_record(
+    tmp_path, stand_in, monkeypatch
+):
+    from pathlib import Path
+
+    def broken_replace(self, target):
+        raise OSError("interrupted")
+
+    stand_in.reply = reply_object([as_dict(edit())])
+    copy = make_resume(tmp_path / "resume.docx")
+    before = copy.read_bytes()
+    monkeypatch.setattr(Path, "replace", broken_replace)
+    with pytest.raises(OSError):
+        redline_resume(copy, tmp_path / "e.json", JD, SETTINGS)
+    assert copy.read_bytes() == before
+    assert not (tmp_path / "e.json").exists()
+
+
+def test_a_redline_that_applies_edits_leaves_only_the_copy_and_the_record(
+    tmp_path, stand_in
+):
+    ran = run(tmp_path, stand_in, [as_dict(edit())])
+    assert ran.copy.read_bytes() != ran.before
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "original.docx",
+        "redline_edits.json",
+        "resume.docx",
+    ]
 
 
 def test_the_redline_document_is_a_valid_docx_python_docx_can_reopen(
