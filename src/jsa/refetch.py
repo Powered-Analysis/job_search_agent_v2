@@ -16,7 +16,6 @@ from jsa.packet import (
     cover_letter_stem,
     holds_title_placeholder,
     packet_paths,
-    redline_path,
 )
 from jsa.profile import (
     Config,
@@ -65,15 +64,17 @@ def _rename_packet(
     new_directory, new_copy = packet_paths(config, new_job)
     if _taken(new_directory, old_directory):
         return f"{new_directory} already exists"
-    # The resume copy, the cover letter copy, and the redline hold the user's work and move together,
-    # never rewritten. The cover letter copy is found by name, whatever its extension.
-    old_redline, new_redline = redline_path(old_copy), redline_path(new_copy)
+    # The resume copy, the cover letter copy, and their PDFs hold the user's work and move together,
+    # never rewritten. The cover letter copy and its PDF are found by name, whatever the extension.
     old_cover, new_cover = (
         cover_letter_stem(config, job) for job in (old_job, new_job)
     )
     moves = [
         (old_copy, old_directory / new_copy.name),
-        (old_redline, old_directory / new_redline.name),
+        (
+            old_copy.with_suffix(".pdf"),
+            old_directory / new_copy.with_suffix(".pdf").name,
+        ),
         *(
             (path, old_directory / (new_cover + path.name.removeprefix(old_cover)))
             for path in old_directory.glob(f"{glob.escape(old_cover)}.*")

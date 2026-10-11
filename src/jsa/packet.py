@@ -2,15 +2,16 @@
 
 import shutil
 from pathlib import Path
+from typing import NamedTuple
 
 from docx.document import Document
 
 from jsa import db
+from jsa.docx_pdf import ensure_pdf
 from jsa.errors import JsaError
 from jsa.naming import (
     cover_letter_file_stem,
     packet_dir_name,
-    redline_file_name,
     resume_file_stem,
 )
 from jsa.placeholders import TITLE, fill_placeholders, holds_placeholder
@@ -48,24 +49,30 @@ def cover_letter_stem(config: Config, job: db.PacketJob) -> str:
     )
 
 
+class PacketCopy(NamedTuple):
+    """A file the packet holds a user-owned copy of, and the profile file it is copied from."""
+
+    path: Path
+    source: Path
+    cover_letter: bool
+
+
 def packet_copies(
     config: Config, job: db.PacketJob, sources: PacketSources
-) -> dict[Path, Path]:
-    """Each file the packet holds a user-owned copy of, as copy -> profile source."""
+) -> list[PacketCopy]:
     directory, resume_copy = packet_paths(config, job)
-    copies = {resume_copy: sources.resume}
+    copies = [PacketCopy(resume_copy, sources.resume, cover_letter=False)]
     if sources.cover_letter is not None:
         # The copy keeps the source's extension, whatever it is (`.docx`, `.pdf`, ...).
         extension = sources.cover_letter.name.removeprefix(COVER_LETTER_PREFIX)
-        copies[directory / f"{cover_letter_stem(config, job)}{extension}"] = (
-            sources.cover_letter
+        copies.append(
+            PacketCopy(
+                directory / f"{cover_letter_stem(config, job)}{extension}",
+                sources.cover_letter,
+                cover_letter=True,
+            )
         )
     return copies
-
-
-def redline_path(copy: Path) -> Path:
-    """The ATS redline beside the resume copy it is made from."""
-    return copy.with_name(redline_file_name(copy.stem))
 
 
 def _placeholder_document(path: Path) -> Document | None:
@@ -105,23 +112,26 @@ def holds_title_placeholder(sources: PacketSources) -> bool:
 def ensure_head(
     directory: Path,
     job: db.PacketJob,
-    copies: dict[Path, Path],
+    copies: list[PacketCopy],
     *,
     refresh_posting: bool = False,
 ) -> None:
     """Complete the folder, the job description, and the resume and cover letter copies, with their placeholders filled.
 
-    The copies and a hand-filled job description are never replaced. The row's description
-    replaces an existing `job_posting.md` only when `refresh_posting` is set.
+    A `.docx` cover letter copy also gets its PDF. The copies, their PDFs, and a hand-filled job
+    description are never replaced. The row's description replaces an existing `job_posting.md`
+    only when `refresh_posting` is set.
     """
     directory.mkdir(parents=True, exist_ok=True)
     posting = directory / JOB_POSTING
     if job.jd_markdown is not None and (refresh_posting or not posting.exists()):
         posting.write_text(job.jd_markdown, encoding="utf-8")
     # A copy is the user's working file, so an existing one is never replaced.
-    for copy, source in copies.items():
-        if not copy.exists():
-            _copy_filled(source, copy, job)
+    for copy in copies:
+        if not copy.path.exists():
+            _copy_filled(copy.source, copy.path, job)
+        if copy.cover_letter and copy.path.suffix.lower() == ".docx":
+            ensure_pdf(copy.path)
 
 
 def build_packets(posting_id: int | None, *, dry_run: bool) -> None:
