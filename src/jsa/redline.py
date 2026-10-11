@@ -364,7 +364,9 @@ def _object_items[Item](
     items = []
     for position, item in enumerate(raw[key]):
         if not isinstance(item, dict) or any(
-            not isinstance(item.get(name), kind) or isinstance(item.get(name), bool)
+            name not in item
+            or not isinstance(item[name], kind)
+            or isinstance(item[name], bool)
             for name, kind in fields.items()
         ):
             raise JsaError(
