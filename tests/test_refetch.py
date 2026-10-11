@@ -901,6 +901,54 @@ def test_a_retitle_that_frees_a_shared_name_renames_the_other_postings_packet(
     assert tree(packets / OLD_DIR) == second_files
 
 
+def test_a_retitle_frees_a_name_shared_with_a_posting_whose_company_differs_in_case(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    first = seed(rdb, company="EliseAI, Inc.")
+    second = seed(rdb, company="Eliseai")
+    make_packet(rdb, packets, first, directory="EliseAI - Staff Engineer")
+    second_folder = make_packet(
+        rdb, packets, second, directory=f"Eliseai - Staff Engineer ({second})"
+    )
+    second_files = tree(second_folder)
+    employer(web, rdb, first)
+    set_sheet(gws, (first, ""))
+    code, _ = refetch(monkeypatch, capsys, "--id", first)
+    assert code == 0
+    assert {path.name for path in packets.iterdir()} == {
+        "EliseAI - Principal Engineer",
+        "Eliseai - Staff Engineer",
+    }
+    assert tree(packets / "Eliseai - Staff Engineer") == second_files
+
+
+def test_a_retitle_onto_a_name_differing_only_in_case_gives_that_posting_the_suffix(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    first = seed(rdb, company="EliseAI", title=NEW_TITLE)
+    second = seed(rdb, company="Eliseai")
+    make_packet(rdb, packets, first, directory="EliseAI - Principal Engineer")
+    second_folder = make_packet(
+        rdb, packets, second, directory="Eliseai - Staff Engineer"
+    )
+    second_files = tree(second_folder)
+    employer(web, rdb, first, title="Staff Engineer")
+    set_sheet(gws, (first, ""))
+    code, _ = refetch(monkeypatch, capsys, "--id", first)
+    assert code == 0
+    assert tree(packets / f"Eliseai - Staff Engineer ({second})") == second_files
+
+
+def test_the_company_lookup_finds_every_posting_of_a_company_case_blind(rdb):
+    first = seed(rdb, company="EliseAI")
+    second = seed(rdb, company="eliseai, Inc.")
+    seed(rdb, company="Elise")
+    found = {job.id: job.shares_name for job in db.company_packet_jobs(rdb, "EliseAI")}
+    assert found == {first: False, second: True}
+
+
 def test_a_retitle_onto_another_postings_name_gives_that_posting_the_suffix(
     rdb, web, gws, env, monkeypatch, capsys
 ):

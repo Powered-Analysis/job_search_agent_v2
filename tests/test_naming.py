@@ -2,7 +2,7 @@ import socket
 
 import pytest
 
-from jsa.naming import normalize_company, title_slug
+from jsa.naming import company_from_board, normalize_company, title_slug
 
 HOSTILE = '/\\:*?"<>|'
 
@@ -127,3 +127,40 @@ def test_company_connector_kept_when_no_suffix_follows(company, expected):
 
 def test_company_connector_without_suffix_is_left_alone():
     assert normalize_company("Acme &") == "Acme &"
+
+
+@pytest.mark.parametrize(
+    "company, expected",
+    [
+        ("EliseAI", "EliseAI"),
+        ("Far AI, Inc.", "Far AI"),
+        ("acme corp", "acme"),
+        ("iRobot Corporation", "iRobot"),
+        ("  eBay   Inc  ", "eBay"),
+        ("McKinsey/QuantumBlack LLC", "McKinseyQuantumBlack"),
+    ],
+)
+def test_company_keeps_the_capitalization_it_was_given(company, expected):
+    assert normalize_company(company) == expected
+
+
+@pytest.mark.parametrize("company", ["Inc", "inc.", "LLC", "Corp"])
+def test_company_named_only_a_suffix_keeps_its_name(company):
+    assert normalize_company(company) == company.strip(" .")
+
+
+def test_company_differing_only_in_case_stays_different():
+    assert normalize_company("EliseAI") != normalize_company("Eliseai")
+
+
+@pytest.mark.parametrize(
+    "board, expected",
+    [
+        ("acme-corp", "Acme Corp"),
+        ("eliseai", "Eliseai"),
+        ("far_ai", "Far Ai"),
+        ("ACME", "Acme"),
+    ],
+)
+def test_company_from_board_is_still_title_cased(board, expected):
+    assert company_from_board(board) == expected

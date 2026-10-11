@@ -257,6 +257,117 @@ def test_a_higher_id_built_first_does_not_enter_the_lower_ids_folder(
     assert other.read_text(encoding="utf-8") == "second"
 
 
+def test_companies_differing_only_in_case_share_a_name_and_the_lower_id_keeps_it(
+    pdb, env, monkeypatch, capsys
+):
+    _, packets = env
+    first = seed(pdb, company="EliseAI", jd="first")
+    second = seed(pdb, company="Eliseai", jd="second")
+    third = seed(pdb, company="ELISEAI, Inc.", jd="third")
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets) == {
+        "EliseAI - Staff Engineer",
+        f"Eliseai - Staff Engineer ({second})",
+        f"ELISEAI - Staff Engineer ({third})",
+    }
+    assert first < second < third
+    folder = packets / "EliseAI - Staff Engineer"
+    assert (folder / "job_posting.md").read_text(encoding="utf-8") == "first"
+
+
+def test_titles_differing_only_in_case_share_a_name(pdb, env, monkeypatch, capsys):
+    _, packets = env
+    seed(pdb, title="Staff Engineer")
+    second = seed(pdb, title="STAFF ENGINEER")
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets) == {PLAIN, f"Acme Widgets - STAFF ENGINEER ({second})"}
+
+
+def test_a_company_and_title_both_differing_in_case_share_a_name(
+    pdb, env, monkeypatch, capsys
+):
+    _, packets = env
+    seed(pdb, company="EliseAI", title="Staff Engineer")
+    second = seed(pdb, company="eliseai", title="staff engineer")
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets) == {
+        "EliseAI - Staff Engineer",
+        f"eliseai - staff engineer ({second})",
+    }
+
+
+def test_a_case_variant_built_first_does_not_enter_the_lower_ids_folder(
+    pdb, env, monkeypatch, capsys
+):
+    _, packets = env
+    first = seed(pdb, company="EliseAI", jd="first")
+    second = seed(pdb, company="Eliseai", jd="second")
+    jsa_packet(monkeypatch, capsys, "--id", second)
+    assert entries(packets) == {f"Eliseai - Staff Engineer ({second})"}
+    jsa_packet(monkeypatch, capsys, "--id", first)
+    folder = packets / "EliseAI - Staff Engineer"
+    assert (folder / "job_posting.md").read_text(encoding="utf-8") == "first"
+
+
+def test_different_companies_and_titles_do_not_share_a_name_by_case_folding(
+    pdb, env, monkeypatch, capsys
+):
+    _, packets = env
+    seed(pdb, company="EliseAI")
+    seed(pdb, company="Elise")
+    seed(pdb, company="EliseAI", title="Data Engineer")
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets) == {
+        "EliseAI - Staff Engineer",
+        "Elise - Staff Engineer",
+        "EliseAI - Data Engineer",
+    }
+
+
+def test_the_queue_flags_every_posting_but_the_lowest_id_of_a_case_blind_name(pdb):
+    first = seed(pdb, company="EliseAI")
+    second = seed(pdb, company="Eliseai")
+    other = seed(pdb, company="Elise")
+    flags = {job.id: job.shares_name for job in db.packet_queue(pdb)}
+    assert flags == {first: False, second: True, other: False}
+
+
+def test_a_lower_id_that_is_tracked_or_closed_still_holds_a_case_blind_name(
+    pdb, env, monkeypatch, capsys
+):
+    _, packets = env
+    seed(pdb, company="EliseAI", tracked=True, closed=True)
+    second = seed(pdb, company="Eliseai")
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets) == {f"Eliseai - Staff Engineer ({second})"}
+
+
+def test_inserting_a_posting_stores_its_company_with_the_capitalization_given(pdb):
+    posting_id = seed(pdb, company="EliseAI")
+    stored = pdb.execute(
+        "SELECT company, normalized_company FROM postings WHERE id = ?", (posting_id,)
+    ).fetchone()
+    assert tuple(stored) == ("EliseAI", "EliseAI")
+
+
+def test_reconnecting_never_recomputes_a_stored_normalized_company(pdb):
+    posting_id = seed(pdb, company="EliseAI")
+    pdb.execute(
+        "UPDATE postings SET normalized_company = 'Eliseai' WHERE id = ?",
+        (posting_id,),
+    )
+    db.connect().close()
+    stored = pdb.execute(
+        "SELECT normalized_company FROM postings WHERE id = ?", (posting_id,)
+    ).fetchone()[0]
+    assert stored == "Eliseai"
+
+
 # --- existing folders and files -----------------------------------------------
 
 
