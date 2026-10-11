@@ -1903,6 +1903,45 @@ def test_a_skills_edit_object_missing_a_field_raises(tmp_path, stand_in, missing
     assert not (tmp_path / "e.json").exists()
 
 
+@pytest.mark.parametrize(
+    "missing", ["paragraph", "find", "replace", "jd_quote", "why_same_meaning"]
+)
+def test_every_ordinary_edit_field_is_required_in_the_reply(
+    tmp_path, stand_in, missing
+):
+    copy = make_resume(tmp_path / "resume.docx")
+    partial = as_dict(edit())
+    del partial[missing]
+    stand_in.reply = reply_object([partial])
+    with pytest.raises(JsaError):
+        redline_resume(copy, tmp_path / "e.json", JD, SETTINGS)
+    assert not (tmp_path / "e.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("jd_quote", 7), ("jd_quote", ["Airflow pipelines"]), ("goal", None)],
+    ids=["number-quote", "list-quote", "null-goal"],
+)
+def test_a_skills_edit_field_of_the_wrong_type_raises(tmp_path, stand_in, field, value):
+    copy = make_resume(tmp_path / "resume.docx", skills_resume)
+    stand_in.reply = reply_object([], None, [sk_dict(skills_edit(), **{field: value})])
+    with pytest.raises(JsaError):
+        redline_resume(copy, tmp_path / "e.json", SK_JD, SETTINGS, SK_LIST)
+    assert not (tmp_path / "e.json").exists()
+
+
+def test_a_skills_edit_with_an_explicit_null_quote_is_recorded_not_rejected(
+    tmp_path, stand_in
+):
+    narrative = skills_edit(goal="narrative", jd_quote=None, replace="Looker, Tableau")
+    ran = run_skills(tmp_path, stand_in, skills_edits=[sk_dict(narrative)])
+    record = json.loads(ran.edits_file.read_text(encoding="utf-8"))
+    (entry,) = record["skills_edits"]
+    assert entry["jd_quote"] is None
+    assert ran.outcome.applied == 1
+
+
 # --- the redline prompt (PRD 04 "Prompt") --------------------------------------------
 
 
