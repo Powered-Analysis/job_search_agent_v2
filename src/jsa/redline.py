@@ -2,10 +2,14 @@
 
 import json
 import re
+import shutil
+import tempfile
 from collections import Counter
 from dataclasses import asdict, dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
+
+from docx.document import Document
 
 from jsa import agent_loop
 from jsa.assemble import Slot, app_template, assemble
@@ -250,16 +254,40 @@ def run_redline(prompt: str, settings: AgentSettings) -> Proposal:
     return parse_proposal(agent_loop.run_single_turn(prompt, settings, agent="redline"))
 
 
+def _replace_copy(document: Document, copy: Path) -> None:
+    """Save `document` over `copy` whole or not at all, so a failed write leaves the old copy intact."""
+    with tempfile.NamedTemporaryFile(
+        dir=copy.parent, prefix=".redline-", suffix=".docx", delete=False
+    ) as handle:
+        staged = Path(handle.name)
+    try:
+        document.save(str(staged))
+        shutil.copymode(copy, staged)
+        staged.replace(copy)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+
+
+def edits_applied(edits_file: Path) -> bool:
+    """Whether the recorded redline wrote any edit into the resume copy."""
+    try:
+        record = json.loads(edits_file.read_text(encoding="utf-8"))
+        return any(edit["validation"] is None for edit in record["edits"])
+    except (ValueError, KeyError, TypeError) as error:
+        raise JsaError(f"{edits_file} is not a redline record: {error}") from error
+
+
 def redline_resume(
     copy: Path,
-    redline: Path,
     edits_file: Path,
     job_description: str,
     settings: AgentSettings,
 ) -> RedlineResult | None:
     """Propose, validate, and write the redline of a resume copy; None when it has unresolved changes.
 
-    `edits_file` is written last, so it marks the step done (PRD 04, "Re-entry").
+    The redlined document replaces `copy`. `edits_file` is written last, after the replacement, so
+    it marks the step done (PRD 04, "Re-entry").
     """
     document = load_resume(copy)
     if has_unresolved_changes(document):
@@ -277,7 +305,7 @@ def redline_resume(
     ]
     if tracked:
         apply_edits(document, tracked)
-        document.save(str(redline))
+        _replace_copy(document, copy)
     record = {
         "explanation": proposal.explanation,
         "edits": [

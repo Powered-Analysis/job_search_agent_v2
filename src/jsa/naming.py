@@ -62,8 +62,3 @@ def cover_letter_file_stem(
     candidate_name: str | None, slug: str, normalized_company: str
 ) -> str:
     return _file_stem(candidate_name, "CoverLetter", slug, normalized_company)
-
-
-def redline_file_name(stem: str) -> str:
-    """The ATS redline's file name, beside the resume copy it is made from (PRD 04)."""
-    return f"{stem}_redline.docx"
