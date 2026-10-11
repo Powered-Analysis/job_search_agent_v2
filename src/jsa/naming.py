@@ -1,7 +1,6 @@
 """Filesystem-safe names for packet folders, resume files, and cover letter files, computed once at insert."""
 
 import re
-import string
 
 _PATH_HOSTILE = re.compile(r'[/\\:*?"<>|\x00-\x1f]')
 # The optional leading connector keeps "Acme & Co" from becoming "Acme &".
@@ -25,7 +24,7 @@ def normalize_company(company: str) -> str:
     while (shorter := _CORPORATE_SUFFIX.sub("", stripped)) != stripped:
         stripped = shorter
     # A company named only "Inc" keeps its name rather than becoming empty.
-    return string.capwords(_path_safe(stripped or company))
+    return _path_safe(stripped or company)
 
 
 def title_slug(title: str) -> str:

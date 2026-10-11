@@ -435,7 +435,8 @@ class PacketJob(NamedTuple):
     title_slug: str
     url: str
     jd_markdown: str | None
-    # Set on every posting but the lowest id of its folder name, so the folder is never shared.
+    # Set on every posting but the lowest id of its folder name, compared without regard to case (PRD 04),
+    # so the folder is never shared.
     shares_name: bool
 
 
@@ -443,8 +444,8 @@ _PACKET_JOB_COLUMNS = """
     p.id, p.company, p.normalized_company, p.title, p.title_slug, p.url, p.jd_markdown,
     EXISTS (
         SELECT 1 FROM postings other
-        WHERE other.normalized_company = p.normalized_company
-            AND other.title_slug = p.title_slug AND other.id < p.id
+        WHERE LOWER(other.normalized_company) = LOWER(p.normalized_company)
+            AND LOWER(other.title_slug) = LOWER(p.title_slug) AND other.id < p.id
     )
 """
 
@@ -474,7 +475,7 @@ def packet_queue(conn: Connection, posting_id: int | None = None) -> list[Packet
 def company_packet_jobs(conn: Connection, normalized_company: str) -> list[PacketJob]:
     """Every posting of one company: the ones whose packet names a retitle can change."""
     rows = conn.execute(
-        f"SELECT {_PACKET_JOB_COLUMNS} FROM postings p WHERE p.normalized_company = ?",
+        f"SELECT {_PACKET_JOB_COLUMNS} FROM postings p WHERE LOWER(p.normalized_company) = LOWER(?)",
         (normalized_company,),
     ).fetchall()
     return [PacketJob(*row) for row in rows]
