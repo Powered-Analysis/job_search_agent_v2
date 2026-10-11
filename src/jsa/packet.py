@@ -3,13 +3,17 @@
 import shutil
 from pathlib import Path
 
+from docx.document import Document
+
 from jsa import db
+from jsa.errors import JsaError
 from jsa.naming import (
     cover_letter_file_stem,
     packet_dir_name,
     redline_file_name,
     resume_file_stem,
 )
+from jsa.placeholders import TITLE, fill_placeholders, holds_placeholder
 from jsa.profile import (
     COVER_LETTER_PREFIX,
     Config,
@@ -17,6 +21,8 @@ from jsa.profile import (
     load_config,
     packet_sources,
 )
+from jsa.resume import load_resume
+from jsa.tracker import today
 
 JOB_POSTING = "job_posting.md"
 CHECKLIST = "resume_checklist.md"
@@ -62,6 +68,40 @@ def redline_path(copy: Path) -> Path:
     return copy.with_name(redline_file_name(copy.stem))
 
 
+def _placeholder_document(path: Path) -> Document | None:
+    """The `.docx` at `path`; None for any other file, or one that can't be read and so holds no placeholder."""
+    if path.suffix.lower() != ".docx":
+        return None
+    try:
+        return load_resume(path)
+    except JsaError:
+        return None
+
+
+def _copy_filled(source: Path, copy: Path, job: db.PacketJob) -> None:
+    """Copy a profile file into the packet, filling its placeholders; a file with none is copied as it is."""
+    document = _placeholder_document(source)
+    if document is not None and fill_placeholders(
+        document, job.normalized_company, job.title, today()
+    ):
+        document.save(str(copy))
+    else:
+        shutil.copyfile(source, copy)
+
+
+def holds_title_placeholder(sources: PacketSources) -> bool:
+    """Whether the profile's resume or `.docx` cover letter holds `[TITLE]`."""
+    documents = (
+        _placeholder_document(source)
+        for source in (sources.resume, sources.cover_letter)
+        if source is not None
+    )
+    return any(
+        document is not None and holds_placeholder(document, TITLE)
+        for document in documents
+    )
+
+
 def ensure_head(
     directory: Path,
     job: db.PacketJob,
@@ -69,7 +109,7 @@ def ensure_head(
     *,
     refresh_posting: bool = False,
 ) -> None:
-    """Complete the folder, the job description, and the resume and cover letter copies.
+    """Complete the folder, the job description, and the resume and cover letter copies, with their placeholders filled.
 
     The copies and a hand-filled job description are never replaced. The row's description
     replaces an existing `job_posting.md` only when `refresh_posting` is set.
@@ -81,7 +121,7 @@ def ensure_head(
     # A copy is the user's working file, so an existing one is never replaced.
     for copy, source in copies.items():
         if not copy.exists():
-            shutil.copyfile(source, copy)
+            _copy_filled(source, copy, job)
 
 
 def build_packets(posting_id: int | None, *, dry_run: bool) -> None:

@@ -14,6 +14,7 @@ from jsa.generate import build_packet
 from jsa.packet import (
     JOB_POSTING,
     cover_letter_stem,
+    holds_title_placeholder,
     packet_paths,
     redline_path,
 )
@@ -261,6 +262,12 @@ def _reconcile(
         )
     ):
         fixes.append(problem)
+    # A copy is never rewritten, so a [TITLE] filled into it keeps the old title.
+    if has_packet and title_changed and holds_title_placeholder(sources):
+        fixes.append(
+            f"the packet's resume or cover letter copy was filled with the old title "
+            f"{job.title!r}; correct it by hand"
+        )
     fixes.extend(_move_neighbours(waiting, last_pass=True)[1])
     return fixes
 

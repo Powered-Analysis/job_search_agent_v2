@@ -67,6 +67,20 @@ cp -r profile.example profile
 
 No prompt in `src/` needs an edit. If one seems to, a profile slot is missing.
 
+**Placeholders.** Type `[COMPANY]`, `[TITLE]`, or `[DATE]` into `resume.docx` or a `.docx` cover
+letter, and each packet's copy of the file has them filled in. There is no setting: the token is the
+request, and the files in `profile/` are never changed.
+
+| Token | Filled with |
+|---|---|
+| `[COMPANY]` | the posting's company |
+| `[TITLE]` | the posting's job title |
+| `[DATE]` | the day the copy is made, in your search timezone, like `October 10, 2026` |
+
+Only these exact capitals match. Body text, tables, headers, and footers are filled; text boxes are
+not. A packet's copy is never rewritten, so a refetch that changes a posting's title cannot refill
+`[TITLE]`: it flags the row for you to correct by hand.
+
 ### 5. Create the database tables
 
 ```sh

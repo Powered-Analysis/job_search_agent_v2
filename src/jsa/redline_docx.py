@@ -17,7 +17,7 @@ from docx.oxml.xmlchemy import BaseOxmlElement
 AUTHOR = "Claude (ATS)"
 _INITIALS = "ATS"
 _TEXT_TAGS = ("w:br", "w:cr", "w:noBreakHyphen", "w:ptab", "w:t", "w:tab")
-_TEXT_XPATH = " | ".join(_TEXT_TAGS)
+TEXT_XPATH = " | ".join(_TEXT_TAGS)
 _TEXT_QNAMES = {qn(tag) for tag in _TEXT_TAGS}
 _UNRESOLVED_XPATH = ".//w:ins | .//w:del | .//w:moveFrom | .//w:moveTo"
 _XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
@@ -41,17 +41,17 @@ class TrackedEdit:
     comment: str
 
 
-def _runs(paragraph: BaseOxmlElement) -> list[BaseOxmlElement]:
+def runs(paragraph: BaseOxmlElement) -> list[BaseOxmlElement]:
     # Runs inside a text box belong to the box's own paragraphs, not to this one (PRD 04, "Text in scope").
     return paragraph.xpath("./descendant::w:r[not(ancestor::w:txbxContent)]")
 
 
 def _run_text(run: BaseOxmlElement) -> str:
-    return "".join(str(child) for child in run.xpath(_TEXT_XPATH))
+    return "".join(str(child) for child in run.xpath(TEXT_XPATH))
 
 
 def paragraph_text(paragraph: BaseOxmlElement) -> str:
-    return "".join(_run_text(run) for run in _runs(paragraph))
+    return "".join(_run_text(run) for run in runs(paragraph))
 
 
 def body_paragraph_texts(document: Document) -> list[str]:
@@ -66,7 +66,7 @@ def has_unresolved_changes(document: Document) -> bool:
 def _placed_runs(paragraph: BaseOxmlElement) -> list[tuple[BaseOxmlElement, int, int]]:
     """Each run that carries text, with its start and end offsets in the paragraph."""
     placed, offset = [], 0
-    for run in _runs(paragraph):
+    for run in runs(paragraph):
         length = len(_run_text(run))
         if length:
             placed.append((run, offset, offset + length))
@@ -78,11 +78,11 @@ def _content(run: BaseOxmlElement) -> list[BaseOxmlElement]:
     return [child for child in run if child.tag != qn("w:rPr")]
 
 
-def _length(element: BaseOxmlElement) -> int:
+def text_length(element: BaseOxmlElement) -> int:
     return len(str(element)) if element.tag in _TEXT_QNAMES else 0
 
 
-def _set_text(element: BaseOxmlElement, text: str) -> None:
+def set_text(element: BaseOxmlElement, text: str) -> None:
     element.text = text
     element.set(_XML_SPACE, "preserve")
 
@@ -93,12 +93,12 @@ def _split_run(run: BaseOxmlElement, offset: int) -> None:
     run.addnext(tail)
     position = 0
     for head_child, tail_child in zip(_content(run), _content(tail), strict=True):
-        length = _length(head_child)
+        length = text_length(head_child)
         end = position + length
         if length and position < offset < end:
             text = head_child.text
-            _set_text(head_child, text[: offset - position])
-            _set_text(tail_child, text[offset - position :])
+            set_text(head_child, text[: offset - position])
+            set_text(tail_child, text[offset - position :])
         elif end <= offset and (length or position < offset):
             tail.remove(tail_child)
         else:
@@ -157,7 +157,7 @@ def _insertion(
     if properties is not None:
         run.append(copy.deepcopy(properties))
     content = OxmlElement("w:t")
-    _set_text(content, text)
+    set_text(content, text)
     run.append(content)
     insertion.append(run)
     return insertion
