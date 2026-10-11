@@ -74,7 +74,7 @@ def _placed_runs(paragraph: BaseOxmlElement) -> list[tuple[BaseOxmlElement, int,
     return placed
 
 
-def _content(run: BaseOxmlElement) -> list[BaseOxmlElement]:
+def content(run: BaseOxmlElement) -> list[BaseOxmlElement]:
     return [child for child in run if child.tag != qn("w:rPr")]
 
 
@@ -92,7 +92,7 @@ def _split_run(run: BaseOxmlElement, offset: int) -> None:
     tail = copy.deepcopy(run)
     run.addnext(tail)
     position = 0
-    for head_child, tail_child in zip(_content(run), _content(tail), strict=True):
+    for head_child, tail_child in zip(content(run), content(tail), strict=True):
         length = text_length(head_child)
         end = position + length
         if length and position < offset < end:

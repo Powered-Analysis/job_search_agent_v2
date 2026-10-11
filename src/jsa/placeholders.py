@@ -10,10 +10,16 @@ from datetime import date
 from itertools import accumulate
 
 from docx.document import Document
-from docx.oxml.ns import qn
 from docx.oxml.xmlchemy import BaseOxmlElement
 
-from jsa.redline_docx import TEXT_XPATH, runs, set_text, text_length
+from jsa.redline_docx import (
+    TEXT_XPATH,
+    content,
+    paragraph_text,
+    runs,
+    set_text,
+    text_length,
+)
 
 COMPANY = "[COMPANY]"
 TITLE = "[TITLE]"
@@ -44,17 +50,13 @@ def _text_elements(paragraph: BaseOxmlElement) -> list[BaseOxmlElement]:
     return [element for run in runs(paragraph) for element in run.xpath(TEXT_XPATH)]
 
 
-def _text(elements: list[BaseOxmlElement]) -> str:
-    return "".join(str(element) for element in elements)
-
-
 def holds_placeholder(document: Document, token: str) -> bool:
-    return any(token in _text(_text_elements(p)) for p in _paragraphs(document))
+    return any(token in paragraph_text(p) for p in _paragraphs(document))
 
 
 def _fill_paragraph(paragraph: BaseOxmlElement, values: dict[str, str]) -> bool:
     elements = _text_elements(paragraph)
-    matches = list(_TOKEN.finditer(_text(elements)))
+    matches = list(_TOKEN.finditer("".join(map(str, elements))))
     if not matches:
         return False
     starts = list(accumulate(map(text_length, elements), initial=0))
@@ -79,7 +81,7 @@ def _fill_paragraph(paragraph: BaseOxmlElement, values: dict[str, str]) -> bool:
         if not element.text:
             run = element.getparent()
             run.remove(element)
-            if not [child for child in run if child.tag != qn("w:rPr")]:
+            if not content(run):
                 run.getparent().remove(run)
     return True
 
