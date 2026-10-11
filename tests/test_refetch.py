@@ -1194,3 +1194,96 @@ def test_refetch_never_changes_decision_or_tracking_state(
     assert column(rdb, posting_id, "fit_feedback") == "strong"
     assert column(rdb, posting_id, "added_to_tracker") == 1
     assert column(rdb, posting_id, "closed_at") is None
+
+
+# --- placeholders (issue #130; PRD 04 "Reconciliation") -----------------------
+
+
+def save_with_tokens(path: Path, text: str) -> None:
+    document = docx.Document()
+    document.add_paragraph(text)
+    document.save(path)
+
+
+def retitle_with_profile_files(rdb, web, gws, env, monkeypatch, capsys, prepare):
+    profile, packets = env
+    prepare(profile)
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    revised = (folder / OLD_COPY).read_bytes()
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    renamed = packets / NEW_DIR
+    assert (renamed / NEW_COPY).read_bytes() == revised
+    assert not (folder / OLD_COPY).exists()
+    return code, output
+
+
+@pytest.mark.parametrize("name", ["resume.docx", "cover_letter.docx"])
+def test_a_retitle_flags_the_row_when_the_profile_holds_the_title_placeholder(
+    rdb, web, gws, env, monkeypatch, capsys, name
+):
+    code, output = retitle_with_profile_files(
+        rdb,
+        web,
+        gws,
+        env,
+        monkeypatch,
+        capsys,
+        lambda profile: save_with_tokens(profile / name, "Role: [TITLE]"),
+    )
+    assert code != 0
+    assert "by hand" in output
+
+
+@pytest.mark.parametrize(
+    "prepare",
+    [
+        lambda profile: None,
+        lambda profile: save_with_tokens(
+            profile / "resume.docx", "[COMPANY] on [DATE], [Title]"
+        ),
+        lambda profile: (profile / "cover_letter.pdf").write_bytes(b"Role: [TITLE]"),
+    ],
+    ids=["no-tokens", "other-tokens-only", "pdf-cover-letter"],
+)
+def test_a_retitle_does_not_flag_the_row_without_a_title_placeholder_in_a_docx(
+    rdb, web, gws, env, monkeypatch, capsys, prepare
+):
+    code, output = retitle_with_profile_files(
+        rdb, web, gws, env, monkeypatch, capsys, prepare
+    )
+    assert code == 0
+    assert "by hand" not in output
+
+
+def test_a_description_only_change_does_not_flag_a_title_placeholder(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    profile, packets = env
+    save_with_tokens(profile / "resume.docx", "Role: [TITLE]")
+    posting_id = seed(rdb)
+    make_packet(rdb, packets, posting_id)
+    employer(web, rdb, posting_id, title=OLD_TITLE)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert "by hand" not in output
+
+
+def test_a_retitle_never_refills_the_renamed_copy_or_changes_the_profile(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    profile, packets = env
+    save_with_tokens(profile / "resume.docx", "Role: [TITLE] at [COMPANY]")
+    base = (profile / "resume.docx").read_bytes()
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    edit_copy(folder / OLD_COPY, "Role: [TITLE] typed by me")
+    revised = (folder / OLD_COPY).read_bytes()
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    refetch(monkeypatch, capsys)
+    assert (packets / NEW_DIR / NEW_COPY).read_bytes() == revised
+    assert (profile / "resume.docx").read_bytes() == base

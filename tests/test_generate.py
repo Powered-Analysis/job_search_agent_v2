@@ -1855,3 +1855,67 @@ def test_a_run_inside_its_limit_completes_the_packet(
     assert code == 0
     assert entries(packets / PLAIN) >= {"resume_checklist.md", REDLINE_EDITS}
     assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+# --- placeholders (issue #130; PRD 04 "Placeholders in the resume and cover letter") ---
+
+
+def save_with_company_token(path: Path) -> None:
+    document = docx.Document()
+    document.add_paragraph(BASE_LINE)
+    document.add_paragraph("Keen on [COMPANY] and the [TITLE] role.")
+    document.save(path)
+
+
+def test_the_checklist_and_the_redline_read_the_filled_copy(
+    gdb, env, agent, monkeypatch, capsys
+):
+    profile, packets = env
+    save_with_company_token(profile / "resume.docx")
+    seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    filled = "Keen on Acme Widgets and the Staff Engineer role."
+    copy = docx.Document(str(packets / PLAIN / RESUME_COPY))
+    assert copy.paragraphs[1].text == filled
+    [checklist_prompt] = agent.checklist_prompts
+    [redline_prompt] = agent.redline_prompts
+    for prompt in (checklist_prompt, redline_prompt):
+        assert filled in prompt
+        assert "[COMPANY]" not in prompt and "[TITLE]" not in prompt
+
+
+def test_generate_fills_a_docx_cover_letter_copy_and_leaves_the_profiles_alone(
+    gdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    save_with_company_token(profile / "cover_letter.docx")
+    base = (profile / "cover_letter.docx").read_bytes()
+    seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    letter = docx.Document(str(packets / PLAIN / COVER_LETTER_COPY))
+    assert (
+        letter.paragraphs[1].text == "Keen on Acme Widgets and the Staff Engineer role."
+    )
+    assert (profile / "cover_letter.docx").read_bytes() == base
+
+
+def test_generate_never_fills_an_existing_copy_a_second_time(
+    gdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    save_with_company_token(profile / "resume.docx")
+    save_with_company_token(profile / "cover_letter.docx")
+    posting_id = seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    kept = {}
+    for name in (RESUME_COPY, COVER_LETTER_COPY):
+        save_with_company_token(folder / name)
+        kept[name] = (folder / name).read_bytes()
+    for args in ((), ("--id", posting_id)):
+        jsa_generate(monkeypatch, capsys, *args)
+        for name, content in kept.items():
+            assert (folder / name).read_bytes() == content
+            assert "[COMPANY]" in docx.Document(str(folder / name)).paragraphs[1].text
