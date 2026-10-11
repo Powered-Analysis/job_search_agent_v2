@@ -61,7 +61,7 @@ cp -r profile.example profile
 |---|---|
 | `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the resume checklist, the ATS redline, and refine |
 | `profile/resume.docx` | your single base resume |
-| `profile/cover_letter.*` | optional; your cover letter, copied into each packet |
+| `profile/cover_letter.*` | optional; your cover letter, copied into each packet (a `.docx` also gets a PDF) |
 | `profile/search/search.toml` | timezone, `run_at`, the weekly schedule, the Claude runner settings, and the verification mode |
 | `profile/search/*.md` | the six fragments that tell the search who you are and what you want |
 
@@ -216,7 +216,7 @@ credentials leave it only as the inbox app's two exported ones, each scoped to i
 **Local tools:** `uv`; Google Chrome (`jsa review`); the `gws` CLI, signed in with `gws auth login`
 (while the OAuth consent screen is in testing status the token expires after 7 days; publish it, or
 sign in again when `jsa track` reports exit code 2); `flyctl` (`jsa deploy`); `pandoc` and `typst`
-(`jsa generate` renders each checklist to a PDF); Google Drive for Desktop (with the inbox, `packets_dir` mirrors the Drive packets folder); Microsoft Word (reviewing the redline); the Claude Code CLI (the local Claude commands).
+(`jsa generate` renders each checklist to a PDF); LibreOffice (`soffice`, override `JSA_SOFFICE_BIN`; renders the resume and cover letter PDFs); Google Drive for Desktop (with the inbox, `packets_dir` mirrors the Drive packets folder); Microsoft Word (reviewing the redline); the Claude Code CLI (the local Claude commands).
 
 **The profile:** `config.toml`, `resume.docx`, `search/search.toml`, and the six `search/*.md`
 fragments, seeded from `profile.example/` (step 4).
@@ -241,13 +241,21 @@ copying the tracker with `gws`; then `uv run jsa deploy`.
 | `jsa refine` | propose search-profile edits learned from your decisions; resolve the conflict-marked copies in `profile/refine/`, then `jsa refine --accept` or `--reject` |
 | `jsa search --agent <agent> --window-hours <n>` | run one search by hand |
 
-After `jsa generate`, revise each packet's resume copy by hand against its checklist. Open the
-packet's `*_redline.docx` in Word to accept or reject each proposed wording change; every change
-carries a comment quoting the posting text behind it. Save the result over the resume copy to keep it.
-A redline is only written when at least one proposed change passes validation; `redline_edits.json`
-records every proposal and why any was dropped, and, when none was proposed, the agent's explanation of
-why (a resume already well aligned, or one with little vocabulary in common with the posting). To redline a revised resume again, delete the
-redline and run `jsa generate --id <id>`.
+After `jsa generate`, revise each packet's resume copy by hand against its checklist. The packet's
+resume files show the resume's condition:
+
+- **`.docx` and `.pdf`:** the redline changed nothing, so the PDF is ready to submit.
+- **A lone `.docx`:** the redline wrote tracked changes into the copy. Open it in Word to accept or
+  reject each proposed wording change; every change carries a comment quoting the posting text behind
+  it. Save the file, and export your own PDF when you are done.
+
+A `.docx` cover letter always has its PDF beside it. A PDF is never replaced or refreshed after it is
+written, so export it again yourself after editing a `.docx`.
+
+`redline_edits.json` records every proposal and why any was dropped, and, when none was proposed, the
+agent's explanation of why (a resume already well aligned, or one with little vocabulary in common
+with the posting). While it exists no command redlines the packet again. To redline a revised resume
+again, delete it and run `jsa generate --id <id>`.
 
 ## Portability
 

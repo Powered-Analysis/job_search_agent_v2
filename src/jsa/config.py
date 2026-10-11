@@ -77,6 +77,10 @@ def pandoc_bin() -> str:
     return os.environ.get("JSA_PANDOC_BIN") or "pandoc"
 
 
+def soffice_bin() -> str:
+    return os.environ.get("JSA_SOFFICE_BIN") or "soffice"
+
+
 def generate_workers() -> int:
     raw = os.environ.get("JSA_GENERATE_WORKERS") or "3"
     try:

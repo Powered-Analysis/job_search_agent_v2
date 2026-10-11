@@ -14,6 +14,7 @@ from jsa.checklist import (
     run_checklist,
 )
 from jsa.config import generate_workers
+from jsa.docx_pdf import ensure_pdf
 from jsa.errors import JsaError, one_line
 from jsa.packet import (
     CHECKLIST,
@@ -23,7 +24,6 @@ from jsa.packet import (
     ensure_head,
     packet_copies,
     packet_paths,
-    redline_path,
 )
 from jsa.profile import (
     AgentSettings,
@@ -35,7 +35,7 @@ from jsa.profile import (
     packet_sources,
     tracker_spreadsheet_id,
 )
-from jsa.redline import redline_resume
+from jsa.redline import edits_applied, redline_resume
 from jsa.resume import render_resume
 from jsa.tracker import append_tracked, today
 from jsa.verify import CLOSED_OUTCOMES, Verifier, recheck
@@ -76,13 +76,7 @@ def _build_redline(
     copy: Path,
     settings: AgentSettings,
 ) -> None:
-    result = redline_resume(
-        copy,
-        redline_path(copy),
-        directory / REDLINE_EDITS,
-        job_description,
-        settings,
-    )
+    result = redline_resume(copy, directory / REDLINE_EDITS, job_description, settings)
     if result is None:
         print(
             f"warning: posting {job.id}: the resume copy has unresolved tracked changes, "
@@ -93,6 +87,9 @@ def _build_redline(
         print(
             f"redline: posting {job.id}: {result.applied} applied, {result.dropped} dropped"
         )
+        # PRD 04: a PDF stands for a resume the redline left unchanged; an edited one is reviewed first.
+        if result.applied == 0:
+            ensure_pdf(copy)
 
 
 def build_packet(
@@ -111,26 +108,25 @@ def build_packet(
     )
     checklist = directory / CHECKLIST
     pdf = directory / CHECKLIST_PDF
-    redline = redline_path(copy)
+    edits_file = directory / REDLINE_EDITS
     # XC-10: an interrupted run resumes after the steps it already finished, even a checklist whose PDF failed.
     need_checklist = rewrite or not checklist.exists()
-    # PRD 04: a redline the user may be reviewing is never replaced by a refresh.
-    need_redline = (
-        not redline.exists() if rewrite else not (directory / REDLINE_EDITS).exists()
-    )
-    if not need_checklist and not need_redline:
-        if not pdf.exists():
-            render_checklist_pdf(checklist, pdf)
-        return True
-    job_description = _job_description(job, directory)
-    if not (job_description or "").strip():
-        return False
+    # PRD 04: the copy may hold changes the user is reviewing, so no refresh reruns a finished redline.
+    need_redline = not edits_file.exists()
+    job_description = ""
+    if need_checklist or need_redline:
+        job_description = _job_description(job, directory)
+        if not (job_description or "").strip():
+            return False
     if need_checklist:
         _build_checklist(job_description, copy, directory, job, agents.checklist)
     elif not pdf.exists():
         render_checklist_pdf(checklist, pdf)
     if need_redline:
         _build_redline(job_description, job, directory, copy, agents.redline)
+    elif not edits_applied(edits_file):
+        # Re-entry: the redline finished, but the run died before the unchanged copy's PDF.
+        ensure_pdf(copy)
     return True
 
 

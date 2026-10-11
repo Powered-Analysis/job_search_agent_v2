@@ -27,6 +27,12 @@ RUN apt-get update \
     && apt-get purge --yes --auto-remove curl xz-utils \
     && rm -rf /tmp/* /var/lib/apt/lists/*
 
+# Renders the packet's PDF copies (PRD 04). Writer is the only component a `.docx` needs; the fonts
+# are metric-compatible with Word's defaults, since a machine substitutes any font it lacks.
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes libreoffice-writer-nogui fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /usr/local/bin/uv
 
 # The Claude Code CLI refuses to skip permission prompts as root.

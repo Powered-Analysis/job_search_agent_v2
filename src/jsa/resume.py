@@ -8,14 +8,25 @@ import docx
 from docx.document import Document
 from docx.opc.exceptions import PackageNotFoundError
 from docx.text.paragraph import Paragraph
+from docx.text.run import Run
 
 from jsa.errors import JsaError
+
+
+def _accepted_runs(paragraph: Paragraph) -> list[Run]:
+    """The runs as they read once every pending tracked change is accepted (PRD 04): inserted text stays, deleted text goes."""
+    return [
+        Run(run, paragraph)
+        for run in paragraph._p.xpath("./w:r | ./w:ins/w:r | ./w:moveTo/w:r")
+    ]
 
 
 def _render_paragraph(paragraph: Paragraph) -> str:
     # Adjacent bold runs merge, so one bold phrase is marked once however Word split it.
     pieces = []
-    for bold, runs in groupby(paragraph.runs, key=lambda run: run.bold is True):
+    for bold, runs in groupby(
+        _accepted_runs(paragraph), key=lambda run: run.bold is True
+    ):
         text = "".join(run.text for run in runs)
         core = text.strip()
         if bold and core:
