@@ -250,15 +250,25 @@ def cover_letter() -> Path | None:
     return matches[0] if matches else None
 
 
+RESUME_SKILLS = "resume_skills.md"
+
+
+def resume_skills() -> Path | None:
+    """The optional skills list (XC-11), or None when the profile has none."""
+    path = profile_dir() / RESUME_SKILLS
+    return path if path.is_file() else None
+
+
 class PacketSources(NamedTuple):
-    """The profile files each packet starts from."""
+    """The profile files each packet starts from, and the skills list the redline draws on."""
 
     resume: Path
     cover_letter: Path | None
+    skills: Path | None
 
 
 def packet_sources() -> PacketSources:
-    return PacketSources(base_resume(), cover_letter())
+    return PacketSources(base_resume(), cover_letter(), resume_skills())
 
 
 def _agent_settings(config: Config, name: str) -> ModelSettings:

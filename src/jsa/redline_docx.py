@@ -13,6 +13,7 @@ from docx.document import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.oxml.xmlchemy import BaseOxmlElement
+from docx.text.paragraph import Paragraph
 
 AUTHOR = "Claude (ATS)"
 _INITIALS = "ATS"
@@ -57,6 +58,37 @@ def paragraph_text(paragraph: BaseOxmlElement) -> str:
 def body_paragraph_texts(document: Document) -> list[str]:
     """The plain text of every body paragraph, indexed as the redline's edits address them."""
     return [paragraph_text(p._p) for p in document.paragraphs]
+
+
+def _wholly_bold(paragraph: Paragraph) -> bool:
+    texts = [(run.bold, run.text) for run in paragraph.runs if run.text.strip()]
+    return bool(texts) and all(bold is True for bold, _ in texts)
+
+
+def _ends_skills_section(paragraph: Paragraph) -> bool:
+    return (paragraph.style.name or "").startswith("Heading") or _wholly_bold(paragraph)
+
+
+def skills_section(document: Document) -> range | None:
+    """The indices of the skills section's paragraphs (PRD 04 "Skills section"); None unless one paragraph is headed `Skills`."""
+    paragraphs = document.paragraphs
+    headings = [
+        index
+        for index, paragraph in enumerate(paragraphs)
+        if paragraph_text(paragraph._p).strip().rstrip(":").casefold() == "skills"
+    ]
+    if len(headings) != 1:
+        return None
+    start = headings[0] + 1
+    end = next(
+        (
+            index
+            for index in range(start, len(paragraphs))
+            if _ends_skills_section(paragraphs[index])
+        ),
+        len(paragraphs),
+    )
+    return range(start, end)
 
 
 def has_unresolved_changes(document: Document) -> bool:
