@@ -25,8 +25,8 @@ from test_generate import (
     PLAIN,
     QUUX_EDIT,
     QUUX_JD,
-    REDLINE_DOC,
     RESUME_COPY,
+    RESUME_PDF,
     Agent,
     column,
     failed,
@@ -375,15 +375,17 @@ def test_an_emailed_posting_with_a_description_ends_tracked_with_its_packet_in_d
         "job_posting.md",
         "resume_checklist.md",
         PDF,
-        REDLINE_DOC,
     } <= set(uploaded)
+    # The redline edited the copy, so the packet has one resume file and no resume PDF.
+    assert RESUME_PDF not in uploaded
+    assert not [name for name in uploaded if name.endswith("_redline.docx")]
     assert uploaded["job_posting.md"].decode() == QUUX_JD
     assert (
         uploaded[PDF].decode() == f"PDF OF: {uploaded['resume_checklist.md'].decode()}"
     )
 
 
-def test_the_resume_copy_and_the_redline_are_uploaded_as_the_exact_docx_files(
+def test_the_redlined_resume_copy_is_uploaded_as_the_exact_docx_file(
     db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
 ):
     profile, _ = env
@@ -392,12 +394,39 @@ def test_the_resume_copy_and_the_redline_are_uploaded_as_the_exact_docx_files(
     run_inbox(monkeypatch)
     [folder_id] = world.folders(PLAIN)
     uploaded = world.contents(folder_id)
-    assert uploaded[RESUME_COPY] == (profile / "resume.docx").read_bytes()
-    with zipfile.ZipFile(io.BytesIO(uploaded[REDLINE_DOC])) as archive:
+    assert uploaded[RESUME_COPY] != (profile / "resume.docx").read_bytes()
+    with zipfile.ZipFile(io.BytesIO(uploaded[RESUME_COPY])) as archive:
         body = archive.read("word/document.xml").decode()
         comments = archive.read("word/comments.xml").decode()
     assert "<w:ins " in body and "<w:del " in body
     assert "WHY-SAME-MEANING-MARKER" in comments
+
+
+def test_a_resume_the_redline_left_alone_is_delivered_with_its_pdf(
+    db_url, conn, env, gmail, world, agent, pandoc, soffice, requests, monkeypatch
+):
+    profile, _ = env
+    email(gmail, conn, jd=QUUX_JD)
+    assert run_inbox(monkeypatch) == 0
+    [folder_id] = world.folders(PLAIN)
+    uploaded = world.contents(folder_id)
+    assert uploaded[RESUME_COPY] == (profile / "resume.docx").read_bytes()
+    assert uploaded[RESUME_PDF].decode() == f"PDF OF: {RESUME_COPY}"
+
+
+def test_a_docx_cover_letter_is_delivered_with_its_pdf(
+    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+):
+    profile, _ = env
+    (profile / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
+    agent.respond_redline = redline_reply(QUUX_EDIT)
+    email(gmail, conn, jd=QUUX_JD)
+    assert run_inbox(monkeypatch) == 0
+    [folder_id] = world.folders(PLAIN)
+    uploaded = world.contents(folder_id)
+    letter = RESUME_COPY.replace("_Resume_", "_CoverLetter_")
+    assert uploaded[letter] == b"THE COVER LETTER"
+    assert uploaded[letter.replace(".docx", ".pdf")].decode() == f"PDF OF: {letter}"
 
 
 def test_a_cover_letter_in_the_profile_is_delivered_with_the_packet(

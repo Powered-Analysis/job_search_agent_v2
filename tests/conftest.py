@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import turso_serverless
 import turso_serverless.dbapi
+from soffice_helpers import install_soffice
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TABLES = (
@@ -88,3 +89,9 @@ def http_conn(http_url):
     connection = db.connect()
     yield connection
     connection.close()
+
+
+@pytest.fixture(autouse=True)
+def soffice(tmp_path_factory, monkeypatch) -> Path:
+    """Every test renders PDF copies through the stub `soffice` (`XC-9`); returns its invocation log."""
+    return install_soffice(tmp_path_factory.mktemp("soffice"), monkeypatch)

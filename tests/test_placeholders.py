@@ -368,7 +368,13 @@ def packet_folder(packets):
 
 
 def copy_in(folder, kind):
-    [path] = [p for p in folder.iterdir() if f"_{kind}_" in p.name]
+    # A `.docx` copy's PDF sits beside it; the copy itself is the one that is read.
+    [path] = [
+        p
+        for p in folder.iterdir()
+        if f"_{kind}_" in p.name
+        and not (p.suffix == ".pdf" and p.with_suffix(".docx").exists())
+    ]
     return path
 
 
