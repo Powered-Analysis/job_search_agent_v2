@@ -18,12 +18,14 @@ import pytest
 from conftest import drop_all_tables
 from pandoc_helpers import install_pandoc
 from profile_helpers import copy_example, write_config_toml
+from soffice_helpers import rendered
 from test_generate import (
     BASE_LINE,
     CHECKLIST_TEXT,
     CONFIG,
     LONG_AGO,
     PDF,
+    QUUX_EDIT,
     REDLINE_EDITS,
     Agent,
     column,
@@ -572,6 +574,7 @@ def test_a_retitled_row_with_a_packet_is_renamed_and_regenerated_in_place(
         REDLINE_EDITS,
         "notes.txt",
         NEW_COPY,
+        NEW_PDF,
     }
 
 
@@ -698,66 +701,93 @@ def test_a_taken_directory_name_blocks_the_rename_and_flags_the_row(
     assert (folder / "notes.txt").read_bytes() == before[folder]["notes.txt"]
 
 
-REDLINE_DOC = OLD_COPY.replace(".docx", "_redline.docx")
-NEW_REDLINE_DOC = NEW_COPY.replace(".docx", "_redline.docx")
+OLD_PDF = OLD_COPY.replace(".docx", ".pdf")
+NEW_PDF = NEW_COPY.replace(".docx", ".pdf")
+# A redline record in which no edit was applied, so the packet's resume PDF is a finished file.
+NO_EDIT_RECORD = json.dumps({"explanation": "Already aligned.", "edits": []})
 
 
-def test_a_retitle_renames_an_existing_redline_with_the_copy_and_leaves_it_untouched(
-    rdb, web, gws, env, agent, monkeypatch, capsys
+def test_a_retitle_renames_the_resume_pdf_with_the_copy_and_leaves_it_untouched(
+    rdb, web, gws, env, agent, soffice, monkeypatch, capsys
 ):
     _, packets = env
     posting_id = seed(rdb)
     folder = make_packet(rdb, packets, posting_id)
-    (folder / REDLINE_DOC).write_bytes(b"MY REVIEW IN PROGRESS")
-    (folder / REDLINE_EDITS).write_text("MY RECORD", encoding="utf-8")
+    (folder / OLD_PDF).write_bytes(b"MY OWN EXPORT")
+    (folder / REDLINE_EDITS).write_text(NO_EDIT_RECORD, encoding="utf-8")
     employer(web, rdb, posting_id)
     set_sheet(gws, (posting_id, ""))
     code, _ = refetch(monkeypatch, capsys)
     assert code == 0
     renamed = packets / NEW_DIR
-    assert (renamed / NEW_REDLINE_DOC).read_bytes() == b"MY REVIEW IN PROGRESS"
-    assert not (renamed / REDLINE_DOC).exists()
-    assert (renamed / REDLINE_EDITS).read_text(encoding="utf-8") == "MY RECORD"
+    assert (renamed / NEW_PDF).read_bytes() == b"MY OWN EXPORT"
+    assert not (renamed / OLD_PDF).exists()
+    assert (renamed / REDLINE_EDITS).read_text(encoding="utf-8") == NO_EDIT_RECORD
+    assert not [p for p in renamed.iterdir() if p.name.endswith("_redline.docx")]
     assert agent.redline_calls == []
     assert len(agent.checklist_calls) == 1
+    assert rendered(soffice) == []
     checklist = (renamed / "resume_checklist.md").read_text(encoding="utf-8")
     assert checklist.strip() == CHECKLIST_TEXT.strip()
 
 
-def test_a_description_only_change_leaves_an_existing_redline_alone(
-    rdb, web, gws, env, agent, monkeypatch, capsys
+def test_a_retitle_leaves_a_redlined_copy_without_a_pdf_and_renders_none(
+    rdb, web, gws, env, agent, soffice, monkeypatch, capsys
 ):
     _, packets = env
     posting_id = seed(rdb)
     folder = make_packet(rdb, packets, posting_id)
-    (folder / REDLINE_DOC).write_bytes(b"MY REVIEW IN PROGRESS")
-    (folder / REDLINE_EDITS).write_text("MY RECORD", encoding="utf-8")
+    applied = json.dumps(
+        {"explanation": None, "edits": [{**QUUX_EDIT, "validation": None}]}
+    )
+    (folder / REDLINE_EDITS).write_text(applied, encoding="utf-8")
+    revised = (folder / OLD_COPY).read_bytes()
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    renamed = packets / NEW_DIR
+    assert (renamed / NEW_COPY).read_bytes() == revised
+    assert NEW_PDF not in {path.name for path in renamed.iterdir()}
+    assert agent.redline_calls == []
+    assert rendered(soffice) == []
+
+
+def test_a_description_only_change_leaves_the_resume_pdf_and_record_alone(
+    rdb, web, gws, env, agent, soffice, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    (folder / OLD_PDF).write_bytes(b"MY OWN EXPORT")
+    (folder / REDLINE_EDITS).write_text(NO_EDIT_RECORD, encoding="utf-8")
     employer(web, rdb, posting_id, title=OLD_TITLE, location=OLD_LOCATION)
     set_sheet(gws, (posting_id, ""))
     code, _ = refetch(monkeypatch, capsys)
     assert code == 0
-    assert (folder / REDLINE_DOC).read_bytes() == b"MY REVIEW IN PROGRESS"
-    assert (folder / REDLINE_EDITS).read_text(encoding="utf-8") == "MY RECORD"
+    assert (folder / OLD_PDF).read_bytes() == b"MY OWN EXPORT"
+    assert (folder / REDLINE_EDITS).read_text(encoding="utf-8") == NO_EDIT_RECORD
     assert agent.redline_calls == []
     assert len(agent.checklist_calls) == 1
+    assert rendered(soffice) == []
 
 
-def test_a_taken_redline_file_name_blocks_the_rename_and_flags_the_row(
+def test_a_taken_resume_pdf_name_blocks_the_rename_and_flags_the_row(
     rdb, web, gws, env, monkeypatch, capsys
 ):
     _, packets = env
     posting_id = seed(rdb)
     folder = make_packet(rdb, packets, posting_id)
-    (folder / REDLINE_DOC).write_bytes(b"MY REVIEW IN PROGRESS")
-    squatter = b"a different file at the new redline name"
-    (folder / NEW_REDLINE_DOC).write_bytes(squatter)
+    (folder / OLD_PDF).write_bytes(b"MY OWN EXPORT")
+    squatter = b"a different file at the new resume PDF name"
+    (folder / NEW_PDF).write_bytes(squatter)
     employer(web, rdb, posting_id)
     set_sheet(gws, (posting_id, ""))
     code, output = refetch(monkeypatch, capsys)
     assert flagged(code, output, posting_id)
     assert {path.name for path in packets.iterdir()} == {OLD_DIR}
-    assert (folder / REDLINE_DOC).read_bytes() == b"MY REVIEW IN PROGRESS"
-    assert (folder / NEW_REDLINE_DOC).read_bytes() == squatter
+    assert (folder / OLD_PDF).read_bytes() == b"MY OWN EXPORT"
+    assert (folder / NEW_PDF).read_bytes() == squatter
     assert (folder / "notes.txt").exists()
 
 
@@ -782,6 +812,8 @@ def test_a_taken_resume_file_name_blocks_the_rename_and_flags_the_row(
 
 OLD_LETTER = OLD_COPY.replace("_Resume_", "_CoverLetter_")
 NEW_LETTER = NEW_COPY.replace("_Resume_", "_CoverLetter_")
+OLD_LETTER_PDF = OLD_LETTER.replace(".docx", ".pdf")
+NEW_LETTER_PDF = NEW_LETTER.replace(".docx", ".pdf")
 
 
 @pytest.mark.parametrize("extension", ["docx", "pdf"])
@@ -803,6 +835,46 @@ def test_a_retitle_renames_the_cover_letter_copy_with_the_resume_copy_and_never_
     assert (renamed / new).read_bytes() == b"MY REVISED LETTER"
     assert not (renamed / old).exists()
     assert (renamed / NEW_COPY).exists()
+
+
+def test_a_retitle_renames_the_cover_letter_pdf_with_its_docx_copy_and_renders_none(
+    rdb, web, gws, env, soffice, monkeypatch, capsys
+):
+    profile, packets = env
+    (profile / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    (folder / OLD_LETTER).write_bytes(b"MY REVISED LETTER")
+    (folder / OLD_LETTER_PDF).write_bytes(b"MY LETTER EXPORT")
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    renamed = packets / NEW_DIR
+    assert (renamed / NEW_LETTER).read_bytes() == b"MY REVISED LETTER"
+    assert (renamed / NEW_LETTER_PDF).read_bytes() == b"MY LETTER EXPORT"
+    assert not (renamed / OLD_LETTER_PDF).exists()
+    assert NEW_LETTER not in rendered(soffice)
+
+
+def test_a_taken_cover_letter_pdf_name_blocks_the_rename_and_flags_the_row(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    (folder / OLD_LETTER).write_bytes(b"MY REVISED LETTER")
+    (folder / OLD_LETTER_PDF).write_bytes(b"MY LETTER EXPORT")
+    squatter = b"a different file at the new cover letter PDF name"
+    (folder / NEW_LETTER_PDF).write_bytes(squatter)
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert flagged(code, output, posting_id)
+    assert {path.name for path in packets.iterdir()} == {OLD_DIR}
+    assert (folder / OLD_LETTER).read_bytes() == b"MY REVISED LETTER"
+    assert (folder / OLD_LETTER_PDF).read_bytes() == b"MY LETTER EXPORT"
+    assert (folder / NEW_LETTER_PDF).read_bytes() == squatter
 
 
 def test_the_cover_letter_copy_is_found_even_after_the_profile_letter_is_removed(
@@ -867,7 +939,8 @@ def test_a_retitle_regeneration_adds_no_second_cover_letter_copy(
     set_sheet(gws, (posting_id, ""))
     refetch(monkeypatch, capsys)
     letters = [p.name for p in (packets / NEW_DIR).iterdir() if "CoverLetter" in p.name]
-    assert letters == [NEW_LETTER]
+    # One cover letter copy, with the PDF the regeneration renders from it.
+    assert sorted(letters) == sorted([NEW_LETTER, NEW_LETTER_PDF])
     assert (packets / NEW_DIR / NEW_LETTER).read_bytes() == b"MY REVISED LETTER"
 
 
@@ -1194,3 +1267,96 @@ def test_refetch_never_changes_decision_or_tracking_state(
     assert column(rdb, posting_id, "fit_feedback") == "strong"
     assert column(rdb, posting_id, "added_to_tracker") == 1
     assert column(rdb, posting_id, "closed_at") is None
+
+
+# --- placeholders (issue #130; PRD 04 "Reconciliation") -----------------------
+
+
+def save_with_tokens(path: Path, text: str) -> None:
+    document = docx.Document()
+    document.add_paragraph(text)
+    document.save(path)
+
+
+def retitle_with_profile_files(rdb, web, gws, env, monkeypatch, capsys, prepare):
+    profile, packets = env
+    prepare(profile)
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    revised = (folder / OLD_COPY).read_bytes()
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    renamed = packets / NEW_DIR
+    assert (renamed / NEW_COPY).read_bytes() == revised
+    assert not (folder / OLD_COPY).exists()
+    return code, output
+
+
+@pytest.mark.parametrize("name", ["resume.docx", "cover_letter.docx"])
+def test_a_retitle_flags_the_row_when_the_profile_holds_the_title_placeholder(
+    rdb, web, gws, env, monkeypatch, capsys, name
+):
+    code, output = retitle_with_profile_files(
+        rdb,
+        web,
+        gws,
+        env,
+        monkeypatch,
+        capsys,
+        lambda profile: save_with_tokens(profile / name, "Role: [TITLE]"),
+    )
+    assert code != 0
+    assert "by hand" in output
+
+
+@pytest.mark.parametrize(
+    "prepare",
+    [
+        lambda profile: None,
+        lambda profile: save_with_tokens(
+            profile / "resume.docx", "[COMPANY] on [DATE], [Title]"
+        ),
+        lambda profile: (profile / "cover_letter.pdf").write_bytes(b"Role: [TITLE]"),
+    ],
+    ids=["no-tokens", "other-tokens-only", "pdf-cover-letter"],
+)
+def test_a_retitle_does_not_flag_the_row_without_a_title_placeholder_in_a_docx(
+    rdb, web, gws, env, monkeypatch, capsys, prepare
+):
+    code, output = retitle_with_profile_files(
+        rdb, web, gws, env, monkeypatch, capsys, prepare
+    )
+    assert code == 0
+    assert "by hand" not in output
+
+
+def test_a_description_only_change_does_not_flag_a_title_placeholder(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    profile, packets = env
+    save_with_tokens(profile / "resume.docx", "Role: [TITLE]")
+    posting_id = seed(rdb)
+    make_packet(rdb, packets, posting_id)
+    employer(web, rdb, posting_id, title=OLD_TITLE)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert "by hand" not in output
+
+
+def test_a_retitle_never_refills_the_renamed_copy_or_changes_the_profile(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    profile, packets = env
+    save_with_tokens(profile / "resume.docx", "Role: [TITLE] at [COMPANY]")
+    base = (profile / "resume.docx").read_bytes()
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    edit_copy(folder / OLD_COPY, "Role: [TITLE] typed by me")
+    revised = (folder / OLD_COPY).read_bytes()
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    refetch(monkeypatch, capsys)
+    assert (packets / NEW_DIR / NEW_COPY).read_bytes() == revised
+    assert (profile / "resume.docx").read_bytes() == base

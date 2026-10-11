@@ -13,6 +13,7 @@ import docx
 import pytest
 from conftest import drop_all_tables, unique_url
 from profile_helpers import EXAMPLE_DIR, copy_example, write_config_toml
+from soffice_helpers import rendered
 
 from jsa import cli, db
 from jsa.naming import (
@@ -566,6 +567,7 @@ def test_naming_makes_no_file_system_database_or_network_call(monkeypatch):
 # --- the cover letter (issue #112; PRD 04 "Cover letter"; XC-11) --------------
 
 COVER_LETTER_COPY = RESUME_COPY.replace("_Resume_", "_CoverLetter_")
+COVER_LETTER_PDF = COVER_LETTER_COPY.replace(".docx", ".pdf")
 
 
 def write_cover_letter(profile: Path, name: str = "cover_letter.docx") -> Path:
@@ -584,8 +586,73 @@ def test_a_cover_letter_is_copied_into_the_packet_under_its_own_name_and_extensi
     code, _ = jsa_packet(monkeypatch, capsys)
     assert code == 0
     copy = COVER_LETTER_COPY.removesuffix(".docx") + f".{extension}"
-    assert entries(packets / PLAIN) == {"job_posting.md", RESUME_COPY, copy}
+    # A `.docx` letter always has its PDF beside it; any other format is copied as it is.
+    expected = {"job_posting.md", RESUME_COPY, copy}
+    if extension == "docx":
+        expected.add(COVER_LETTER_PDF)
+    assert entries(packets / PLAIN) == expected
     assert (packets / PLAIN / copy).read_bytes() == letter.read_bytes()
+
+
+def test_a_docx_cover_letter_copy_gets_its_pdf_rendered_from_the_copy(
+    pdb, env, monkeypatch, capsys, soffice
+):
+    profile, packets = env
+    write_cover_letter(profile)
+    seed(pdb)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert rendered(soffice) == [COVER_LETTER_COPY]
+    assert (packets / PLAIN / COVER_LETTER_PDF).read_bytes()
+
+
+@pytest.mark.parametrize("extension", ["pdf", "txt"])
+def test_a_cover_letter_in_another_format_is_not_rendered(
+    pdb, env, monkeypatch, capsys, soffice, extension
+):
+    profile, _ = env
+    write_cover_letter(profile, f"cover_letter.{extension}")
+    seed(pdb)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert rendered(soffice) == []
+
+
+def test_packet_writes_no_resume_pdf_with_or_without_a_job_description(
+    pdb, env, monkeypatch, capsys, soffice
+):
+    _, packets = env
+    seed(pdb)
+    seed(pdb, company="Globex Corporation", title="Data Engineer", jd=None)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert rendered(soffice) == []
+    assert not list(packets.rglob("*.pdf"))
+
+
+def test_a_dry_run_renders_nothing(pdb, env, monkeypatch, capsys, soffice):
+    profile, _ = env
+    write_cover_letter(profile)
+    seed(pdb)
+    code, _ = jsa_packet(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert rendered(soffice) == []
+
+
+@pytest.mark.parametrize("failure", ["exits non-zero", "produces no PDF"])
+def test_a_failed_cover_letter_render_fails_the_run_and_leaves_no_partial_pdf(
+    pdb, env, monkeypatch, capsys, failure
+):
+    profile, packets = env
+    write_cover_letter(profile)
+    monkeypatch.setenv(
+        "SOFFICE_FAIL" if failure == "exits non-zero" else "SOFFICE_NO_PDF", "1"
+    )
+    seed(pdb)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code != 0
+    assert not list(packets.rglob("*.pdf"))
+    assert not [p for p in packets.rglob(".soffice-*")]
 
 
 def test_the_cover_letter_copy_name_follows_the_stored_slug_and_normalized_company(
@@ -617,6 +684,7 @@ def test_without_a_candidate_name_the_cover_letter_copy_has_no_prefix(
         "job_posting.md",
         "Resume_StaffEngineer_AcmeWidgets.docx",
         "CoverLetter_StaffEngineer_AcmeWidgets.docx",
+        "CoverLetter_StaffEngineer_AcmeWidgets.pdf",
     }
 
 
@@ -647,6 +715,7 @@ def test_a_file_not_matching_the_cover_letter_pattern_is_not_a_cover_letter(
         "job_posting.md",
         RESUME_COPY,
         COVER_LETTER_COPY,
+        COVER_LETTER_PDF,
     }
 
 
@@ -656,7 +725,11 @@ def test_a_null_jd_row_still_gets_a_cover_letter_copy(pdb, env, monkeypatch, cap
     seed(pdb, jd=None)
     code, _ = jsa_packet(monkeypatch, capsys)
     assert code == 0
-    assert entries(packets / PLAIN) == {RESUME_COPY, COVER_LETTER_COPY}
+    assert entries(packets / PLAIN) == {
+        RESUME_COPY,
+        COVER_LETTER_COPY,
+        COVER_LETTER_PDF,
+    }
 
 
 def test_every_queued_posting_gets_its_own_cover_letter_copy(
@@ -669,8 +742,10 @@ def test_every_queued_posting_gets_its_own_cover_letter_copy(
     code, _ = jsa_packet(monkeypatch, capsys)
     assert code == 0
     for folder in packets.iterdir():
-        letters = [name for name in entries(folder) if "_CoverLetter_" in name]
+        letters = [name for name in entries(folder) if name.endswith(".docx")]
+        letters = [name for name in letters if "_CoverLetter_" in name]
         assert len(letters) == 1
+        assert Path(letters[0]).with_suffix(".pdf").name in entries(folder)
         assert (folder / letters[0]).read_bytes() == letter.read_bytes()
 
 
