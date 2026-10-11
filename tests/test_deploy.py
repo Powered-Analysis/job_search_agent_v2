@@ -1615,6 +1615,13 @@ def test_image_adds_each_inbox_tool_at_a_pinned_version(tool):
     assert "latest" not in text.lower()
 
 
+def inbox_machine_files(profile: Path, *cover_letter: str) -> dict[str, str]:
+    """The machine files a deploy ships: `config.toml` and `resume.docx`, plus the skills list and the
+    cover letter when the profile has them (PRD 06 `jsa deploy` step 4)."""
+    names = ("config.toml", "resume.docx", "resume_skills.md", *cover_letter)
+    return {name: str(profile / name) for name in names if (profile / name).exists()}
+
+
 @pytest.mark.parametrize("existing", [(), ("hourly",)], ids=["create", "update"])
 def test_inbox_machine_runs_jsa_inbox_with_its_files_in_the_inbox_app(
     inbox, monkeypatch, capsys, existing
@@ -1633,10 +1640,9 @@ def test_inbox_machine_runs_jsa_inbox_with_its_files_in_the_inbox_app(
     assert "--rm" not in launch
     assert any(label_of(build) in arg for arg in launch)
     files = machine_files(launch)
-    assert {Path(target).name: source for target, source in files.items()} == {
-        "config.toml": str(profile / "config.toml"),
-        "resume.docx": str(profile / "resume.docx"),
-    }
+    assert {
+        Path(target).name: source for target, source in files.items()
+    } == inbox_machine_files(profile)
     assert all(Path(target).is_absolute() for target in files)
     assert all(Path(target).parent.name == "profile" for target in files)
     # The search machine is swapped as before: no entrypoint override, no machine files.
@@ -1782,11 +1788,7 @@ def test_a_cover_letter_ships_to_the_inbox_machine_as_a_machine_file(
         for target, source in machine_files(launch).items()
         if source
     }
-    assert files == {
-        "config.toml": str(profile / "config.toml"),
-        "resume.docx": str(profile / "resume.docx"),
-        name: str(profile / name),
-    }
+    assert files == inbox_machine_files(profile, name)
     target = next(t for t in machine_files(launch) if Path(t).name == name)
     assert Path(target).is_absolute() and Path(target).parent.name == "profile"
 
@@ -1826,18 +1828,50 @@ def test_build_context_excludes_the_cover_letter(path):
     assert not in_build_context(path)
 
 
-def test_without_a_cover_letter_the_inbox_machine_gets_only_config_and_resume(
+def test_without_a_cover_letter_the_inbox_machine_gets_only_the_profiles_other_machine_files(
     inbox, monkeypatch, capsys
 ):
-    _, log = inbox
+    profile, log = inbox
     monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code == 0
     (launch,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
-    assert sorted(Path(target).name for target in machine_files(launch)) == [
-        "config.toml",
-        "resume.docx",
-    ]
+    assert sorted(Path(target).name for target in machine_files(launch)) == sorted(
+        inbox_machine_files(profile)
+    )
+
+
+@pytest.mark.parametrize("existing", [(), ("hourly",)], ids=["create", "update"])
+def test_a_skills_list_ships_to_the_inbox_machine_as_a_machine_file(
+    inbox, monkeypatch, capsys, existing
+):
+    profile, log = inbox
+    (profile / "resume_skills.md").write_text("Python\nKubernetes\n")
+    monkeypatch.setenv("STUB_MACHINES", machines(*existing))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    verb = "update" if existing else "run"
+    (launch,) = pick_machine(on_app(calls(log), INBOX_APP), verb)
+    files = {Path(t).name: source for t, source in machine_files(launch).items()}
+    assert files["resume_skills.md"] == str(profile / "resume_skills.md")
+    target = next(
+        t for t in machine_files(launch) if Path(t).name == "resume_skills.md"
+    )
+    assert Path(target).is_absolute() and Path(target).parent.name == "profile"
+
+
+def test_a_profile_without_a_skills_list_ships_none_to_the_inbox_machine(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    (profile / "resume_skills.md").unlink(missing_ok=True)
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    (launch,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
+    assert "resume_skills.md" not in {
+        Path(target).name for target in machine_files(launch)
+    }
 
 
 def test_a_cover_letter_removed_from_the_profile_leaves_the_inbox_machine(
