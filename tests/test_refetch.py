@@ -704,7 +704,9 @@ def test_a_taken_directory_name_blocks_the_rename_and_flags_the_row(
 OLD_PDF = OLD_COPY.replace(".docx", ".pdf")
 NEW_PDF = NEW_COPY.replace(".docx", ".pdf")
 # A redline record in which no edit was applied, so the packet's resume PDF is a finished file.
-NO_EDIT_RECORD = json.dumps({"explanation": "Already aligned.", "edits": []})
+NO_EDIT_RECORD = json.dumps(
+    {"explanation": "Already aligned.", "edits": [], "skills_edits": []}
+)
 
 
 def test_a_retitle_renames_the_resume_pdf_with_the_copy_and_leaves_it_untouched(
@@ -738,7 +740,11 @@ def test_a_retitle_leaves_a_redlined_copy_without_a_pdf_and_renders_none(
     posting_id = seed(rdb)
     folder = make_packet(rdb, packets, posting_id)
     applied = json.dumps(
-        {"explanation": None, "edits": [{**QUUX_EDIT, "validation": None}]}
+        {
+            "explanation": None,
+            "edits": [{**QUUX_EDIT, "validation": None}],
+            "skills_edits": [],
+        }
     )
     (folder / REDLINE_EDITS).write_text(applied, encoding="utf-8")
     revised = (folder / OLD_COPY).read_bytes()
