@@ -17,7 +17,6 @@ from jsa.profile import (
     Schedule,
     SearchConfig,
     base_resume,
-    checklist_settings,
     cover_letter,
     fly_settings,
     inbox_app,
@@ -144,7 +143,6 @@ def _validate_inbox(config: Config) -> str:
     base_resume()
     cover_letter()
     tracker_spreadsheet_id()
-    checklist_settings(config)
     redline_settings(config)
     return app
 

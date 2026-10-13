@@ -221,12 +221,12 @@ def main() -> None:
     packet.set_defaults(run=_packet)
     generate_command = commands.add_parser(
         "generate",
-        help="build each Apply posting's packet with a resume checklist and an ATS redline, then track it",
+        help="build each Apply posting's packet with an ATS redline, then track it",
     )
     generate_command.add_argument(
         "--id",
         type=_positive_int,
-        help="generate this Apply posting only, rewriting its checklist",
+        help="generate this Apply posting only, rewriting its job posting",
     )
     generate_command.add_argument(
         "--dry-run",

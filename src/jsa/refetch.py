@@ -13,17 +13,18 @@ from jsa.errors import JsaError, one_line
 from jsa.generate import build_packet
 from jsa.packet import (
     JOB_POSTING,
+    REDLINE_EDITS,
     cover_letter_stem,
     holds_title_placeholder,
     packet_paths,
 )
 from jsa.profile import (
+    AgentSettings,
     Config,
-    PacketAgents,
     PacketSources,
     load_config,
-    packet_agents,
     packet_sources,
+    redline_settings,
     tracker_spreadsheet_id,
 )
 
@@ -149,30 +150,41 @@ def _refresh_packet(
     old_copy: Path,
     config: Config,
     sources: PacketSources,
-    agents: PacketAgents,
-) -> str | None:
-    """Rename and regenerate the packet in place; returns what needs a hand fix, if anything."""
+    redline: AgentSettings,
+    *,
+    description_changed: bool,
+) -> list[str]:
+    """Rename and regenerate the packet in place; returns what needs a hand fix."""
     new_directory = packet_paths(config, fresh)[0]
+    fixes = []
     try:
         taken = _rename_packet(current, fresh, old_directory, old_copy, config)
         if taken:
-            return (
-                f"{taken}, so nothing was renamed or regenerated; rename the packet by hand "
-                f"to match the new title, then run `jsa generate --id {fresh.id}`"
+            return [
+                (
+                    f"{taken}, so nothing was renamed or regenerated; rename the packet by hand "
+                    f"to match the new title, then run `jsa generate --id {fresh.id}`"
+                )
+            ]
+        # PRD 04: a finished redline is traced to the old posting and is never rerun.
+        if description_changed and (new_directory / REDLINE_EDITS).exists():
+            fixes.append(
+                f"the description changed after its redline was built; delete "
+                f"{new_directory / REDLINE_EDITS}, then run `jsa generate --id {fresh.id}`"
             )
-        # PRD 04: exactly `jsa generate --id`, which keeps the resume copy and rewrites the rest.
-        if not build_packet(fresh, config, sources, agents, rewrite=True):
-            return (
-                f"no job description to assess; fill in {new_directory / JOB_POSTING}, "
+        # PRD 04: exactly `jsa generate --id`, which keeps the resume copy and rewrites the posting.
+        if not build_packet(fresh, config, sources, redline, rewrite=True):
+            fixes.append(
+                f"no job description to redline from; fill in {new_directory / JOB_POSTING}, "
                 f"then run `jsa generate --id {fresh.id}`"
             )
     except (JsaError, OSError) as error:
         # Never rolled back: the database already holds the employer's edit.
-        return (
+        fixes.append(
             f"the packet was not refreshed ({one_line(error)}); "
             f"re-run `jsa generate --id {fresh.id}`"
         )
-    return None
+    return fixes
 
 
 def _describe(
@@ -195,7 +207,7 @@ def _reconcile(
     spreadsheet_id: str,
     config: Config,
     sources: PacketSources,
-    agents: PacketAgents,
+    redline: AgentSettings,
     *,
     dry_run: bool,
 ) -> list[str]:
@@ -221,7 +233,7 @@ def _reconcile(
         if directory.is_dir() and drift:
             print(f"would refresh the packet: {directory}")
         return []
-    # A fresh connection: the server drops one left idle through the previous row's checklist run.
+    # A fresh connection: the server drops one left idle through the previous row's redline run.
     with closing(db.connect()) as conn:
         before = db.company_packet_jobs(conn, job.normalized_company)
         db.capture_jd(
@@ -253,16 +265,19 @@ def _reconcile(
     moves = _neighbour_moves(before, after, config, job.id) if title_changed else []
     waiting, neighbour_fixes = _move_neighbours(moves, last_pass=False)
     fixes.extend(neighbour_fixes)
-    if (
-        has_packet
-        and drift
-        and (
-            problem := _refresh_packet(
-                current, fresh, old_directory, old_copy, config, sources, agents
+    if has_packet and drift:
+        fixes.extend(
+            _refresh_packet(
+                current,
+                fresh,
+                old_directory,
+                old_copy,
+                config,
+                sources,
+                redline,
+                description_changed=captured.jd_markdown != job.jd_markdown,
             )
         )
-    ):
-        fixes.append(problem)
     # A copy is never rewritten, so a [TITLE] filled into it keeps the old title.
     if has_packet and title_changed and holds_title_placeholder(sources):
         fixes.append(
@@ -283,7 +298,7 @@ def refetch(
     sources = packet_sources()
     spreadsheet_id = tracker_spreadsheet_id()
     config = load_config()
-    agents = packet_agents(config)
+    redline = redline_settings(config)
     default_scope = posting_id is None and not every_row
     index = _read_sheet(spreadsheet_id, required=default_scope)
     with closing(db.connect()) as conn:
@@ -304,7 +319,7 @@ def refetch(
             spreadsheet_id,
             config,
             sources,
-            agents,
+            redline,
             dry_run=dry_run,
         )
         for fix in fixes:

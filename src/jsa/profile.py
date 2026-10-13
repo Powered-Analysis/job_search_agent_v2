@@ -42,7 +42,7 @@ class ModelSettings(BaseModel):
 
 
 class AgentSettings(ModelSettings):
-    """The checklist and redline run unattended on the inbox machine, so they may carry a hard stop (PRD 04)."""
+    """The redline runs unattended on the inbox machine, so they may carry a hard stop (PRD 04)."""
 
     # XC-14: no default number, because the right one depends on the model and effort the user chose.
     wall_clock_seconds: Annotated[float, Field(strict=True, gt=0)] | None = None
@@ -147,7 +147,6 @@ class InboxConfig(BaseModel):
 
 class AgentsConfig(BaseModel):
     model_config = _STRICT
-    checklist: AgentSettings | None = None
     redline: AgentSettings | None = None
     refine: ModelSettings | None = None
 
@@ -320,23 +319,8 @@ def inbox_drive_folder(config: Config) -> str:
     return _inbox_key(config, "drive_folder_id")
 
 
-def checklist_settings(config: Config) -> AgentSettings:
-    return _agent_settings(config.agents.checklist, "checklist")
-
-
 def redline_settings(config: Config) -> AgentSettings:
     return _agent_settings(config.agents.redline, "redline")
-
-
-class PacketAgents(NamedTuple):
-    """The two agents `jsa generate` runs on each packet."""
-
-    checklist: AgentSettings
-    redline: AgentSettings
-
-
-def packet_agents(config: Config) -> PacketAgents:
-    return PacketAgents(checklist_settings(config), redline_settings(config))
 
 
 def refine_settings(config: Config) -> ModelSettings:
