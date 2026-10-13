@@ -204,8 +204,10 @@ def test_the_image_installs_libreoffice_writer_before_it_drops_to_the_jsa_user()
 
 def test_the_image_still_carries_the_other_inbox_tools_and_its_entrypoint():
     text = (REPO_ROOT / "Dockerfile").read_text()
-    for tool in ("gws", "pandoc", "typst", "tzdata"):
+    for tool in ("gws", "tzdata"):
         assert tool in text
+    for removed in ("pandoc", "typst"):
+        assert removed not in text.lower()
     assert any(line.startswith("ENTRYPOINT") for line in dockerfile_lines())
 
 

@@ -157,11 +157,13 @@ def test_an_apply_untracked_open_posting_gets_a_folder_with_jd_and_resume_copy(
     assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
 
 
-def test_no_checklist_is_written(pdb, env, monkeypatch, capsys):
+def test_no_checklist_or_redline_file_is_written(pdb, env, monkeypatch, capsys):
     _, packets = env
     seed(pdb)
     jsa_packet(monkeypatch, capsys)
-    assert "resume_checklist.md" not in entries(packets / PLAIN)
+    assert entries(packets / PLAIN).isdisjoint(
+        {"resume_checklist.md", "resume_checklist.pdf", "redline_edits.json"}
+    )
 
 
 def test_without_a_candidate_name_the_resume_copy_has_no_prefix(
