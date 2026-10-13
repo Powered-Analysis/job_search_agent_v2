@@ -1,6 +1,6 @@
 # Job Search Agent — PRD Set
 
-This directory is the product-requirements set for the **Job Search Agent**: a personal, mostly-autonomous pipeline that finds in-scope job postings, captures them once into a single hosted database, lets the user decide fit, and turns each *Apply* into an application packet (with a checklist for the user's own resume revision) and a tracker row — improving its own search prompt with use.
+This directory is the product-requirements set for the **Job Search Agent**: a personal, mostly-autonomous pipeline that finds in-scope job postings, captures them once into a single hosted database, lets the user decide fit, and turns each *Apply* into an application packet (with a redline that tailors the resume to the posting) and a tracker row — improving its own search prompt with use.
 
 These PRDs specify the Job Search Agent that this repository builds in `src/jsa/`. They are **living documents** — present-tense, rewritten in place; the archive is the git log. They follow the writing and decomposition discipline in [`PRINCIPLES.md`](PRINCIPLES.md) and the structure in [`TEMPLATE.md`](TEMPLATE.md).
 
@@ -16,7 +16,7 @@ These PRDs specify the Job Search Agent that this repository builds in `src/jsa/
 | [01 — Agentic Job Search](01-agentic-job-search.md) | Cadence, search prompt, the three runners, output schema, canonicalization, ATS capture (Steps 1–2) |
 | [02 — Data & Storage](02-data-and-storage.md) | The Turso `postings` table, idempotent insert, query surface, coverage telemetry, schema creation and change |
 | [03 — Fit Review & Decisioning](03-fit-review-and-decisioning.md) | The no-LLM review loop + amend flow; the manual-add side door (Step 3) |
-| [04 — Application Outputs](04-application-outputs.md) | Packets, the single base resume, the resume checklist, the tracker Sheet, refetch (Steps 4–5) |
+| [04 — Application Outputs](04-application-outputs.md) | Packets, the single base resume, the resume redline, the tracker Sheet, refetch (Steps 4–5) |
 | [05 — Dynamic Development](05-dynamic-development.md) | Search-profile refinement loop |
 | [06 — Platform & Operations](06-platform-and-operations.md) | Cloud/local split, `jsa deploy`, CLI, config and `profile/` layout, and the consolidated user-setup inventory |
 

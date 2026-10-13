@@ -22,7 +22,7 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 ##### Non-Goals
 - **Storage of the decision/feedback** — owned by PRD 02 (the decision writes and the review backlog).
 - **ATS resolution and full-JD capture mechanics** — owned by PRD 01 (resolution, the ATS fetchers, the schema.org `JobPosting` fallback this path uses, and the aggregator list) (`XC-5`).
-- **What happens to an Apply row afterward** (packets, resume checklists, tracker) — PRD 04.
+- **What happens to an Apply row afterward** (packets, resume redlines, tracker) — PRD 04.
 - **How feedback is consumed** for prompt refinement — PRD 05.
 - **Any LLM in the review loop** — deliberately excluded to keep per-posting cost at zero.
 
