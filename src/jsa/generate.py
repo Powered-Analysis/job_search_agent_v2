@@ -1,4 +1,4 @@
-"""`jsa generate` (PRD 04 "ATS redline"): re-check, build the packet, write the redline, track the row."""
+"""`jsa generate` (PRD 04 "Redline"): re-check, build the packet, write the redline, track the row."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing

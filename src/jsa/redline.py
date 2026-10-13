@@ -1,11 +1,11 @@
-"""The ATS redline (PRD 04): wording edits traced to the posting, validated in code, written as tracked changes."""
+"""The redline (PRD 04): edits and flags that tailor a resume to its posting, validated in code, written as tracked changes and comments."""
 
 import json
 import re
 import shutil
 import tempfile
 from collections import Counter
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import asdict, dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -18,25 +18,19 @@ from jsa.assemble import Slot, app_template, assemble
 from jsa.errors import JsaError
 from jsa.profile import AgentSettings
 from jsa.redline_docx import (
+    ParagraphComment,
     TrackedChange,
     TrackedEdit,
     apply_edits,
     body_paragraph_texts,
+    bold_paragraphs,
     has_unresolved_changes,
     skills_section,
 )
 from jsa.resume import load_resume
 
-MAX_FIND_WORDS = 6
 _PUNCTUATION = ".,;:!?()[]\"'"
-_FIELDS = {
-    "paragraph": int,
-    "find": str,
-    "replace": str,
-    "jd_quote": str,
-    "why_same_meaning": str,
-}
-_SKILLS_FIELDS = {
+_EDIT_FIELDS = {
     "paragraph": int,
     "find": str,
     "replace": str,
@@ -44,29 +38,27 @@ _SKILLS_FIELDS = {
     "jd_quote": str | None,
     "reason": str,
 }
-GOALS = ("ats", "narrative")
+_FLAG_FIELDS = {
+    "paragraph": int,
+    "jd_quote": str,
+    "suggestion": str,
+    "reason": str,
+}
+_OUTPUT_KEYS = {"edits", "flags", "explanation"}
+_RECORD_KEYS = {"explanation", "edits", "flags"}
+GOALS = ("ats", "narrative", "correction")
+MAX_FLAGS = 3
+MAX_CORRECTION_DISTANCE = 2
 _LIST_MARKER = re.compile(r"(?:[-*+]|\d+[.)])(?:\s+|$)")
 NO_SKILLS_LIST = (
     "There is no skills list, so the skills section is edited under the ordinary rules like "
-    "any other paragraph, and `skills_edits` must be []."
+    "any other paragraph."
 )
-NO_SKILLS_SECTION = (
-    "No paragraph is open to skills edits, so `skills_edits` must be []. Every paragraph "
-    "is edited under the ordinary rules."
-)
+NO_SKILLS_SECTION = "No paragraph is in the skills section. Every paragraph is edited under the ordinary rules."
 
 
 @dataclass(frozen=True)
 class Edit:
-    paragraph: int
-    find: str
-    replace: str
-    jd_quote: str
-    why_same_meaning: str
-
-
-@dataclass(frozen=True)
-class SkillsEdit:
     paragraph: int
     find: str
     replace: str
@@ -76,11 +68,19 @@ class SkillsEdit:
 
 
 @dataclass(frozen=True)
+class Flag:
+    paragraph: int
+    jd_quote: str
+    suggestion: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class Proposal:
-    """What the redline agent returned: `explanation` is set exactly when both edit lists are empty."""
+    """What the redline agent returned: `explanation` is set exactly when both lists are empty."""
 
     edits: list[Edit]
-    skills_edits: list[SkillsEdit]
+    flags: list[Flag]
     explanation: str | None
 
 
@@ -178,9 +178,24 @@ def _inserted_words(find: str, replace: str) -> set[str]:
 
 
 def _quote_problem(jd_quote: str, job_description: str) -> str | None:
+    if not jd_quote.strip():
+        return "jd_quote is empty"
     if _normalize_whitespace(jd_quote) not in _normalize_whitespace(job_description):
         return "jd_quote is not in the job description"
     return None
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """Single-character insertions, deletions, and substitutions that turn `a` into `b`."""
+    row = list(range(len(b) + 1))
+    for i, char_a in enumerate(a, 1):
+        diagonal, row[0] = row[0], i
+        for j, char_b in enumerate(b, 1):
+            diagonal, row[j] = (
+                row[j],
+                min(row[j] + 1, row[j - 1] + 1, diagonal + (char_a != char_b)),
+            )
+    return row[-1]
 
 
 def _locate(
@@ -198,151 +213,148 @@ def _locate(
     return None, span
 
 
-def _problem(
-    edit: Edit,
-    paragraphs: list[str],
-    job_description: str,
-    taken: list[tuple[int, int]],
-    skills_section: Collection[int],
-) -> tuple[str | None, tuple[int, int] | None]:
-    """The first rule the edit breaks, else None; with the span of `find` it would occupy."""
-    if not 0 <= edit.paragraph < len(paragraphs):
-        return f"paragraph {edit.paragraph} is not a body paragraph", None
-    if edit.paragraph in skills_section:
-        return (
-            f"paragraph {edit.paragraph} is in the skills section, which takes skills edits",
-            None,
-        )
-    problem, span = _locate(paragraphs, edit.paragraph, edit.find, taken)
-    if problem:
-        return problem, None
-    if not edit.jd_quote.strip():
-        return "jd_quote is empty", span
-    if problem := _quote_problem(edit.jd_quote, job_description):
-        return problem, span
-    if not edit.replace.strip():
-        return "replace is empty, which deletes content", span
-    if edit.find.split() == edit.replace.split():
-        return "replace does not differ from find", span
-    allowed = set(_words(edit.jd_quote)) | set(_words(edit.find))
+def _correction_problem(edit: Edit) -> str | None:
+    if edit.jd_quote is not None:
+        return "a correction takes no jd_quote"
+    old, new = _words(edit.find), _words(edit.replace)
+    if len(old) != len(new):
+        return "find and replace do not have the same number of words"
+    if any(
+        _edit_distance(before, after) > MAX_CORRECTION_DISTANCE
+        for before, after in zip(old, new, strict=True)
+    ):
+        return f"a word changes by more than {MAX_CORRECTION_DISTANCE} characters"
+    return None
+
+
+def _traced_problem(
+    edit: Edit, job_description: str, skills: Sequence[str]
+) -> str | None:
+    """Why an `ats` or `narrative` edit isn't traced to the posting; `skills` is empty outside the skills section."""
+    quote = edit.jd_quote or ""
+    if problem := _quote_problem(quote, job_description):
+        return problem
+    allowed = (
+        set(_words(quote))
+        | set(_words(edit.find))
+        | {word for skill in skills for word in _words(skill)}
+    )
     if inserted := _inserted_words(edit.find, edit.replace) - allowed:
         return (
-            "inserts words found in neither jd_quote nor find: "
-            + ", ".join(sorted(inserted)),
-            span,
+            "inserts words found in none of the jd_quote, find, and skills list: "
+            + ", ".join(sorted(inserted))
         )
-    if _digit_words(edit.find) != _digit_words(edit.replace):
-        return "find and replace do not have the same numbers", span
-    if len(edit.find.split()) > MAX_FIND_WORDS:
-        return f"find is longer than {MAX_FIND_WORDS} words", span
-    if not edit.why_same_meaning.strip():
-        return "why_same_meaning is empty", span
-    return None, span
+    return None
 
 
-def _skills_problem(
-    edit: SkillsEdit,
+def _edit_problem(
+    edit: Edit,
     paragraphs: list[str],
     job_description: str,
     skills: Sequence[str],
     skills_section: Collection[int],
     taken: list[tuple[int, int]],
 ) -> tuple[str | None, tuple[int, int] | None]:
-    """The first rule the skills edit breaks, else None; with the span of `find` it would occupy."""
-    if not skills:
-        return "there is no skills list", None
-    if edit.paragraph not in skills_section:
-        return f"paragraph {edit.paragraph} is not in the skills section", None
+    """The first rule the edit breaks, else None; with the span of `find` it would occupy."""
     problem, span = _locate(paragraphs, edit.paragraph, edit.find, taken)
     if problem:
         return problem, None
-    if edit.replace == edit.find:
-        return "replace does not differ from find", span
+    in_section = edit.paragraph in skills_section
     if edit.goal not in GOALS:
         return f"goal is not one of {', '.join(GOALS)}", span
-    quote = (edit.jd_quote or "").strip()
-    if edit.goal == "ats" and not quote:
-        return "an ats edit needs a jd_quote", span
-    if quote and (problem := _quote_problem(quote, job_description)):
-        return problem, span
-    allowed = (
-        {word for skill in skills for word in _words(skill)}
-        | set(_words(quote))
-        | set(_words(edit.find))
-    )
-    if inserted := _inserted_words(edit.find, edit.replace) - allowed:
-        return (
-            "inserts words found in none of the skills list, jd_quote, and find: "
-            + ", ".join(sorted(inserted)),
-            span,
-        )
     if not edit.reason.strip():
         return "reason is empty", span
+    if edit.find.split() == edit.replace.split():
+        return "replace does not differ from find", span
+    if not edit.replace.strip() and not in_section:
+        return "replace is empty, which deletes content", span
+    if edit.goal == "correction":
+        problem = _correction_problem(edit)
+    else:
+        problem = _traced_problem(edit, job_description, skills if in_section else ())
+    if problem:
+        return problem, span
+    if not in_section and _digit_words(edit.find) != _digit_words(edit.replace):
+        return "find and replace do not have the same numbers", span
     return None, span
-
-
-def _validated[Item](
-    edits: list[Item],
-    problem_of: Callable[
-        [Item, list[tuple[int, int]]], tuple[str | None, tuple[int, int] | None]
-    ],
-    paragraph_of: Callable[[Item], int],
-) -> list[str | None]:
-    """Each edit's result in order; a passing edit's span is held against the later edits of its paragraph."""
-    taken: dict[int, list[tuple[int, int]]] = {}
-    results = []
-    for edit in edits:
-        spans = taken.setdefault(paragraph_of(edit), [])
-        problem, span = problem_of(edit, spans)
-        if problem is None and span is not None:
-            spans.append(span)
-        results.append(problem)
-    return results
 
 
 def validate_edits(
     edits: list[Edit],
     paragraphs: list[str],
     job_description: str,
+    skills: Sequence[str] = (),
     skills_section: Collection[int] = (),
 ) -> list[str | None]:
     """Each edit's result in order: None when it passes, else why it is dropped (PRD 04, "Validation").
 
-    `skills_section` holds the paragraphs that take skills edits instead; it is empty while no skills list is in use.
+    `skills_section` holds the paragraphs that get the skills section's latitude; it is empty while
+    no skills list is in use. A passing edit's span is held against the later edits of its paragraph.
     """
-    return _validated(
-        edits,
-        lambda edit, taken: _problem(
-            edit, paragraphs, job_description, taken, skills_section
-        ),
-        lambda edit: edit.paragraph,
-    )
+    taken: dict[int, list[tuple[int, int]]] = {}
+    results = []
+    for edit in edits:
+        if not 0 <= edit.paragraph < len(paragraphs):
+            results.append(f"paragraph {edit.paragraph} is not a body paragraph")
+            continue
+        spans = taken.setdefault(edit.paragraph, [])
+        problem, span = _edit_problem(
+            edit, paragraphs, job_description, skills, skills_section, spans
+        )
+        if problem is None and span is not None:
+            spans.append(span)
+        results.append(problem)
+    return results
 
 
-def validate_skills_edits(
-    edits: list[SkillsEdit],
-    paragraphs: list[str],
-    job_description: str,
-    skills: Sequence[str],
-    skills_section: Collection[int],
+def _flag_problem(
+    flag: Flag, paragraphs: list[str], job_description: str
+) -> str | None:
+    if not 0 <= flag.paragraph < len(paragraphs):
+        return f"paragraph {flag.paragraph} is not a body paragraph"
+    if problem := _quote_problem(flag.jd_quote, job_description):
+        return problem
+    if not flag.suggestion.strip():
+        return "suggestion is empty"
+    if not flag.reason.strip():
+        return "reason is empty"
+    return None
+
+
+def validate_flags(
+    flags: list[Flag], paragraphs: list[str], job_description: str
 ) -> list[str | None]:
-    """Each skills edit's result in order: None when it passes, else why it is dropped (PRD 04, "Skills section")."""
-    return _validated(
-        edits,
-        lambda edit, taken: _skills_problem(
-            edit, paragraphs, job_description, skills, skills_section, taken
-        ),
-        lambda edit: edit.paragraph,
-    )
+    """Each flag's result in order: None when it passes, else why it is dropped (PRD 04, "Validation")."""
+    results = []
+    passed = 0
+    for flag in flags:
+        problem = _flag_problem(flag, paragraphs, job_description)
+        if problem is None:
+            if passed == MAX_FLAGS:
+                problem = f"only the first {MAX_FLAGS} flags that pass are kept"
+            else:
+                passed += 1
+        results.append(problem)
+    return results
 
 
-def _skills_comment(edit: SkillsEdit) -> str:
-    quote = (edit.jd_quote or "").strip()
+def _edit_comment(edit: Edit) -> str:
     lines = [f"Goal: {edit.goal}"]
-    if quote:
+    if edit.jd_quote:
         lines.append(f'Posting: "{edit.jd_quote}"')
     lines.append(f"Reason: {edit.reason}")
     return "\n".join(lines)
+
+
+def _flag_comment(flag: Flag) -> str:
+    return "\n".join(
+        [
+            "For you to decide; this is not a change.",
+            f"Suggestion: {flag.suggestion}",
+            f'Posting: "{flag.jd_quote}"',
+            f"Reason: {flag.reason}",
+        ]
+    )
 
 
 def _tracked_edit(
@@ -378,36 +390,36 @@ def _object_items[Item](
 
 
 def parse_proposal(text: str) -> Proposal:
-    """The agent's final text as a proposal; anything but a JSON `{edits, skills_edits, explanation}` object raises."""
+    """The agent's final text as a proposal; anything but a JSON `{edits, flags, explanation}` object raises."""
     try:
         raw = json.loads(text)
     except json.JSONDecodeError as error:
         raise JsaError(f"the redline agent's output is not JSON: {error}") from None
     if (
         not isinstance(raw, dict)
-        or not isinstance(raw.get("edits"), list)
-        or not isinstance(raw.get("skills_edits"), list)
-        or "explanation" not in raw
+        or raw.keys() != _OUTPUT_KEYS
+        or not isinstance(raw["edits"], list)
+        or not isinstance(raw["flags"], list)
         or not isinstance(raw["explanation"], str | None)
     ):
         raise JsaError(
-            "the redline agent's output is not a JSON object with an edits array, "
-            "a skills_edits array, and an explanation string or null"
+            "the redline agent's output is not a JSON object with exactly an edits array, "
+            "a flags array, and an explanation string or null"
         )
-    edits = _object_items(raw, "edits", _FIELDS, Edit)
-    skills_edits = _object_items(raw, "skills_edits", _SKILLS_FIELDS, SkillsEdit)
+    edits = _object_items(raw, "edits", _EDIT_FIELDS, Edit)
+    flags = _object_items(raw, "flags", _FLAG_FIELDS, Flag)
     explanation = raw["explanation"]
-    # `null`, not an empty string, is how a reply with edits carries no explanation.
+    # `null`, not an empty string, is how a reply with proposals carries no explanation.
     valid = (
         explanation is None
-        if edits or skills_edits
+        if edits or flags
         else bool(explanation and explanation.strip())
     )
     if not valid:
         raise JsaError(
-            "the redline agent's explanation must be non-empty exactly when it proposes no edits"
+            "the redline agent's explanation must be non-empty exactly when it proposes nothing"
         )
-    return Proposal(edits, skills_edits, explanation)
+    return Proposal(edits, flags, explanation)
 
 
 def assemble_redline_prompt(
@@ -415,10 +427,13 @@ def assemble_redline_prompt(
     paragraphs: list[str],
     skills: Sequence[str] = (),
     skills_section: Collection[int] = (),
+    bold: Collection[int] = (),
 ) -> str:
     """The posting, the indexed resume paragraphs, and the skills list are the only inputs (PRD 04, XC-13)."""
     numbered = "\n".join(
-        f"{index}: {text}" for index, text in enumerate(paragraphs) if text.strip()
+        f"{index}{' [bold]' if index in bold else ''}: {text}"
+        for index, text in enumerate(paragraphs)
+        if text.strip()
     )
     slots = {
         "JOB_DESCRIPTION": Slot(job_description, "the posting's job description"),
@@ -460,21 +475,23 @@ def _replace_copy(document: Document, copy: Path) -> None:
 
 
 def edits_applied(edits_file: Path) -> bool:
-    """Whether the recorded redline wrote any edit, of either kind, into the resume copy."""
+    """Whether the recorded redline wrote any proposal, an edit or a flag, into the resume copy."""
     try:
         record = json.loads(edits_file.read_text(encoding="utf-8"))
+        if not isinstance(record, dict) or record.keys() != _RECORD_KEYS:
+            raise ValueError("expected exactly explanation, edits, and flags")
         return any(
-            edit["validation"] is None
-            for edit in record["edits"] + record.get("skills_edits", [])
+            proposal["validation"] is None
+            for proposal in record["edits"] + record["flags"]
         )
     except (ValueError, KeyError, TypeError) as error:
         raise JsaError(f"{edits_file} is not a redline record: {error}") from error
 
 
-def _record(edits: Sequence, results: list[str | None]) -> list[dict]:
+def _record(proposals: Sequence, results: list[str | None]) -> list[dict]:
     return [
-        {**asdict(edit), "validation": problem}
-        for edit, problem in zip(edits, results, strict=True)
+        {**asdict(proposal), "validation": problem}
+        for proposal, problem in zip(proposals, results, strict=True)
     ]
 
 
@@ -498,44 +515,41 @@ def redline_resume(
     # The skills section gets its latitude only while the skills list is in use.
     section = frozenset(located or ()) if skills else frozenset()
     proposal = run_redline(
-        assemble_redline_prompt(job_description, paragraphs, skills, section),
+        assemble_redline_prompt(
+            job_description,
+            paragraphs,
+            skills,
+            section,
+            bold_paragraphs(document),
+        ),
         settings,
     )
-    edit_results = validate_edits(proposal.edits, paragraphs, job_description, section)
-    skills_results = validate_skills_edits(
-        proposal.skills_edits, paragraphs, job_description, skills, section
+    edit_results = validate_edits(
+        proposal.edits, paragraphs, job_description, skills, section
     )
+    flag_results = validate_flags(proposal.flags, paragraphs, job_description)
     tracked = [
         _tracked_edit(
-            paragraphs,
-            edit.paragraph,
-            edit.find,
-            edit.replace,
-            f'Posting: "{edit.jd_quote}"\nSame meaning: {edit.why_same_meaning}',
+            paragraphs, edit.paragraph, edit.find, edit.replace, _edit_comment(edit)
         )
         for edit, problem in zip(proposal.edits, edit_results, strict=True)
         if problem is None
-    ] + [
-        _tracked_edit(
-            paragraphs,
-            edit.paragraph,
-            edit.find,
-            edit.replace,
-            _skills_comment(edit),
-        )
-        for edit, problem in zip(proposal.skills_edits, skills_results, strict=True)
+    ]
+    comments = [
+        ParagraphComment(flag.paragraph, _flag_comment(flag))
+        for flag, problem in zip(proposal.flags, flag_results, strict=True)
         if problem is None
     ]
-    if tracked:
-        apply_edits(document, tracked)
+    if tracked or comments:
+        apply_edits(document, tracked, comments)
         _replace_copy(document, copy)
     record = {
         "explanation": proposal.explanation,
         "edits": _record(proposal.edits, edit_results),
-        "skills_edits": _record(proposal.skills_edits, skills_results),
+        "flags": _record(proposal.flags, flag_results),
     }
     edits_file.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-    results = edit_results + skills_results
+    results = edit_results + flag_results
     return RedlineResult(
         results.count(None), len(results) - results.count(None), located is not None
     )

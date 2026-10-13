@@ -22,7 +22,7 @@ region = "iad"
 # drive_folder_id = "replace-with-your-folder-id"
 
 # Any Claude model that accepts an effort setting will run; the app keeps no list.
-# Recommended: claude-fable-5-1 at "medium" for the ATS redline.
+# Recommended: claude-fable-5-1 at "medium" for the resume redline.
 [agents.redline]
 model  = "claude-fable-5-1"
 effort = "medium"
