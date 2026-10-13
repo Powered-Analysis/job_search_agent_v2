@@ -26,8 +26,6 @@ from jsa.resume import load_resume
 from jsa.tracker import today
 
 JOB_POSTING = "job_posting.md"
-CHECKLIST = "resume_checklist.md"
-CHECKLIST_PDF = "resume_checklist.pdf"
 REDLINE_EDITS = "redline_edits.json"
 
 

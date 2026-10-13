@@ -1,4 +1,4 @@
-"""`jsa generate` (PRD 04 "Resume checklist", "ATS redline"): re-check, build the packet, write the checklist and the redline, track the row."""
+"""`jsa generate` (PRD 04 "ATS redline"): re-check, build the packet, write the redline, track the row."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
@@ -8,17 +8,10 @@ from pathlib import Path
 import httpx
 
 from jsa import db
-from jsa.checklist import (
-    assemble_checklist_prompt,
-    render_checklist_pdf,
-    run_checklist,
-)
 from jsa.config import generate_workers
 from jsa.docx_pdf import ensure_pdf
 from jsa.errors import JsaError, one_line
 from jsa.packet import (
-    CHECKLIST,
-    CHECKLIST_PDF,
     JOB_POSTING,
     REDLINE_EDITS,
     ensure_head,
@@ -28,15 +21,13 @@ from jsa.packet import (
 from jsa.profile import (
     AgentSettings,
     Config,
-    PacketAgents,
     PacketSources,
     load_config,
-    packet_agents,
     packet_sources,
+    redline_settings,
     tracker_spreadsheet_id,
 )
 from jsa.redline import edits_applied, parse_skills, redline_resume
-from jsa.resume import render_resume
 from jsa.tracker import append_tracked, today
 from jsa.verify import CLOSED_OUTCOMES, Verifier, recheck
 
@@ -49,24 +40,6 @@ def _job_description(job: db.PacketJob, directory: Path) -> str | None:
         return (directory / JOB_POSTING).read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
-
-
-def _build_checklist(
-    job_description: str,
-    copy: Path,
-    directory: Path,
-    job: db.PacketJob,
-    settings: AgentSettings,
-) -> None:
-    prompt = assemble_checklist_prompt(
-        job.title, job.company, job_description, render_resume(copy)
-    )
-    text = run_checklist(prompt, settings)
-    pdf = directory / CHECKLIST_PDF
-    # A failed render must not leave the old checklist's PDF beside the new checklist.
-    pdf.unlink(missing_ok=True)
-    (directory / CHECKLIST).write_text(text + "\n", encoding="utf-8")
-    render_checklist_pdf(directory / CHECKLIST, pdf)
 
 
 def _build_redline(
@@ -107,36 +80,23 @@ def build_packet(
     job: db.PacketJob,
     config: Config,
     sources: PacketSources,
-    agents: PacketAgents,
+    redline: AgentSettings,
     *,
     rewrite: bool,
 ) -> bool:
-    """Complete the packet, its checklist, and its redline; False when it must stay untracked for lack of a JD."""
+    """Complete the packet and its redline; False when it must stay untracked for lack of a JD."""
     directory, copy = packet_paths(config, job)
     # PRD 04: `--id` (rewrite) refreshes `job_posting.md` from the row, as refetch relies on.
     ensure_head(
         directory, job, packet_copies(config, job, sources), refresh_posting=rewrite
     )
-    checklist = directory / CHECKLIST
-    pdf = directory / CHECKLIST_PDF
     edits_file = directory / REDLINE_EDITS
-    # XC-10: an interrupted run resumes after the steps it already finished, even a checklist whose PDF failed.
-    need_checklist = rewrite or not checklist.exists()
     # PRD 04: the copy may hold changes the user is reviewing, so no refresh reruns a finished redline.
-    need_redline = not edits_file.exists()
-    job_description = ""
-    if need_checklist or need_redline:
+    if not edits_file.exists():
         job_description = _job_description(job, directory)
         if not (job_description or "").strip():
             return False
-    if need_checklist:
-        _build_checklist(job_description, copy, directory, job, agents.checklist)
-    elif not pdf.exists():
-        render_checklist_pdf(checklist, pdf)
-    if need_redline:
-        _build_redline(
-            job_description, job, directory, copy, agents.redline, sources.skills
-        )
+        _build_redline(job_description, job, directory, copy, redline, sources.skills)
     elif not edits_applied(edits_file):
         # Re-entry: the redline finished, but the run died before the unchanged copy's PDF.
         ensure_pdf(copy)
@@ -155,7 +115,7 @@ def _still_open(
 
 
 def track_posting(spreadsheet_id: str, added: date, posting_id: int) -> None:
-    # A fresh connection: the server drops one left idle through the checklist runs.
+    # A fresh connection: the server drops one left idle through the redline runs.
     with closing(db.connect()) as conn:
         for entry in db.tracker_queue(conn, posting_id):
             append_tracked(conn, spreadsheet_id, added, entry)
@@ -165,7 +125,7 @@ def generate(client: httpx.Client, posting_id: int | None, *, dry_run: bool) -> 
     sources = packet_sources()
     spreadsheet_id = tracker_spreadsheet_id()
     config = load_config()
-    agents = packet_agents(config)
+    redline = redline_settings(config)
     workers = generate_workers()
     conn = db.connect()
     queue = db.packet_queue(conn, posting_id)
@@ -190,7 +150,7 @@ def generate(client: httpx.Client, posting_id: int | None, *, dry_run: bool) -> 
                 job,
                 config,
                 sources,
-                agents,
+                redline,
                 rewrite=posting_id is not None,
             ): job
             for job in queue

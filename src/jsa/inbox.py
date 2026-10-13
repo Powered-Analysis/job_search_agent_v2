@@ -27,8 +27,8 @@ from jsa.profile import (
     inbox_drive_folder,
     inbox_settings,
     load_config,
-    packet_agents,
     packet_sources,
+    redline_settings,
     tracker_spreadsheet_id,
 )
 from jsa.tracker import today
@@ -192,11 +192,11 @@ def _deliver(posting_id: int, *, has_jd: bool) -> str:
     # Checked before the slow build: the tracker row waits on the upload.
     spreadsheet_id = tracker_spreadsheet_id()
     drive_folder_id = inbox_drive_folder(config)
-    agents = packet_agents(config)
+    redline = redline_settings(config)
     sources = packet_sources()
     with tempfile.TemporaryDirectory() as scratch:
         built = config.model_copy(update={"packets_dir": Path(scratch)})
-        if not build_packet(job, built, sources, agents, rewrite=True):
+        if not build_packet(job, built, sources, redline, rewrite=True):
             return NEEDS_JD
         deliver_packet(drive_folder_id, packet_paths(built, job)[0])
     track_posting(spreadsheet_id, today(), posting_id)

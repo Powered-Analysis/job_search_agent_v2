@@ -2,8 +2,7 @@
 
 A personal job-search pipeline. A scheduled cloud search finds postings that fit your profile and
 stores each one once in a hosted database. You decide Apply or Skip on each at the terminal. Each
-Apply becomes an application packet (the job description, a copy of your resume, a checklist for
-revising it, and an ATS redline of the resume's wording) and a row in your tracker Sheet. `jsa refine` learns from your decisions and proposes
+Apply becomes an application packet (the job description, a copy of your resume with an ATS redline of its wording as tracked changes) and a row in your tracker Sheet. `jsa refine` learns from your decisions and proposes
 edits to your search profile.
 
 The product is specified in [`prds/`](prds/00-overview.md); start with `prds/00-overview.md`.
@@ -30,7 +29,7 @@ Do this once; step 3 puts the keys in `.env`.
   - `claude`: an Anthropic Console API key (`JSA_SEARCH_ANTHROPIC_API_KEY`);
   - `perplexity`: a Perplexity API key (`PERPLEXITY_API_KEY`);
   - `gemini`: a Google AI Studio key (`GEMINI_API_KEY`).
-- **Claude for the local commands** (`generate`'s resume checklist and redline, `refine`): either
+- **Claude for the local commands** (`generate`'s redline, `refine`): either
   `claude setup-token` for an OAuth token (`CLAUDE_CODE_OAUTH_TOKEN`) or an Anthropic API key
   (`ANTHROPIC_API_KEY`). Set exactly one: the CLI prefers the API key, so with both set the OAuth
   login fails with a 401.
@@ -59,7 +58,7 @@ cp -r profile.example profile
 
 | File | What it holds |
 |---|---|
-| `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the resume checklist, the ATS redline, and refine |
+| `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the ATS redline and refine |
 | `profile/resume.docx` | your single base resume |
 | `profile/cover_letter.*` | optional; your cover letter, copied into each packet (a `.docx` also gets a PDF) |
 | `profile/resume_skills.md` | optional; the skills you have, one per line, comma-separated, or both in one file. The redline may add, remove, or reword skills in your resume's `Skills` section, using only words from this list or the posting |
@@ -232,8 +231,7 @@ credentials leave it only as the inbox app's two exported ones, each scoped to i
 
 **Local tools:** `uv`; Google Chrome (`jsa review`); the `gws` CLI, signed in with `gws auth login`
 (while the OAuth consent screen is in testing status the token expires after 7 days; publish it, or
-sign in again when `jsa track` reports exit code 2); `flyctl` (`jsa deploy`); `pandoc` and `typst`
-(`jsa generate` renders each checklist to a PDF); LibreOffice (`soffice`, override `JSA_SOFFICE_BIN`; renders the resume and cover letter PDFs); Google Drive for Desktop (with the inbox, `packets_dir` mirrors the Drive packets folder); Microsoft Word (reviewing the redline); the Claude Code CLI (the local Claude commands).
+sign in again when `jsa track` reports exit code 2); `flyctl` (`jsa deploy`); LibreOffice (`soffice`, override `JSA_SOFFICE_BIN`; renders the resume and cover letter PDFs); Google Drive for Desktop (with the inbox, `packets_dir` mirrors the Drive packets folder); Microsoft Word (reviewing the redline); the Claude Code CLI (the local Claude commands).
 
 **The profile:** `config.toml`, `resume.docx`, `search/search.toml`, and the six `search/*.md`
 fragments, seeded from `profile.example/` (step 4).
@@ -252,14 +250,14 @@ copying the tracker with `gws`; then `uv run jsa deploy`.
 | `jsa revise --id <id>` or `--last` | amend the decision and note of a decided posting; `--last` picks the one decided most recently |
 | `jsa add <URL>` | add a posting you already want, decided Apply |
 | `jsa inbox` | the inbox machine's entrypoint: add each posting emailed to the jobs mailbox, then build its packet, upload it to the Drive packets folder, and track it (needs `[inbox] senders` and `drive_folder_id`, `JSA_INBOX_GWS_CREDENTIALS`, and `JSA_GWS_CREDENTIALS`) |
-| `jsa generate` | build each Apply posting's packet with a resume checklist and an ATS redline, then track it |
+| `jsa generate` | build each Apply posting's packet with an ATS redline, then track it |
 | `jsa packet`, `jsa track` | the two halves of `generate`, on their own |
 | `jsa refetch` | update stored postings, tracker titles, and packets from the employer's edits |
 | `jsa refine` | propose search-profile edits learned from your decisions; resolve the conflict-marked copies in `profile/refine/`, then `jsa refine --accept` or `--reject` |
 | `jsa search --agent <agent> --window-hours <n>` | run one search by hand |
 
-After `jsa generate`, revise each packet's resume copy by hand against its checklist. The packet's
-resume files show the resume's condition:
+After `jsa generate`, review each packet's resume copy. The packet's resume files show the resume's
+condition:
 
 - **`.docx` and `.pdf`:** the redline changed nothing, so the PDF is ready to submit.
 - **A lone `.docx`:** the redline wrote tracked changes into the copy. Open it in Word to accept or
@@ -272,7 +270,9 @@ written, so export it again yourself after editing a `.docx`.
 `redline_edits.json` records every proposal and why any was dropped, and, when none was proposed, the
 agent's explanation of why (a resume already well aligned, or one with little vocabulary in common
 with the posting). While it exists no command redlines the packet again. To redline a revised resume
-again, delete it and run `jsa generate --id <id>`.
+again, delete it and run `jsa generate --id <id>`. `jsa refetch` rewrites a packet's `job_posting.md` when the
+posting changes, but never reruns a finished redline: if the description changed after the redline
+was built, it flags the packet and names the file to delete.
 
 ## Portability
 
