@@ -1017,37 +1017,58 @@ def test_image_installs_no_dev_dependencies():
 
 
 def tool_install_run() -> str:
-    """The RUN instruction that installs the inbox's external tools (gws, pandoc, typst)."""
-    runs = [a for k, a in dockerfile_instructions() if k == "RUN" and "pandoc" in a]
+    """The RUN instruction that installs the inbox's external tool, `gws`."""
+    runs = [a for k, a in dockerfile_instructions() if k == "RUN" and "gws" in a]
     assert len(runs) == 1
     return runs[0]
 
 
-def test_image_carries_gws_pandoc_and_typst():
+def test_image_carries_gws():
     run = tool_install_run()
-    for tool in ("gws", "pandoc", "typst"):
-        assert tool in run
-    # The pinned releases are fetched over HTTPS.
+    # The pinned release is fetched over HTTPS.
     assert "https://" in run
 
 
-def test_image_purges_curl_and_xz_in_the_layer_that_installs_the_tools():
-    # Purging in a later layer would leave the packages in the image's earlier layer.
+def test_image_carries_no_pandoc_or_typst():
+    text = (REPO_ROOT / "Dockerfile").read_text().lower()
+    for removed in ("pandoc", "typst"):
+        assert removed not in text
+
+
+def test_image_installs_gws_and_libreoffice_before_it_drops_to_the_jsa_user():
+    instructions = dockerfile_instructions()
+    user = next(
+        i for i, (k, a) in enumerate(instructions) if k == "USER" and a == "jsa"
+    )
+    for tool in ("gws", "libreoffice"):
+        installs = [
+            i
+            for i, (k, a) in enumerate(instructions)
+            if k == "RUN" and tool in a.lower()
+        ]
+        assert installs, tool
+        assert max(installs) < user, tool
+
+
+def test_image_purges_curl_in_the_layer_that_installs_the_tool():
+    # Purging in a later layer would leave the package in the image's earlier layer.
     run = tool_install_run()
     purges = re.findall(r"apt-get purge\b[^&|;]*", run)
     assert purges
-    purged = {w for p in purges for w in p.split()}
-    assert {"curl", "xz-utils"} <= purged
+    assert "curl" in {w for p in purges for w in p.split()}
 
 
-def test_image_purges_curl_and_xz_only_after_the_last_download_and_unpack():
+def test_image_purges_curl_only_after_the_last_download():
     run = tool_install_run()
     before, _, after = run.partition("apt-get purge")
-    assert "xz-utils" in before
     assert "curl " in before
-    assert "--xz" in before
-    # Nothing after the purge still downloads or unpacks.
-    assert not re.search(r"\b(curl|tar)\b", after.partition("&&")[2])
+    # Nothing after the purge still downloads.
+    assert not re.search(r"\bcurl\b", after.partition("&&")[2])
+
+
+def test_image_needs_no_xz_to_unpack_anything():
+    text = (REPO_ROOT / "Dockerfile").read_text()
+    assert not re.search(r"\bxz-utils\b|--xz\b", text)
 
 
 def test_image_keeps_ca_certificates_for_https():
@@ -1057,10 +1078,10 @@ def test_image_keeps_ca_certificates_for_https():
     assert not any("ca-certificates" in p for p in purges)
 
 
-def test_image_installs_curl_and_xz_nowhere_else():
+def test_image_installs_curl_nowhere_else():
     for keyword, args in dockerfile_instructions():
         if keyword == "RUN" and args != tool_install_run():
-            assert not re.search(r"\b(curl|xz-utils)\b", args)
+            assert not re.search(r"\bcurl\b", args)
 
 
 def test_image_leaves_no_download_cache_or_apt_lists_behind():
@@ -1607,11 +1628,9 @@ def launched_nothing(all_calls: list[list[str]]) -> bool:
     )
 
 
-@pytest.mark.parametrize("tool", ["gws", "pandoc", "typst"])
-def test_image_adds_each_inbox_tool_at_a_pinned_version(tool):
+def test_image_adds_gws_at_a_pinned_version():
     text = (REPO_ROOT / "Dockerfile").read_text()
-    assert tool in text
-    assert re.search(rf"{tool}\S*\s*[=-]\s*v?\d+\.\d+", text, re.IGNORECASE), tool
+    assert re.search(r"gws\S*\s*[=-]\s*v?\d+\.\d+", text, re.IGNORECASE)
     assert "latest" not in text.lower()
 
 
@@ -2001,7 +2020,6 @@ INBOX_PROFILE_BREAKS = {
         r"^tracker_spreadsheet_id\s*=.*\n",
         "tracker_spreadsheet_id",
     ),
-    "checklist": (r"^\[agents\.checklist\]\n(?:(?![\[#]).+\n)*", "checklist"),
     "redline": (r"^\[agents\.redline\]\n(?:(?![\[#]).+\n)*", "redline"),
     "inbox_app": (r'^app\s*=\s*"jsa-example-inbox"\n', "app"),
     "drive_folder_id": (r"^drive_folder_id\s*=.*\n", "drive_folder_id"),
@@ -2020,6 +2038,31 @@ def test_a_missing_inbox_profile_value_aborts_before_building(
     code, output = jsa_deploy(monkeypatch, capsys, *flags)
     assert_aborted_before_building(code, calls(log))
     assert mention in output
+    assert "config.toml" in output
+
+
+def test_the_inbox_validation_needs_the_redline_table_and_nothing_about_a_checklist(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    config = (profile / "config.toml").read_text(encoding="utf-8")
+    assert "[agents.redline]" in config
+    assert "checklist" not in config
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    assert "checklist" not in output.lower()
+    assert pick(calls(log), "deploy")
+
+
+def test_a_deployed_config_that_still_has_the_checklist_table_aborts_naming_it(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    with (profile / "config.toml").open("a", encoding="utf-8") as config:
+        config.write('\n[agents.checklist]\nmodel = "m"\neffort = "low"\n')
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert_aborted_before_building(code, calls(log))
+    assert "checklist" in output
     assert "config.toml" in output
 
 

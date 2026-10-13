@@ -1,4 +1,4 @@
-"""A stub `soffice` for the PDF-copy tests (PRD 06 override rule: `JSA_SOFFICE_BIN`, as `JSA_PANDOC_BIN` stands in for `pandoc`)."""
+"""A stub `soffice` for the PDF-copy tests (PRD 06 override rule: `JSA_SOFFICE_BIN`, as `JSA_GWS_BIN` stands in for `gws`)."""
 
 import json
 import sys

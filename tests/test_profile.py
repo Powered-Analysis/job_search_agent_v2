@@ -107,7 +107,7 @@ def test_the_example_search_toml_has_no_gemini_runner_table():
     assert "gemini" not in tomllib.loads(text).get("runners", {})
 
 
-def test_the_example_config_toml_names_the_recommended_checklist_and_refine_models():
+def test_the_example_config_toml_names_the_recommended_redline_and_refine_models():
     text = (EXAMPLE_DIR / "config.toml").read_text(encoding="utf-8")
     assert "claude-fable-5-1" in text
     assert "claude-opus-5-5" in text
@@ -253,8 +253,8 @@ def test_a_valid_config_loads_typed_values(profile):
     assert config.tracker_spreadsheet_id == "sheet-id"
     assert config.fly.app == "jsa-example"
     assert config.fly.region == "iad"
-    assert config.agents.checklist.model == "claude-fable-5-1"
-    assert config.agents.checklist.effort == "medium"
+    assert config.agents.redline.model == "claude-fable-5-1"
+    assert config.agents.redline.effort == "medium"
     assert config.agents.refine.model == "claude-opus-5-5"
     assert config.agents.refine.effort == "high"
 
@@ -351,7 +351,7 @@ def test_an_unknown_key_in_search_toml_raises_naming_the_file(profile, replaceme
         ),
         pytest.param({'region = "iad"': 'region = "iad"\nzone = "a"'}, id="fly"),
         pytest.param(
-            {'effort = "medium"': 'effort = "medium"\nextra = 1'}, id="checklist"
+            {'effort = "medium"': 'effort = "medium"\nextra = 1'}, id="redline"
         ),
         pytest.param(
             {"[agents.refine]": "[agents.rewrite]\nmodel = 'x'\n[agents.refine]"},
@@ -517,12 +517,8 @@ def test_every_well_formed_run_at_is_accepted(profile, run_at):
 @pytest.mark.parametrize(
     "replacements",
     [
-        pytest.param(
-            {'effort = "medium"': 'effort = "extreme"'}, id="checklist-effort"
-        ),
-        pytest.param(
-            {'model = "claude-fable-5-1"': 'model = ""'}, id="checklist-model"
-        ),
+        pytest.param({'effort = "medium"': 'effort = "extreme"'}, id="redline-effort"),
+        pytest.param({'model = "claude-fable-5-1"': 'model = ""'}, id="redline-model"),
         pytest.param({'effort = "high"': 'effort = ""'}, id="refine-effort"),
         pytest.param({'model = "claude-opus-5-5"': 'model = ""'}, id="refine-model"),
         pytest.param({'app = "jsa-example"': 'app = ""'}, id="fly-app"),
@@ -537,7 +533,7 @@ def test_an_invalid_config_value_raises_at_load(profile, replacements):
 @pytest.mark.parametrize("model", ["claude-fable-5-1", "anything-the-provider-accepts"])
 def test_any_non_empty_agent_model_is_accepted_in_config(profile, model):
     config_with(profile, {'model = "claude-fable-5-1"': f'model = "{model}"'})
-    assert load_config().agents.checklist.model == model
+    assert load_config().agents.redline.model == model
 
 
 # --- resume_skills.md (issue #132; PRD 04 "Skills section", PRD 06 "Configuration surface") ---

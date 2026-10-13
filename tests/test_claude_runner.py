@@ -610,7 +610,7 @@ def test_run_agent_given_no_limit_runs_unbounded(sdk, monkeypatch, limits):
 
 
 def test_the_single_turn_callers_arm_no_wall_clock_limit(sdk, limits):
-    agent_loop.run_single_turn("p", SETTINGS, agent="checklist")
+    agent_loop.run_single_turn("p", SETTINGS, agent="redline")
     assert limits.armed == [None]
 
 

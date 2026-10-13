@@ -16,15 +16,12 @@ import docx
 import httpx
 import pytest
 from conftest import drop_all_tables
-from pandoc_helpers import install_pandoc
 from profile_helpers import copy_example, write_config_toml
 from soffice_helpers import rendered
 from test_generate import (
     BASE_LINE,
-    CHECKLIST_TEXT,
     CONFIG,
     LONG_AGO,
-    PDF,
     QUUX_EDIT,
     REDLINE_EDITS,
     Agent,
@@ -68,7 +65,6 @@ OLD_JD = "Old description of the role."
 NEW_JD = "Brand new description of the Frobnicator role."
 OLD_LOCATION = "Boston, MA"
 NEW_LOCATION = "Remote, US"
-OLD_CHECKLIST = "OLD CHECKLIST"
 REVISION = "USER REVISION LINE"
 OLD_DIR = "Acme Widgets - Staff Engineer"
 NEW_DIR = "Acme Widgets - Principal Engineer"
@@ -127,12 +123,6 @@ def gws(tmp_path, monkeypatch):
     for name in ("STUB_GET_FAIL", "STUB_UPDATE_FAIL"):
         monkeypatch.delenv(name, raising=False)
     return log
-
-
-@pytest.fixture(autouse=True)
-def pandoc(tmp_path, monkeypatch):
-    """A stub `pandoc` whose invocations are logged; returns the log's path."""
-    return install_pandoc(tmp_path, monkeypatch)
 
 
 @pytest.fixture
@@ -215,7 +205,6 @@ def make_packet(conn, packets, posting_id, *, directory=OLD_DIR, copy=OLD_COPY):
     (folder / "job_posting.md").write_text(
         column(conn, posting_id, "jd_markdown"), encoding="utf-8"
     )
-    (folder / "resume_checklist.md").write_text(OLD_CHECKLIST, encoding="utf-8")
     (folder / "notes.txt").write_text("my own notes", encoding="utf-8")
     document = docx.Document()
     document.add_paragraph(BASE_LINE)
@@ -564,13 +553,9 @@ def test_a_retitled_row_with_a_packet_is_renamed_and_regenerated_in_place(
     assert (renamed / NEW_COPY).read_bytes() == revised
     assert not (renamed / OLD_COPY).exists()
     assert NEW_JD in (renamed / "job_posting.md").read_text(encoding="utf-8")
-    checklist = (renamed / "resume_checklist.md").read_text(encoding="utf-8")
-    assert checklist.strip() == CHECKLIST_TEXT.strip()
     assert (renamed / "notes.txt").read_text(encoding="utf-8") == "my own notes"
     assert {path.name for path in renamed.iterdir()} == {
         "job_posting.md",
-        "resume_checklist.md",
-        PDF,
         REDLINE_EDITS,
         "notes.txt",
         NEW_COPY,
@@ -578,7 +563,7 @@ def test_a_retitled_row_with_a_packet_is_renamed_and_regenerated_in_place(
     }
 
 
-def test_the_refreshed_checklist_assesses_the_users_revised_copy_and_the_new_posting(
+def test_the_redline_reads_the_users_revised_copy_and_the_new_posting(
     rdb, web, gws, env, agent, monkeypatch, capsys
 ):
     _, packets = env
@@ -587,13 +572,9 @@ def test_the_refreshed_checklist_assesses_the_users_revised_copy_and_the_new_pos
     employer(web, rdb, posting_id)
     set_sheet(gws, (posting_id, ""))
     refetch(monkeypatch, capsys)
-    [prompt] = agent.checklist_prompts
+    [prompt] = agent.prompts
     assert REVISION in prompt
-    assert NEW_TITLE in prompt and NEW_JD in prompt
-    assert OLD_JD not in prompt
-    [redline_prompt] = agent.redline_prompts
-    assert REVISION in redline_prompt
-    assert NEW_JD in redline_prompt and OLD_JD not in redline_prompt
+    assert NEW_JD in prompt and OLD_JD not in prompt
 
 
 def test_a_description_only_change_regenerates_without_renaming(
@@ -610,11 +591,8 @@ def test_a_description_only_change_regenerates_without_renaming(
     assert {path.name for path in packets.iterdir()} == {OLD_DIR}
     assert (folder / OLD_COPY).read_bytes() == revised
     assert NEW_JD in (folder / "job_posting.md").read_text(encoding="utf-8")
-    checklist = (folder / "resume_checklist.md").read_text(encoding="utf-8")
-    assert checklist.strip() == CHECKLIST_TEXT.strip()
-    assert len(agent.checklist_calls) == 1
-    assert len(agent.redline_calls) == 1
-    assert (folder / PDF).read_text(encoding="utf-8") == f"PDF OF: {checklist}"
+    assert len(agent.calls) == 1
+    assert REDLINE_EDITS in {path.name for path in folder.iterdir()}
     assert title_updates(gws) == []
 
 
@@ -701,6 +679,117 @@ def test_a_taken_directory_name_blocks_the_rename_and_flags_the_row(
     assert (folder / "notes.txt").read_bytes() == before[folder]["notes.txt"]
 
 
+# --- a finished redline and a changed description (PRD 04 "Packet refresh on drift") ---
+
+
+def packet_with_record(rdb, packets, posting_id, record=None):
+    folder = make_packet(rdb, packets, posting_id)
+    record = record or json.dumps(
+        {"explanation": "Already aligned.", "edits": [], "skills_edits": []}
+    )
+    (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
+    return folder, record
+
+
+def test_a_changed_description_with_a_finished_redline_flags_the_row_naming_the_file_and_the_command(
+    rdb, web, gws, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    folder, record = packet_with_record(rdb, packets, posting_id)
+    revised = (folder / OLD_COPY).read_bytes()
+    employer(web, rdb, posting_id, title=OLD_TITLE, location=OLD_LOCATION)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert code != 0
+    assert str(folder / REDLINE_EDITS) in output
+    assert f"jsa generate --id {posting_id}" in output
+    assert agent.calls == []
+    assert (folder / REDLINE_EDITS).read_text(encoding="utf-8") == record
+    assert (folder / OLD_COPY).read_bytes() == revised
+    assert NEW_JD in (folder / "job_posting.md").read_text(encoding="utf-8")
+    assert (folder / "notes.txt").exists()
+
+
+def test_a_retitle_and_a_changed_description_with_a_finished_redline_renames_then_flags_the_new_path(
+    rdb, web, gws, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    folder, record = packet_with_record(rdb, packets, posting_id)
+    revised = (folder / OLD_COPY).read_bytes()
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    renamed = packets / NEW_DIR
+    assert code != 0
+    assert str(renamed / REDLINE_EDITS) in output
+    assert f"jsa generate --id {posting_id}" in output
+    assert {path.name for path in packets.iterdir()} == {NEW_DIR}
+    assert (renamed / NEW_COPY).read_bytes() == revised
+    assert (renamed / REDLINE_EDITS).read_text(encoding="utf-8") == record
+    assert NEW_JD in (renamed / "job_posting.md").read_text(encoding="utf-8")
+    assert agent.calls == []
+    assert title_updates(gws) != []
+
+
+def test_a_title_only_change_with_a_finished_redline_flags_nothing(
+    rdb, web, gws, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    _, record = packet_with_record(rdb, packets, posting_id)
+    employer(web, rdb, posting_id, body=OLD_JD)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert REDLINE_EDITS not in output
+    assert "jsa generate" not in output
+    renamed = packets / NEW_DIR
+    assert (renamed / REDLINE_EDITS).read_text(encoding="utf-8") == record
+    assert agent.calls == []
+
+
+def test_a_changed_description_without_a_redline_record_runs_the_redline_and_flags_nothing(
+    rdb, web, gws, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb)
+    folder = make_packet(rdb, packets, posting_id)
+    employer(web, rdb, posting_id, title=OLD_TITLE, location=OLD_LOCATION)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert "jsa generate" not in output
+    assert len(agent.calls) == 1
+    assert (folder / REDLINE_EDITS).is_file()
+
+
+def test_the_flag_for_a_finished_redline_does_not_stop_the_other_rows(
+    rdb, web, gws, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    held = seed(rdb)
+    packet_with_record(rdb, packets, held)
+    other = seed(rdb, company="Other Labs")
+    make_packet(
+        rdb,
+        packets,
+        other,
+        directory="Other Labs - Staff Engineer",
+        copy="PatExample_Resume_StaffEngineer_OtherLabs.docx",
+    )
+    for posting_id in (held, other):
+        employer(web, rdb, posting_id, title=OLD_TITLE, location=OLD_LOCATION)
+    set_sheet(gws, (held, ""), (other, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert code != 0
+    assert f"jsa generate --id {held}" in output
+    assert f"jsa generate --id {other}" not in output
+    assert len(agent.calls) == 1
+    assert (packets / "Other Labs - Staff Engineer" / REDLINE_EDITS).is_file()
+
+
 OLD_PDF = OLD_COPY.replace(".docx", ".pdf")
 NEW_PDF = NEW_COPY.replace(".docx", ".pdf")
 # A redline record in which no edit was applied, so the packet's resume PDF is a finished file.
@@ -717,7 +806,7 @@ def test_a_retitle_renames_the_resume_pdf_with_the_copy_and_leaves_it_untouched(
     folder = make_packet(rdb, packets, posting_id)
     (folder / OLD_PDF).write_bytes(b"MY OWN EXPORT")
     (folder / REDLINE_EDITS).write_text(NO_EDIT_RECORD, encoding="utf-8")
-    employer(web, rdb, posting_id)
+    employer(web, rdb, posting_id, body=OLD_JD)
     set_sheet(gws, (posting_id, ""))
     code, _ = refetch(monkeypatch, capsys)
     assert code == 0
@@ -726,11 +815,8 @@ def test_a_retitle_renames_the_resume_pdf_with_the_copy_and_leaves_it_untouched(
     assert not (renamed / OLD_PDF).exists()
     assert (renamed / REDLINE_EDITS).read_text(encoding="utf-8") == NO_EDIT_RECORD
     assert not [p for p in renamed.iterdir() if p.name.endswith("_redline.docx")]
-    assert agent.redline_calls == []
-    assert len(agent.checklist_calls) == 1
+    assert agent.calls == []
     assert rendered(soffice) == []
-    checklist = (renamed / "resume_checklist.md").read_text(encoding="utf-8")
-    assert checklist.strip() == CHECKLIST_TEXT.strip()
 
 
 def test_a_retitle_leaves_a_redlined_copy_without_a_pdf_and_renders_none(
@@ -748,18 +834,18 @@ def test_a_retitle_leaves_a_redlined_copy_without_a_pdf_and_renders_none(
     )
     (folder / REDLINE_EDITS).write_text(applied, encoding="utf-8")
     revised = (folder / OLD_COPY).read_bytes()
-    employer(web, rdb, posting_id)
+    employer(web, rdb, posting_id, body=OLD_JD)
     set_sheet(gws, (posting_id, ""))
     code, _ = refetch(monkeypatch, capsys)
     assert code == 0
     renamed = packets / NEW_DIR
     assert (renamed / NEW_COPY).read_bytes() == revised
     assert NEW_PDF not in {path.name for path in renamed.iterdir()}
-    assert agent.redline_calls == []
+    assert agent.calls == []
     assert rendered(soffice) == []
 
 
-def test_a_description_only_change_leaves_the_resume_pdf_and_record_alone(
+def test_a_description_only_change_flags_the_row_and_leaves_the_resume_pdf_and_record_alone(
     rdb, web, gws, env, agent, soffice, monkeypatch, capsys
 ):
     _, packets = env
@@ -769,12 +855,13 @@ def test_a_description_only_change_leaves_the_resume_pdf_and_record_alone(
     (folder / REDLINE_EDITS).write_text(NO_EDIT_RECORD, encoding="utf-8")
     employer(web, rdb, posting_id, title=OLD_TITLE, location=OLD_LOCATION)
     set_sheet(gws, (posting_id, ""))
-    code, _ = refetch(monkeypatch, capsys)
-    assert code == 0
+    code, output = refetch(monkeypatch, capsys)
+    assert code != 0
+    assert str(folder / REDLINE_EDITS) in output
     assert (folder / OLD_PDF).read_bytes() == b"MY OWN EXPORT"
     assert (folder / REDLINE_EDITS).read_text(encoding="utf-8") == NO_EDIT_RECORD
-    assert agent.redline_calls == []
-    assert len(agent.checklist_calls) == 1
+    assert NEW_JD in (folder / "job_posting.md").read_text(encoding="utf-8")
+    assert agent.calls == []
     assert rendered(soffice) == []
 
 
@@ -1186,25 +1273,9 @@ def test_a_failed_regenerate_is_flagged_and_nothing_is_rolled_back(
     assert column(rdb, posting_id, "title") == NEW_TITLE
     assert {path.name for path in packets.iterdir()} == {NEW_DIR}
     assert (packets / NEW_DIR / NEW_COPY).read_bytes() == revised
-    assert (packets / NEW_DIR / "resume_checklist.md").exists()
+    assert NEW_JD in (packets / NEW_DIR / "job_posting.md").read_text(encoding="utf-8")
+    assert not (packets / NEW_DIR / REDLINE_EDITS).exists()
     assert (packets / NEW_DIR / "notes.txt").exists()
-
-
-def test_a_pandoc_failure_on_regenerate_is_flagged_and_the_new_checklist_stays(
-    rdb, web, gws, env, monkeypatch, capsys
-):
-    _, packets = env
-    posting_id = seed(rdb)
-    make_packet(rdb, packets, posting_id)
-    monkeypatch.setenv("PANDOC_FAIL", "1")
-    employer(web, rdb, posting_id)
-    set_sheet(gws, (posting_id, ""))
-    code, output = refetch(monkeypatch, capsys)
-    assert flagged(code, output, posting_id)
-    renamed = packets / NEW_DIR
-    checklist = (renamed / "resume_checklist.md").read_text(encoding="utf-8")
-    assert checklist.strip() == CHECKLIST_TEXT.strip()
-    assert not (renamed / PDF).exists()
 
 
 # --- dry run ------------------------------------------------------------------

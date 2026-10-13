@@ -1,7 +1,7 @@
-"""The inbox builds an emailed posting's packet and delivers it to Drive (issue #88; PRD 04 "Packets built on the inbox machine", "Resume checklist", "Tracker write"; PRD 03 outcome labels; PRD 06 `JSA_GWS_CREDENTIALS`; XC-5, XC-9, XC-10).
+"""The inbox builds an emailed posting's packet and delivers it to Drive (issue #88; PRD 04 "Packets built on the inbox machine", "Tracker write"; PRD 03 outcome labels; PRD 06 `JSA_GWS_CREDENTIALS`; XC-5, XC-9, XC-10).
 
 `gws` is replaced by a stateful fake behind `JSA_GWS_BIN` that serves Gmail, Drive, and the tracker
-Sheet; pandoc by a stub; Claude at the shared agent loop; outside HTTP beneath the app's client; the
+Sheet; Claude at the shared agent loop; outside HTTP beneath the app's client; the
 database is the libSQL container (and a `file:` database); the profile is a temporary directory.
 """
 
@@ -17,14 +17,13 @@ import docx
 import httpx
 import pytest
 from conftest import REPO_ROOT, drop_all_tables
-from pandoc_helpers import install_pandoc, pandoc_calls
 from profile_helpers import copy_example, write_config_toml
 from test_generate import (
     JD,
-    PDF,
     PLAIN,
     QUUX_EDIT,
     QUUX_JD,
+    REDLINE_EDITS,
     RESUME_COPY,
     RESUME_PDF,
     Agent,
@@ -57,10 +56,6 @@ packets_dir = "{packets}"
 app = "jsa-inbox-example"
 senders = ["{sender}"]
 drive_folder_id = "{folder}"
-
-[agents.checklist]
-model = "claude-sonnet-5-5"
-effort = "low"
 
 [agents.redline]
 model = "claude-opus-5-5"
@@ -277,11 +272,6 @@ def agent(monkeypatch):
 
 
 @pytest.fixture
-def pandoc(tmp_path, monkeypatch):
-    return install_pandoc(tmp_path, monkeypatch)
-
-
-@pytest.fixture
 def env(tmp_path, monkeypatch):
     """A profile with an `[inbox]` table and a distinctive base resume; returns (profile, packets_dir)."""
     from test_inbox import FAKE_GWS as GMAIL_STUB
@@ -341,26 +331,13 @@ def tracked(conn, posting_id) -> bool:
     return bool(column(conn, posting_id, "added_to_tracker"))
 
 
-def reader_of(argv: list[str]) -> str:
-    """The input format a pandoc call names: `--from=X`, `--from X`, `-f X`, `-fX`, `--read=X`, or `-r X`."""
-    for i, arg in enumerate(argv):
-        for prefix in ("--from=", "--read="):
-            if arg.startswith(prefix):
-                return arg.removeprefix(prefix)
-        if arg in ("--from", "--read", "-f", "-r"):
-            return argv[i + 1]
-        if arg.startswith(("-f", "-r")) and not arg.startswith("--") and len(arg) > 2:
-            return arg[2:]
-    raise AssertionError(f"pandoc was given no input format: {argv}")
-
-
 # --- acceptance 1 + 2 + 3: build, upload, then track ---------------------------
 
 
 def test_an_emailed_posting_with_a_description_ends_tracked_with_its_packet_in_drive(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
-    agent.respond_redline = redline_reply(QUUX_EDIT)
+    agent.respond = redline_reply(QUUX_EDIT)
     posting_id = email(gmail, conn, jd=QUUX_JD)
     assert run_inbox(monkeypatch) == 0
     assert gmail.outcome_labels("m1") == ["jsa/tracked"]
@@ -370,26 +347,16 @@ def test_an_emailed_posting_with_a_description_ends_tracked_with_its_packet_in_d
     assert row[0] == posting_id
     [folder_id] = world.folders(PLAIN)
     uploaded = world.contents(folder_id)
-    assert {
-        RESUME_COPY,
-        "job_posting.md",
-        "resume_checklist.md",
-        PDF,
-    } <= set(uploaded)
     # The redline edited the copy, so the packet has one resume file and no resume PDF.
-    assert RESUME_PDF not in uploaded
-    assert not [name for name in uploaded if name.endswith("_redline.docx")]
+    assert set(uploaded) == {RESUME_COPY, "job_posting.md", REDLINE_EDITS}
     assert uploaded["job_posting.md"].decode() == QUUX_JD
-    assert (
-        uploaded[PDF].decode() == f"PDF OF: {uploaded['resume_checklist.md'].decode()}"
-    )
 
 
 def test_the_redlined_resume_copy_is_uploaded_as_the_exact_docx_file(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     profile, _ = env
-    agent.respond_redline = redline_reply(QUUX_EDIT)
+    agent.respond = redline_reply(QUUX_EDIT)
     email(gmail, conn, jd=QUUX_JD)
     run_inbox(monkeypatch)
     [folder_id] = world.folders(PLAIN)
@@ -403,7 +370,7 @@ def test_the_redlined_resume_copy_is_uploaded_as_the_exact_docx_file(
 
 
 def test_a_resume_the_redline_left_alone_is_delivered_with_its_pdf(
-    db_url, conn, env, gmail, world, agent, pandoc, soffice, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, soffice, requests, monkeypatch
 ):
     profile, _ = env
     email(gmail, conn, jd=QUUX_JD)
@@ -415,11 +382,11 @@ def test_a_resume_the_redline_left_alone_is_delivered_with_its_pdf(
 
 
 def test_a_docx_cover_letter_is_delivered_with_its_pdf(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     profile, _ = env
     (profile / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
-    agent.respond_redline = redline_reply(QUUX_EDIT)
+    agent.respond = redline_reply(QUUX_EDIT)
     email(gmail, conn, jd=QUUX_JD)
     assert run_inbox(monkeypatch) == 0
     [folder_id] = world.folders(PLAIN)
@@ -430,11 +397,11 @@ def test_a_docx_cover_letter_is_delivered_with_its_pdf(
 
 
 def test_a_cover_letter_in_the_profile_is_delivered_with_the_packet(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     profile, _ = env
     (profile / "cover_letter.pdf").write_bytes(b"THE COVER LETTER")
-    agent.respond_redline = redline_reply(QUUX_EDIT)
+    agent.respond = redline_reply(QUUX_EDIT)
     email(gmail, conn, jd=QUUX_JD)
     assert run_inbox(monkeypatch) == 0
     [folder_id] = world.folders(PLAIN)
@@ -444,9 +411,9 @@ def test_a_cover_letter_in_the_profile_is_delivered_with_the_packet(
 
 
 def test_without_a_cover_letter_the_delivered_packet_has_none(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
-    agent.respond_redline = redline_reply(QUUX_EDIT)
+    agent.respond = redline_reply(QUUX_EDIT)
     email(gmail, conn, jd=QUUX_JD)
     assert run_inbox(monkeypatch) == 0
     [folder_id] = world.folders(PLAIN)
@@ -454,7 +421,7 @@ def test_without_a_cover_letter_the_delivered_packet_has_none(
 
 
 def test_uploads_go_into_the_configured_folder_and_are_never_converted(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     email(gmail, conn)
     run_inbox(monkeypatch)
@@ -472,7 +439,7 @@ def test_uploads_go_into_the_configured_folder_and_are_never_converted(
 
 
 def test_every_file_is_uploaded_from_beneath_the_packet_folder_with_the_owners_credential(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     email(gmail, conn)
     run_inbox(monkeypatch)
@@ -488,7 +455,7 @@ def test_every_file_is_uploaded_from_beneath_the_packet_folder_with_the_owners_c
 
 
 def test_the_tracker_row_is_appended_only_after_every_file_is_uploaded(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     email(gmail, conn)
     run_inbox(monkeypatch)
@@ -498,11 +465,11 @@ def test_the_tracker_row_is_appended_only_after_every_file_is_uploaded(
     first_append = kinds.index("sheets")
     assert "drive" not in kinds[first_append:]
     uploaded = {c["upload"] for c in world.uploads()}
-    assert {RESUME_COPY, "job_posting.md", "resume_checklist.md", PDF} <= uploaded
+    assert {RESUME_COPY, "job_posting.md", REDLINE_EDITS} <= uploaded
 
 
 def test_the_packet_is_built_in_a_temporary_directory_not_in_packets_dir(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     _, packets = env
     email(gmail, conn)
@@ -513,23 +480,21 @@ def test_the_packet_is_built_in_a_temporary_directory_not_in_packets_dir(
     assert all(not Path(cwd).is_relative_to(packets) for cwd in cwds)
 
 
-def test_the_build_runs_the_checklist_and_the_redline_once_each(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+def test_the_build_makes_one_model_call_the_redline(
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     email(gmail, conn)
     run_inbox(monkeypatch)
-    assert len(agent.checklist_calls) == 1
-    assert len(agent.redline_calls) == 1
-    assert JD.strip() in agent.checklist_prompts[0]
-    assert BASE_LINE in agent.checklist_prompts[0]
-    assert len(pandoc_calls(pandoc)) == 1
+    assert len(agent.calls) == 1
+    assert JD.strip() in agent.prompts[0]
+    assert BASE_LINE in agent.prompts[0]
 
 
 def test_the_delivered_packet_is_what_jsa_generate_id_builds_locally(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch, capsys
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch, capsys
 ):
     _, packets = env
-    agent.respond_redline = redline_reply(QUUX_EDIT)
+    agent.respond = redline_reply(QUUX_EDIT)
     posting_id = email(gmail, conn, jd=QUUX_JD)
     run_inbox(monkeypatch)
     [folder_id] = world.folders(PLAIN)
@@ -550,7 +515,7 @@ def test_the_delivered_packet_is_what_jsa_generate_id_builds_locally(
 
 
 def test_a_posting_whose_page_has_closed_is_still_built_delivered_and_tracked(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     posting_id = email(gmail, conn)
     run_inbox(monkeypatch)
@@ -562,7 +527,7 @@ def test_a_posting_whose_page_has_closed_is_still_built_delivered_and_tracked(
 
 
 def test_an_emailed_description_goes_all_the_way_to_a_delivered_packet(
-    db_url, conn, env, gmail, world, agent, pandoc, web, monkeypatch
+    db_url, conn, env, gmail, world, agent, web, monkeypatch
 ):
     url = bare_posting(web)
     gmail.add("m1", 1000, f"{url}\n\n{DESCRIPTION}\n")
@@ -600,10 +565,10 @@ def web(requests, monkeypatch):
 
 
 def test_a_failed_upload_leaves_the_posting_untracked_and_a_retry_uploads_only_the_missing_file(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     posting_id = email(gmail, conn)
-    world.set("fail_upload", [PDF])
+    world.set("fail_upload", [REDLINE_EDITS])
     run_inbox(monkeypatch)
     assert gmail.outcome_labels("m1") == ["jsa/failed"]
     assert not gmail.in_inbox("m1")
@@ -611,7 +576,7 @@ def test_a_failed_upload_leaves_the_posting_untracked_and_a_retry_uploads_only_t
     assert world.rows() == [] and world.sheet_calls() == []
     [folder_id] = world.folders(PLAIN)
     first = world.contents(folder_id)
-    assert PDF not in first and "job_posting.md" in first
+    assert REDLINE_EDITS not in first and "job_posting.md" in first
     uploads_before = len(world.uploads())
 
     world.set("fail_upload", [])
@@ -621,13 +586,13 @@ def test_a_failed_upload_leaves_the_posting_untracked_and_a_retry_uploads_only_t
     assert tracked(conn, posting_id)
     assert world.folders(PLAIN) == [folder_id]
     after = world.contents(folder_id)
-    assert set(after) == set(first) | {PDF}
-    assert [c["upload"] for c in world.uploads()[uploads_before:]] == [PDF]
+    assert set(after) == set(first) | {REDLINE_EDITS}
+    assert [c["upload"] for c in world.uploads()[uploads_before:]] == [REDLINE_EDITS]
     assert len(world.rows()) == 1
 
 
 def test_a_failed_tracker_append_is_labeled_failed_and_the_retry_uploads_nothing_new(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     posting_id = email(gmail, conn)
     world.set("fail_sheets", True)
@@ -650,7 +615,7 @@ def test_a_failed_tracker_append_is_labeled_failed_and_the_retry_uploads_nothing
 
 
 def test_a_retry_never_replaces_or_deletes_a_file_already_in_the_folder(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     folder_id = world.put(PLAIN, FOLDER_ID, mime=FOLDER_MIME)
     world.put(RESUME_COPY, folder_id, content=b"THE USER'S OWN EDITS")
@@ -659,7 +624,7 @@ def test_a_retry_never_replaces_or_deletes_a_file_already_in_the_folder(
     assert world.folders(PLAIN) == [folder_id]
     contents = world.contents(folder_id)
     assert contents[RESUME_COPY] == b"THE USER'S OWN EDITS"
-    assert {"job_posting.md", "resume_checklist.md", PDF} <= set(contents)
+    assert {"job_posting.md", REDLINE_EDITS} <= set(contents)
     assert RESUME_COPY not in {c["upload"] for c in world.uploads()}
     state = world.read()
     assert state["forbidden"] == []
@@ -669,7 +634,7 @@ def test_a_retry_never_replaces_or_deletes_a_file_already_in_the_folder(
 
 
 def test_a_folder_of_the_same_name_elsewhere_is_not_reused(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     stranger = world.put(PLAIN, OTHER_FOLDER_ID, mime=FOLDER_MIME)
     world.put("job_posting.md", stranger, content=b"NOT OURS")
@@ -682,7 +647,7 @@ def test_a_folder_of_the_same_name_elsewhere_is_not_reused(
 
 
 def test_a_trashed_packet_folder_is_not_reused(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     trashed = world.put(PLAIN, FOLDER_ID, mime=FOLDER_MIME)
     state = world.read()
@@ -700,7 +665,7 @@ def test_a_trashed_packet_folder_is_not_reused(
 
 
 def test_a_packet_folder_name_with_a_quote_in_it_is_found_again_on_the_retry(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     posting_id = email(gmail, conn, company="O'Brien Labs", title="Staff Engineer")
     world.set("fail_sheets", True)
@@ -722,14 +687,13 @@ def test_a_packet_folder_name_with_a_quote_in_it_is_found_again_on_the_retry(
 
 
 def test_an_already_tracked_posting_is_neither_rebuilt_nor_uploaded_and_is_labeled_tracked(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     posting_id = email(gmail, conn, tracked=True)
     assert run_inbox(monkeypatch) == 0
     assert gmail.outcome_labels("m1") == ["jsa/tracked"]
     assert not gmail.in_inbox("m1")
     assert agent.calls == []
-    assert pandoc_calls(pandoc) == []
     assert world.drive_calls() == [] and world.sheet_calls() == []
     assert world.rows() == []
     assert requests.seen == []
@@ -737,7 +701,7 @@ def test_an_already_tracked_posting_is_neither_rebuilt_nor_uploaded_and_is_label
 
 
 def test_a_posting_tracked_by_an_earlier_message_is_not_delivered_again(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     email(gmail, conn)
     url = conn.execute("SELECT url FROM postings ORDER BY id DESC LIMIT 1").fetchone()[
@@ -757,23 +721,10 @@ def test_a_posting_tracked_by_an_earlier_message_is_not_delivered_again(
 # --- acceptance 6: failures are labeled failed and leave the posting untracked ---
 
 
-def test_a_failed_checklist_is_labeled_failed_before_anything_reaches_drive_or_the_tracker(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
-):
-    agent.respond = lambda prompt: failed(result="Claude API error")
-    posting_id = email(gmail, conn)
-    run_inbox(monkeypatch)
-    assert gmail.outcome_labels("m1") == ["jsa/failed"]
-    assert not gmail.in_inbox("m1")
-    assert not tracked(conn, posting_id)
-    assert world.drive_calls("create") == []
-    assert world.sheet_calls() == []
-
-
 def test_a_failed_pdf_render_is_labeled_failed_and_nothing_is_delivered(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, soffice, requests, monkeypatch
 ):
-    monkeypatch.setenv("PANDOC_FAIL", "1")
+    monkeypatch.setenv("SOFFICE_FAIL", "1")
     posting_id = email(gmail, conn)
     run_inbox(monkeypatch)
     assert gmail.outcome_labels("m1") == ["jsa/failed"]
@@ -782,9 +733,9 @@ def test_a_failed_pdf_render_is_labeled_failed_and_nothing_is_delivered(
 
 
 def test_a_failed_redline_is_labeled_failed_and_nothing_is_delivered(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
-    agent.respond_redline = lambda prompt: failed(result="Claude API error")
+    agent.respond = lambda prompt: failed(result="Claude API error")
     posting_id = email(gmail, conn)
     run_inbox(monkeypatch)
     assert gmail.outcome_labels("m1") == ["jsa/failed"]
@@ -793,7 +744,7 @@ def test_a_failed_redline_is_labeled_failed_and_nothing_is_delivered(
 
 
 def test_an_unreadable_drive_folder_listing_is_labeled_failed_and_tracks_nothing(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     world.set("fail_list", True)
     posting_id = email(gmail, conn)
@@ -804,7 +755,7 @@ def test_an_unreadable_drive_folder_listing_is_labeled_failed_and_tracks_nothing
 
 
 def test_one_failed_posting_does_not_stop_the_next_message(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     first = email(gmail, conn, "m1", company="First Labs")
     second = email(gmail, conn, "m2", company="Second Labs")
@@ -821,7 +772,7 @@ def test_one_failed_posting_does_not_stop_the_next_message(
 
 
 def test_a_posting_without_a_description_builds_and_uploads_nothing(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     posting_id = email(gmail, conn, jd=None)
     run_inbox(monkeypatch)
@@ -832,7 +783,7 @@ def test_a_posting_without_a_description_builds_and_uploads_nothing(
 
 
 def test_a_missing_drive_folder_setting_fails_the_message_before_any_build(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     profile, packets = env
     write_config_toml(
@@ -847,47 +798,6 @@ def test_a_missing_drive_folder_setting_fails_the_message_before_any_build(
     assert agent.calls == []
     assert world.drive_calls() == [] and world.rows() == []
     assert not tracked(conn, posting_id)
-
-
-# --- acceptance 7: raw blocks are disabled wherever the checklist PDF is rendered --
-
-
-def disables_raw_blocks(argv: list[str]) -> bool:
-    spec = reader_of(argv)
-    base, *_ = re.split(r"[+-]", spec, maxsplit=1)
-    return (
-        base == "markdown" and "-raw_attribute" in spec and "+raw_attribute" not in spec
-    )
-
-
-def test_pandoc_reads_the_checklist_as_markdown_with_raw_blocks_off_on_the_inbox_path(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
-):
-    email(gmail, conn)
-    run_inbox(monkeypatch)
-    [argv] = pandoc_calls(pandoc)
-    assert disables_raw_blocks(argv), argv
-    assert "--pdf-engine=typst" in argv
-
-
-def test_pandoc_reads_the_checklist_as_markdown_with_raw_blocks_off_in_jsa_generate_too(
-    db_url, conn, env, agent, pandoc, requests, gmail, world, monkeypatch
-):
-    posting_id = seed(conn)
-    monkeypatch.setattr(sys, "argv", ["jsa", "generate", "--id", str(posting_id)])
-    try:
-        cli.main()
-    except SystemExit as exit_:
-        assert not exit_.code
-    [argv] = pandoc_calls(pandoc)
-    assert disables_raw_blocks(argv), argv
-
-
-def test_the_reader_checks_catch_an_unrestricted_markdown_reader():
-    assert not disables_raw_blocks(["pandoc", "-f", "markdown", "in.md"])
-    assert not disables_raw_blocks(["pandoc", "--from=markdown+raw_attribute", "in.md"])
-    assert disables_raw_blocks(["pandoc", "--from=markdown-raw_attribute", "in.md"])
-    assert disables_raw_blocks(["pandoc", "-f", "markdown-raw_html-raw_attribute"])
 
 
 # --- the owner's credential (PRD 06; convention 3) -----------------------------
@@ -923,7 +833,7 @@ def test_with_no_owner_credential_gws_keeps_its_own_login(
 
 
 def test_with_no_owner_credential_the_inbox_delivery_runs_on_gws_own_login(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     monkeypatch.delenv("JSA_GWS_CREDENTIALS")
     posting_id = email(gmail, conn)
@@ -935,7 +845,7 @@ def test_with_no_owner_credential_the_inbox_delivery_runs_on_gws_own_login(
 
 
 def test_the_owner_credential_is_never_used_for_gmail(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     email(gmail, conn)
     run_inbox(monkeypatch)
@@ -945,7 +855,7 @@ def test_the_owner_credential_is_never_used_for_gmail(
 
 
 def test_the_owner_credential_text_reaches_no_log_line(
-    db_url, conn, env, gmail, world, agent, pandoc, requests, monkeypatch, caplog
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch, caplog
 ):
     email(gmail, conn)
     run_inbox(monkeypatch)

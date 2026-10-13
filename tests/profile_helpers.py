@@ -42,7 +42,7 @@ tracker_spreadsheet_id = "sheet-id"
 app = "jsa-example"
 region = "iad"
 
-[agents.checklist]
+[agents.redline]
 model = "claude-fable-5-1"
 effort = "medium"
 
