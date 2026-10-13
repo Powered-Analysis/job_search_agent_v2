@@ -130,7 +130,7 @@ When the tick's last step finds the team done, it dispatches `report.yml` for a 
 
 Two kinds of checks also happen after deployment, run by the owner:
 - live checks that need the owner's machine (Chrome for review, the `gws` OAuth token for the Sheet);
-- judging the quality of agentic output with the owner's own models and profile: search results, resume checklists, and refine proposals.
+- judging the quality of agentic output with the owner's own models and profile: search results, resume redlines, and refine proposals.
 
 The FSE notes in each PR description which checks it couldn't run. The final report lists both kinds of checks.
 
@@ -221,13 +221,13 @@ The first infrastructure issue proves that `turso_serverless` connects to the co
 
 **Live checks run at the cheapest setting that exercises the integration.** A live check proves the app talks to a service correctly, not the quality of what comes back. The pipeline, not the model, guarantees that only live postings get through (`XC-5`), and model choice is the user's (`XC-14`). So before the FSE runs, the job copies `profile.example/` with these settings and points `JSA_PROFILE_DIR` at the copy:
 
-- **Claude** (the Claude search runner, the resume checklist, refine): `claude-sonnet-5-5` at `low` effort. Not Haiku 4.5, which doesn't accept an effort setting, and the app always passes one (`XC-14`). This also leaves the team's shared Claude credential its usage headroom.
+- **Claude** (the Claude search runner, the resume redline, refine): `claude-sonnet-5-5` at `low` effort. Not Haiku 4.5, which doesn't accept an effort setting, and the app always passes one (`XC-14`). This also leaves the team's shared Claude credential its usage headroom.
 - **Gemini:** no settings to lower, because PRD 01 pins the agent to `deep-research-preview-04-2026`, the cheaper of the two.
 - **Perplexity:** no settings to lower, because PRD 01 pins the `xhigh` preset wholesale. The prepaid balance is its only limit, so it's checked once per issue that changes the Perplexity runner.
 
 Search live checks use a 24-hour window. If a live check fails because of what the model returned, rather than because of the integration, the FSE reruns it once at `profile.example/`'s own settings before treating it as a bug. A weaker model's messier output is never a reason to loosen validation: PRD 01 requires an unparseable response to raise an error and every invalid posting to be dropped and counted.
 
-Judging output quality is the owner's job after deployment (see [Completion](#completion)). That includes whether searches find good postings and whether the prompt templates the FSE writes produce good checklists and refine proposals.
+Judging output quality is the owner's job after deployment (see [Completion](#completion)). That includes whether searches find good postings and whether the prompt templates the FSE writes produce good redlines and refine proposals.
 
 Live checks run with `JSA_PROFILE_DIR=profile.example`, the fictional candidate PRD 06 requires. CI never has the owner's gitignored `profile/`, and live-check output goes into public PR descriptions ([convention 8](conventions.md#8-nothing-private-in-a-public-repository)).
 
@@ -456,7 +456,7 @@ Two other endings exist, and neither requests review:
   - The one exception is mechanical. When a rename or move in production code breaks a test's import or reference, the FSE may update that import or reference, and nothing else: no assertion, fixture, or test-logic changes. The PR description must call it out as a mechanical fix.
   - When the issue's requirements make an existing test fail for any other reason, the question goes to the PM, never to the owner. File an issue labeled `discrepancy` that states the failing test IDs, the PRD language or acceptance criterion that requires the change, what the test assumes instead, and the PR. The guard then holds the FSE until that issue closes.
 - **Keep the test seams.** Code that touches HTTP, Claude, an external tool, or the database goes through its seam in [CI environment](#ci-environment). A call that bypasses a seam is untestable, and the SA treats it as a `needs-change`.
-- **Check agentic steps for real.** When an issue changes an agentic step (a search runner, the resume checklist, refine), run it once against the live service before requesting review. Record what ran and what came back in the PR description.
+- **Check agentic steps for real.** When an issue changes an agentic step (a search runner, the resume redline, refine), run it once against the live service before requesting review. Record what ran and what came back in the PR description.
 - **Root cause before workaround.** When the FSE hits a bug, a flaky check, or unexpected behavior, the default move is to understand why, not to route around it. A retry loop, a broadened `except`, a widened timeout, or a skipped check are all workarounds. They're acceptable only after the FSE can state *why* the root cause can't be fixed within this issue's scope, and that reasoning goes in the PR description, not just the commit history.
 
 ---
