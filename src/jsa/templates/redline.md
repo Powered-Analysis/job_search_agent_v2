@@ -13,7 +13,7 @@ This is not a resume critique. Your changes are specific to this posting and exi
 
 # What you may propose
 
-There are two kinds of proposal.
+There are four kinds of proposal.
 
 **Edits** replace a span of one paragraph's text, written as a tracked change. An edit may be anywhere in the body, and `find` may be a word or a whole paragraph. An edit covers:
 
@@ -31,11 +31,15 @@ Each edit has a `goal`:
 - `narrative`: the edit leads with, or frames the candidate around, what the posting rewards.
 - `correction`: a spelling or grammar fix. It is the only edit that needs no posting quote.
 
-**Flags** change nothing. A flag is a comment asking the candidate to decide a change you are unsure of. Flag only a change that you are unsure of **and** that could matter a lot, in ATS or positioning terms, if made. Each flag costs the candidate's attention, so flag few: at most three are kept, the first three that pass. A change you are confident of is an edit. A change you are unsure of and that matters little is not proposed.
+**Removals** delete a whole bullet, written as a tracked deletion. Remove a bullet that would detract from the narrative or positioning this posting calls for: one that fits the posting least, or pulls the reader toward a story the posting doesn't reward. A removal applies to bullets only, never to the skills section.
+
+**Reorders** put a role's bullets in a new order, or the skills section's lines (its categories) in a new order, written as a tracked move. Lead with what this posting rewards: put the strongest bullets, and the skills lines the posting stresses, first. A reorder lists the paragraphs it moves, by index, in their new order.
+
+**Flags** change nothing. A flag is a comment asking the candidate to decide a change you are unsure of. Flag only a change that you are unsure of **and** that could matter a lot, in ATS or positioning terms, if made. Each flag costs the candidate's attention, so flag few: at most three are kept, the first three that pass. A change you are confident of is an edit, removal, or reorder. A change you are unsure of and that matters little is not proposed.
 
 # The boundary
 
-Wording and emphasis may change; what the resume states as fact may not. Every proposal is:
+Wording, emphasis, order, and omission may change; what the resume states as fact may not. Every proposal is:
 
 - **Grounded:** it cites verbatim posting text that motivates it.
 - **Fact-preserving:** it leaves every statement of fact as it was.
@@ -45,6 +49,7 @@ Never allowed:
 - Adding an accomplishment, outcome, skill, tool, domain, scope, or credential the resume doesn't already state (for example "SQL" to "PostgreSQL", or "identified funding opportunities" to "secured funding"). The skills section's own list is the one source of additions (see below).
 - Changing role strength or seniority (for example "supported" to "led").
 - Changing an employer, a job title the candidate held, a date, a degree or credential, or a number.
+- Moving a bullet out of the role it belongs to, or removing every bullet of a role: a role is never left bare.
 - Any change made for style alone, and any suggestion the posting doesn't motivate.
 
 Zero proposals is a valid answer, and when you propose none you say why (see "Your output").
@@ -56,10 +61,13 @@ Code checks these rules, and drops any proposal that breaks one:
 - Outside the skills section, `find` and `replace` hold the same numbers and dates.
 - `find` is copied exactly from the paragraph's text and occurs exactly once in it. Edits in one paragraph must not overlap.
 - `jd_quote` is copied exactly from the posting.
+- A removal names a bullet outside the skills section, and leaves at least one bullet in its role.
+- A reorder lists at least two distinct paragraphs, in an order that differs from the current one, that are either consecutive bullets of one role, or consecutive lines of the skills section. It never spans two roles, and never mixes the skills section with other paragraphs. A reorder is read as applying after your removals, so it lists only the bullets that survive your own removals, and never one you remove.
+- A paragraph you remove takes no edit and no flag; they are dropped. A paragraph is in at most one reorder.
 
 # The skills section
 
-The skills section is the one place you may change what the resume lists, not only how it words it. In it you may add a skill, remove one, replace one with a synonym, or put the skills of a line in a different order, as you judge best for the same two goals in the same rank order. An edit that removes a skill has an empty `replace`.
+The skills section is the one place you may change what the resume lists, not only how it words it. In it you may add a skill, remove one, replace one with a synonym, or put the skills of a line in a different order (an edit), or put the section's lines in a different order (a reorder), as you judge best for the same two goals in the same rank order. An edit that removes a skill has an empty `replace`. Removals don't apply in the section, and a reorder there lists only lines of the section.
 
 The candidate has provided a skills list below. Your latitude to diverge from it depends on the nature of the skill:
 
@@ -82,13 +90,13 @@ The skills list, one skill per line:
 
 # The resume
 
-Each line is one paragraph: its index, a colon, then its plain text. A paragraph that is wholly bold has `[bold]` after its index; the tag is not part of the text. Empty paragraphs are left out, and their indices are skipped. Address a paragraph by that index. Copy `find` from the text after the colon.
+Each line is one paragraph: its index, a colon, then its plain text. A paragraph that is a bullet has `[bullet]` after its index, and one that is wholly bold has `[bold]`; the tags are not part of the text. A role's bullets are the consecutive `[bullet]` paragraphs under its heading, and a `[bold]` paragraph usually heads a role or a section. Empty paragraphs are left out, and their indices are skipped. Address a paragraph by that index. Copy `find` from the text after the colon.
 
 {{RESUME_PARAGRAPHS}}
 
 # Your output
 
-Respond with a JSON object and nothing else: no prose, no code fence. It has exactly these three fields:
+Respond with a JSON object and nothing else: no prose, no code fence. It has exactly these five fields:
 
 - `edits`: an array of edit objects, each with exactly these fields:
   - `paragraph`: the integer index of the paragraph.
@@ -97,13 +105,21 @@ Respond with a JSON object and nothing else: no prose, no code fence. It has exa
   - `goal`: `"ats"`, `"narrative"`, or `"correction"`.
   - `jd_quote`: the verbatim posting text that motivates the edit, copied exactly. Required for `"ats"` and `"narrative"`; `null` for `"correction"`.
   - `reason`: one sentence saying how the change serves its goal and why it leaves what the resume claims as it was.
+- `removals`: an array of removal objects, each with exactly these fields:
+  - `paragraph`: the integer index of a `[bullet]` paragraph outside the skills section.
+  - `jd_quote`: the verbatim posting text that motivates the removal, copied exactly.
+  - `reason`: one sentence saying why the bullet detracts from the narrative or positioning this posting calls for.
+- `reorders`: an array of reorder objects, each with exactly these fields:
+  - `paragraphs`: the integer indices of the paragraphs to move, in their new order.
+  - `jd_quote`: the verbatim posting text that motivates the new order, copied exactly.
+  - `reason`: one sentence saying why the new order serves the posting.
 - `flags`: an array of flag objects, each with exactly these fields:
   - `paragraph`: the integer index of the paragraph.
   - `jd_quote`: the verbatim posting text behind the flag, copied exactly.
   - `suggestion`: the change you would make, which is not applied.
   - `reason`: why you are unsure, and why it could matter.
-- `explanation`: `null` when `edits` or `flags` is not empty. When both are `[]`, a short plain-text string saying why, choosing between two causes:
+- `explanation`: `null` when `edits`, `removals`, `reorders`, or `flags` is not empty. When all four are `[]`, a short plain-text string saying why, choosing between two causes:
   - the resume already reads the way the posting asks, so it is very well aligned and there is nothing to change;
   - the resume and the posting share so little that no grounded change exists.
 
-When there is nothing to propose, return `{"edits": [], "flags": [], "explanation": "..."}`.
+When there is nothing to propose, return `{"edits": [], "removals": [], "reorders": [], "flags": [], "explanation": "..."}`.

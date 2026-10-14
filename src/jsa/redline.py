@@ -1,4 +1,4 @@
-"""The redline (PRD 04): edits and flags that tailor a resume to its posting, validated in code, written as tracked changes and comments."""
+"""The redline (PRD 04): edits, removals, reorders and flags that tailor a resume to its posting, validated in code, written as tracked changes and comments."""
 
 import json
 import re
@@ -21,9 +21,12 @@ from jsa.redline_docx import (
     ParagraphComment,
     TrackedChange,
     TrackedEdit,
+    TrackedRemoval,
+    TrackedReorder,
     apply_edits,
     body_paragraph_texts,
     bold_paragraphs,
+    bullet_paragraphs,
     has_unresolved_changes,
     skills_section,
 )
@@ -44,7 +47,11 @@ _FLAG_FIELDS = {
     "suggestion": str,
     "reason": str,
 }
-_PROPOSAL_KEYS = {"edits", "flags", "explanation"}
+_REMOVAL_FIELDS = {"paragraph": int, "jd_quote": str, "reason": str}
+_REORDER_FIELDS = {"paragraphs": list, "jd_quote": str, "reason": str}
+_PROPOSAL_KEYS = {"edits", "removals", "reorders", "flags", "explanation"}
+_PROPOSAL_LISTS = ("edits", "removals", "reorders", "flags")
+_REMOVED_PARAGRAPH = "paragraph {} is deleted by a removal"
 GOALS = ("ats", "narrative", "correction")
 MAX_FLAGS = 3
 MAX_CORRECTION_DISTANCE = 2
@@ -67,6 +74,22 @@ class Edit:
 
 
 @dataclass(frozen=True)
+class Removal:
+    paragraph: int
+    jd_quote: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class Reorder:
+    """`paragraphs` are the indices in their new order."""
+
+    paragraphs: list[int]
+    jd_quote: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class Flag:
     paragraph: int
     jd_quote: str
@@ -76,9 +99,11 @@ class Flag:
 
 @dataclass(frozen=True)
 class Proposal:
-    """What the redline agent returned: `explanation` is set exactly when both lists are empty."""
+    """What the redline agent returned: `explanation` is set exactly when all four lists are empty."""
 
     edits: list[Edit]
+    removals: list[Removal]
+    reorders: list[Reorder]
     flags: list[Flag]
     explanation: str | None
 
@@ -278,23 +303,149 @@ def _edit_problem(
     return None, span
 
 
+def _runs(bullets: Collection[int]) -> list[list[int]]:
+    """PRD 04 "Redline", Bullets: each maximal sequence of consecutive bullet paragraphs."""
+    result: list[list[int]] = []
+    for index in sorted(bullets):
+        if result and result[-1][-1] == index - 1:
+            result[-1].append(index)
+        else:
+            result.append([index])
+    return result
+
+
+def _removal_problem(
+    removal: Removal,
+    job_description: str,
+    bullets: Collection[int],
+    skills_section: Collection[int],
+    run: Collection[int],
+    removed: Collection[int],
+) -> str | None:
+    paragraph = removal.paragraph
+    if paragraph not in bullets:
+        return f"paragraph {paragraph} is not a bullet paragraph"
+    if paragraph in skills_section:
+        return f"paragraph {paragraph} is in the skills section"
+    if problem := _quote_problem(removal.jd_quote, job_description):
+        return problem
+    if not removal.reason.strip():
+        return "reason is empty"
+    if paragraph in removed:
+        return f"paragraph {paragraph} is already removed"
+    if set(run) - {paragraph} <= set(removed):
+        return "removing it would leave its role with no bullets"
+    return None
+
+
+def validate_removals(
+    removals: list[Removal],
+    job_description: str,
+    bullets: Collection[int],
+    skills_section: Collection[int] = (),
+) -> list[str | None]:
+    """Each removal's result in order: None when it passes, else why it is dropped (PRD 04, "Validation").
+
+    A removal that would leave its run with no bullet is dropped; earlier removals are kept first.
+    """
+    run_of = {index: run for run in _runs(bullets) for index in run}
+    removed: set[int] = set()
+    results = []
+    for removal in removals:
+        problem = _removal_problem(
+            removal,
+            job_description,
+            bullets,
+            skills_section,
+            run_of.get(removal.paragraph, ()),
+            removed,
+        )
+        if problem is None:
+            removed.add(removal.paragraph)
+        results.append(problem)
+    return results
+
+
+def _reorder_problem(
+    reorder: Reorder,
+    job_description: str,
+    bullets: Collection[int],
+    skills_section: Collection[int],
+    removed: Collection[int],
+    reordered: Collection[int],
+) -> str | None:
+    indices = reorder.paragraphs
+    if len(set(indices)) != len(indices) or len(indices) < 2:
+        return "paragraphs must list at least two distinct indices"
+    if deleted := sorted(set(indices) & set(removed)):
+        return _REMOVED_PARAGRAPH.format(deleted[0])
+    if shared := sorted(set(indices) & set(reordered)):
+        return f"paragraph {shared[0]} is in an earlier reorder"
+    low, high = min(indices), max(indices)
+    stretch = set(range(low, high + 1)) - set(removed)
+    if all(index in skills_section for index in indices):
+        if set(indices) != set(range(low, high + 1)):
+            return "paragraphs are not a consecutive stretch of the skills section"
+    elif any(index in skills_section for index in indices):
+        return "paragraphs mix the skills section with other paragraphs"
+    elif any(index not in bullets for index in indices):
+        return "paragraphs are not all bullet paragraphs"
+    elif set(indices) != stretch:
+        return "paragraphs are not a consecutive stretch of one role's bullets"
+    if indices == sorted(indices):
+        return "paragraphs are already in this order"
+    if problem := _quote_problem(reorder.jd_quote, job_description):
+        return problem
+    if not reorder.reason.strip():
+        return "reason is empty"
+    return None
+
+
+def validate_reorders(
+    reorders: list[Reorder],
+    job_description: str,
+    bullets: Collection[int],
+    skills_section: Collection[int] = (),
+    removed: Collection[int] = (),
+) -> list[str | None]:
+    """Each reorder's result in order: None when it passes, else why it is dropped (PRD 04, "Validation").
+
+    `removed` holds the paragraphs the passing removals delete, which a reorder is read as following.
+    """
+    reordered: set[int] = set()
+    results = []
+    for reorder in reorders:
+        problem = _reorder_problem(
+            reorder, job_description, bullets, skills_section, removed, reordered
+        )
+        if problem is None:
+            reordered.update(reorder.paragraphs)
+        results.append(problem)
+    return results
+
+
 def validate_edits(
     edits: list[Edit],
     paragraphs: list[str],
     job_description: str,
     skills: Sequence[str] = (),
     skills_section: Collection[int] = (),
+    removed: Collection[int] = (),
 ) -> list[str | None]:
     """Each edit's result in order: None when it passes, else why it is dropped (PRD 04, "Validation").
 
     `skills_section` holds the paragraphs that get the skills section's latitude; it is empty while
-    no skills list is in use. A passing edit's span is held against the later edits of its paragraph.
+    no skills list is in use. `removed` holds the paragraphs the passing removals delete, which an
+    edit can't address. A passing edit's span is held against the later edits of its paragraph.
     """
     taken: dict[int, list[tuple[int, int]]] = {}
     results = []
     for edit in edits:
         if not 0 <= edit.paragraph < len(paragraphs):
             results.append(f"paragraph {edit.paragraph} is not a body paragraph")
+            continue
+        if edit.paragraph in removed:
+            results.append(_REMOVED_PARAGRAPH.format(edit.paragraph))
             continue
         spans = taken.setdefault(edit.paragraph, [])
         problem, span = _edit_problem(
@@ -307,10 +458,12 @@ def validate_edits(
 
 
 def _flag_problem(
-    flag: Flag, paragraphs: list[str], job_description: str
+    flag: Flag, paragraphs: list[str], job_description: str, removed: Collection[int]
 ) -> str | None:
     if not 0 <= flag.paragraph < len(paragraphs):
         return f"paragraph {flag.paragraph} is not a body paragraph"
+    if flag.paragraph in removed:
+        return _REMOVED_PARAGRAPH.format(flag.paragraph)
     if problem := _quote_problem(flag.jd_quote, job_description):
         return problem
     if not flag.suggestion.strip():
@@ -321,13 +474,16 @@ def _flag_problem(
 
 
 def validate_flags(
-    flags: list[Flag], paragraphs: list[str], job_description: str
+    flags: list[Flag],
+    paragraphs: list[str],
+    job_description: str,
+    removed: Collection[int] = (),
 ) -> list[str | None]:
     """Each flag's result in order: None when it passes, else why it is dropped (PRD 04, "Validation")."""
     results = []
     passed = 0
     for flag in flags:
-        problem = _flag_problem(flag, paragraphs, job_description)
+        problem = _flag_problem(flag, paragraphs, job_description, removed)
         if problem is None:
             if passed == MAX_FLAGS:
                 problem = f"only the first {MAX_FLAGS} flags that pass are kept"
@@ -343,6 +499,10 @@ def _edit_comment(edit: Edit) -> str:
         lines.append(f'Posting: "{edit.jd_quote}"')
     lines.append(f"Reason: {edit.reason}")
     return "\n".join(lines)
+
+
+def _structural_comment(proposal: Removal | Reorder) -> str:
+    return f'Posting: "{proposal.jd_quote}"\nReason: {proposal.reason}'
 
 
 def _flag_comment(flag: Flag) -> str:
@@ -389,7 +549,7 @@ def _object_items[Item](
 
 
 def parse_proposal(text: str) -> Proposal:
-    """The agent's final text as a proposal; anything but a JSON `{edits, flags, explanation}` object raises."""
+    """The agent's final text as a proposal; anything but a JSON `{edits, removals, reorders, flags, explanation}` object raises."""
     try:
         raw = json.loads(text)
     except json.JSONDecodeError as error:
@@ -397,28 +557,38 @@ def parse_proposal(text: str) -> Proposal:
     if (
         not isinstance(raw, dict)
         or raw.keys() != _PROPOSAL_KEYS
-        or not isinstance(raw["edits"], list)
-        or not isinstance(raw["flags"], list)
+        or any(not isinstance(raw[key], list) for key in _PROPOSAL_LISTS)
         or not isinstance(raw["explanation"], str | None)
     ):
         raise JsaError(
             "the redline agent's output is not a JSON object with exactly an edits array, "
-            "a flags array, and an explanation string or null"
+            "a removals array, a reorders array, a flags array, and an explanation string or null"
         )
     edits = _object_items(raw, "edits", _EDIT_FIELDS, Edit)
+    removals = _object_items(raw, "removals", _REMOVAL_FIELDS, Removal)
+    reorders = _object_items(raw, "reorders", _REORDER_FIELDS, Reorder)
+    for position, reorder in enumerate(reorders):
+        if any(
+            not isinstance(index, int) or isinstance(index, bool)
+            for index in reorder.paragraphs
+        ):
+            raise JsaError(
+                f"reorders item {position} of the redline agent's output has a paragraphs "
+                "entry that is not an integer"
+            )
     flags = _object_items(raw, "flags", _FLAG_FIELDS, Flag)
     explanation = raw["explanation"]
     # `null`, not an empty string, is how a reply with proposals carries no explanation.
     valid = (
         explanation is None
-        if edits or flags
+        if edits or removals or reorders or flags
         else bool(explanation and explanation.strip())
     )
     if not valid:
         raise JsaError(
             "the redline agent's explanation must be non-empty exactly when it proposes nothing"
         )
-    return Proposal(edits, flags, explanation)
+    return Proposal(edits, removals, reorders, flags, explanation)
 
 
 def assemble_redline_prompt(
@@ -427,10 +597,11 @@ def assemble_redline_prompt(
     skills: Sequence[str] = (),
     skills_section: Collection[int] = (),
     bold: Collection[int] = (),
+    bullets: Collection[int] = (),
 ) -> str:
     """The posting, the indexed resume paragraphs, and the skills list are the only inputs (PRD 04, XC-13)."""
     numbered = "\n".join(
-        f"{index}{' [bold]' if index in bold else ''}: {text}"
+        f"{index}{' [bullet]' if index in bullets else ''}{' [bold]' if index in bold else ''}: {text}"
         for index, text in enumerate(paragraphs)
         if text.strip()
     )
@@ -474,14 +645,15 @@ def _replace_copy(document: Document, copy: Path) -> None:
 
 
 def edits_applied(edits_file: Path) -> bool:
-    """Whether the recorded redline wrote any proposal, an edit or a flag, into the resume copy."""
+    """Whether the recorded redline wrote any proposal into the resume copy."""
     try:
         record = json.loads(edits_file.read_text(encoding="utf-8"))
         if not isinstance(record, dict) or record.keys() != _PROPOSAL_KEYS:
-            raise ValueError("expected exactly explanation, edits, and flags")
+            raise ValueError(f"expected exactly {', '.join(sorted(_PROPOSAL_KEYS))}")
         return any(
             proposal["validation"] is None
-            for proposal in record["edits"] + record["flags"]
+            for kind in _PROPOSAL_LISTS
+            for proposal in record[kind]
         )
     except (ValueError, KeyError, TypeError) as error:
         raise JsaError(f"{edits_file} is not a redline record: {error}") from error
@@ -513,6 +685,7 @@ def redline_resume(
     located = skills_section(document)
     # The skills section gets its latitude only while the skills list is in use.
     section = frozenset(located or ()) if skills else frozenset()
+    bullets = bullet_paragraphs(document)
     proposal = run_redline(
         assemble_redline_prompt(
             job_description,
@@ -520,13 +693,26 @@ def redline_resume(
             skills,
             section,
             bold_paragraphs(document),
+            bullets,
         ),
         settings,
     )
-    edit_results = validate_edits(
-        proposal.edits, paragraphs, job_description, skills, section
+    # PRD 04, "Validation": removals first, since the other kinds are read as following them.
+    removal_results = validate_removals(
+        proposal.removals, job_description, bullets, section
     )
-    flag_results = validate_flags(proposal.flags, paragraphs, job_description)
+    removed = {
+        removal.paragraph
+        for removal, problem in zip(proposal.removals, removal_results, strict=True)
+        if problem is None
+    }
+    reorder_results = validate_reorders(
+        proposal.reorders, job_description, bullets, section, removed
+    )
+    edit_results = validate_edits(
+        proposal.edits, paragraphs, job_description, skills, section, removed
+    )
+    flag_results = validate_flags(proposal.flags, paragraphs, job_description, removed)
     tracked = [
         _tracked_edit(
             paragraphs, edit.paragraph, edit.find, edit.replace, _edit_comment(edit)
@@ -539,16 +725,28 @@ def redline_resume(
         for flag, problem in zip(proposal.flags, flag_results, strict=True)
         if problem is None
     ]
-    if tracked or comments:
-        apply_edits(document, tracked, comments)
+    removals = [
+        TrackedRemoval(removal.paragraph, _structural_comment(removal))
+        for removal, problem in zip(proposal.removals, removal_results, strict=True)
+        if problem is None
+    ]
+    reorders = [
+        TrackedReorder(reorder.paragraphs, _structural_comment(reorder))
+        for reorder, problem in zip(proposal.reorders, reorder_results, strict=True)
+        if problem is None
+    ]
+    if tracked or comments or removals or reorders:
+        apply_edits(document, tracked, comments, removals, reorders)
         _replace_copy(document, copy)
     record = {
         "explanation": proposal.explanation,
         "edits": _record(proposal.edits, edit_results),
+        "removals": _record(proposal.removals, removal_results),
+        "reorders": _record(proposal.reorders, reorder_results),
         "flags": _record(proposal.flags, flag_results),
     }
     edits_file.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-    results = edit_results + flag_results
+    results = edit_results + removal_results + reorder_results + flag_results
     return RedlineResult(
         results.count(None), len(results) - results.count(None), located is not None
     )

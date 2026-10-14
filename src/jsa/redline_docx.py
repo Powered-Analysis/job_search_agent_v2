@@ -6,6 +6,7 @@ is also the text the redline agent is shown, so an edit's position means the sam
 
 import copy
 import itertools
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +24,12 @@ TEXT_XPATH = " | ".join(_TEXT_TAGS)
 _TEXT_QNAMES = {qn(tag) for tag in _TEXT_TAGS}
 _UNRESOLVED_XPATH = ".//w:ins | .//w:del | .//w:moveFrom | .//w:moveTo"
 _XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
+_BULLET_START = re.compile(r"\s*(?:[•●○◦▪▫■□‣⁃∙·]|[-*–—]\s)")
+# The outermost run-level elements of a paragraph; a text box's runs sit inside a run.
+_TOP_LEVEL_XPATH = (
+    "./descendant::*[self::w:r or self::w:ins or self::w:del]"
+    "[not(ancestor::w:r or ancestor::w:ins or ancestor::w:del)]"
+)
 
 
 @dataclass(frozen=True)
@@ -48,6 +55,22 @@ class ParagraphComment:
     """A comment on a whole body paragraph that changes none of its text."""
 
     paragraph: int
+    comment: str
+
+
+@dataclass(frozen=True)
+class TrackedRemoval:
+    """A body paragraph deleted whole, with its comment."""
+
+    paragraph: int
+    comment: str
+
+
+@dataclass(frozen=True)
+class TrackedReorder:
+    """Body paragraphs moved into the order listed, with one comment."""
+
+    paragraphs: list[int]
     comment: str
 
 
@@ -80,6 +103,35 @@ def bold_paragraphs(document: Document) -> set[int]:
         index
         for index, paragraph in enumerate(document.paragraphs)
         if _wholly_bold(paragraph)
+    }
+
+
+def _in_word_list(paragraph: Paragraph) -> bool:
+    """Whether the paragraph's own list setting, else its style's or its base styles', puts it in a list."""
+    style = paragraph.style
+    sources = [paragraph._p]
+    while style is not None:
+        sources.append(style.element)
+        style = style.base_style
+    for source in sources:
+        if ids := source.xpath("./w:pPr/w:numPr/w:numId/@w:val"):
+            return ids[0] != "0"
+    return False
+
+
+def is_bullet(paragraph: Paragraph) -> bool:
+    """PRD 04 "Redline", Bullets: a paragraph in a Word list, or whose text begins with a bullet character."""
+    return _in_word_list(paragraph) or bool(
+        _BULLET_START.match(paragraph_text(paragraph._p))
+    )
+
+
+def bullet_paragraphs(document: Document) -> set[int]:
+    """The indices of the bullet paragraphs, which the redline's rendering tags `bullet`."""
+    return {
+        index
+        for index, paragraph in enumerate(document.paragraphs)
+        if is_bullet(paragraph)
     }
 
 
@@ -174,28 +226,40 @@ class _Revisions:
         self._ids = itertools.count(max(used, default=-1) + 1 + comment_count)
         self._now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    def new_id(self) -> int:
+        return next(self._ids)
+
     def element(self, tag: str) -> BaseOxmlElement:
         element = OxmlElement(tag)
-        element.set(qn("w:id"), str(next(self._ids)))
+        element.set(qn("w:id"), str(self.new_id()))
         element.set(qn("w:author"), AUTHOR)
         element.set(qn("w:date"), self._now)
         return element
 
 
-def _delete(
-    runs: list[BaseOxmlElement], revisions: _Revisions
+def _wrap(
+    elements: list[BaseOxmlElement], tag: str, revisions: _Revisions
 ) -> list[BaseOxmlElement]:
-    deletions: list[BaseOxmlElement] = []
+    """Wrap each stretch of adjacent elements in one `tag` revision; returns the wrappers."""
+    wrappers: list[BaseOxmlElement] = []
+    for element in elements:
+        if not wrappers or element.getprevious() is not wrappers[-1]:
+            wrapper = revisions.element(tag)
+            element.addprevious(wrapper)
+            wrappers.append(wrapper)
+        wrappers[-1].append(element)
+    return wrappers
+
+
+def _delete(
+    runs: list[BaseOxmlElement], revisions: _Revisions, tag: str = "w:del"
+) -> list[BaseOxmlElement]:
+    """Mark the runs removed, as a deletion or, with `w:moveFrom`, as the old place of a move."""
     for run in runs:
-        if not deletions or run.getprevious() is not deletions[-1]:
-            deletion = revisions.element("w:del")
-            run.addprevious(deletion)
-            deletions.append(deletion)
-        deletions[-1].append(run)
         for text in run.xpath("w:t"):
             text.tag = qn("w:delText")
             text.set(_XML_SPACE, "preserve")
-    return deletions
+    return _wrap(runs, tag, revisions)
 
 
 def _insertion(
@@ -279,18 +343,122 @@ def _comment_paragraph(
     _anchor_comment(document, children[0], children[-1], text)
 
 
+def _mark_paragraph(
+    paragraph: BaseOxmlElement, tag: str, revisions: _Revisions
+) -> None:
+    """Track the paragraph's own mark, so accepting a deletion or move leaves no empty line."""
+    properties = paragraph.get_or_add_pPr()
+    mark_properties = properties.find(qn("w:rPr"))
+    if mark_properties is None:
+        mark_properties = OxmlElement("w:rPr")
+        # Schema order: the mark's properties precede a section break and a recorded paragraph change.
+        following = properties.find(qn("w:sectPr"))
+        if following is None:
+            following = properties.find(qn("w:pPrChange"))
+        if following is None:
+            properties.append(mark_properties)
+        else:
+            following.addprevious(mark_properties)
+    mark_properties.insert(0, revisions.element(tag))
+
+
+def _remove(
+    document: Document,
+    paragraph: BaseOxmlElement,
+    comment: str,
+    revisions: _Revisions,
+) -> None:
+    _mark_paragraph(paragraph, "w:del", revisions)
+    deletions = _delete(runs(paragraph), revisions)
+    if deletions:
+        _anchor_comment(document, deletions[0], deletions[-1], comment)
+    else:
+        _comment_paragraph(document, paragraph, comment)
+
+
+# Markers that name or anchor something once; the old place of a move must not repeat them.
+_UNIQUE_MARKERS_XPATH = (
+    ".//w:bookmarkStart | .//w:bookmarkEnd | .//w:commentRangeStart"
+    " | .//w:commentRangeEnd | .//w:r[w:commentReference]"
+)
+
+
+def _old_place(paragraph: BaseOxmlElement, revisions: _Revisions) -> None:
+    """Turn a copy of a paragraph into the place a move leaves."""
+    for marker in paragraph.xpath(_UNIQUE_MARKERS_XPATH):
+        marker.getparent().remove(marker)
+    _mark_paragraph(paragraph, "w:moveFrom", revisions)
+    _delete(runs(paragraph), revisions, "w:moveFrom")
+
+
+def _bracket_move(
+    paragraph: BaseOxmlElement, direction: str, name: str, revisions: _Revisions
+) -> tuple[BaseOxmlElement, BaseOxmlElement]:
+    """Name the paragraph's end of a move, so Word pairs it with the other end; returns the two markers."""
+    start = revisions.element(f"w:move{direction}RangeStart")
+    start.set(qn("w:name"), name)
+    end = OxmlElement(f"w:move{direction}RangeEnd")
+    end.set(qn("w:id"), start.get(qn("w:id")))
+    properties = paragraph.pPr
+    if properties is None:
+        paragraph.insert(0, start)
+    else:
+        properties.addnext(start)
+    paragraph.append(end)
+    return start, end
+
+
+def _move(
+    document: Document,
+    paragraphs: list[Paragraph],
+    reorder: TrackedReorder,
+    copies: dict[int, BaseOxmlElement],
+    revisions: _Revisions,
+) -> None:
+    """Leave each listed paragraph's old text where it was, and put the paragraphs themselves, in the listed order, after the last."""
+    ends = {}
+    for index in reorder.paragraphs:
+        moved, old = paragraphs[index]._p, copies[index]
+        moved.addprevious(old)
+        _old_place(old, revisions)
+        name = f"move{revisions.new_id()}"
+        ends[index] = _bracket_move(old, "From", name, revisions)
+        _mark_paragraph(moved, "w:moveTo", revisions)
+        _wrap(moved.xpath(_TOP_LEVEL_XPATH), "w:moveTo", revisions)
+        _bracket_move(moved, "To", name, revisions)
+    # The comment spans the old places, so rejecting the move leaves it on the original text.
+    first, last = min(reorder.paragraphs), max(reorder.paragraphs)
+    _anchor_comment(document, ends[first][0], ends[last][1], reorder.comment)
+    target = copies[last]
+    for index in reorder.paragraphs:
+        target.addnext(paragraphs[index]._p)
+        target = paragraphs[index]._p
+
+
 def apply_edits(
     document: Document,
     edits: list[TrackedEdit],
     comments: Sequence[ParagraphComment] = (),
+    removals: Sequence[TrackedRemoval] = (),
+    reorders: Sequence[TrackedReorder] = (),
 ) -> None:
-    """Write the edits into the document as tracked changes, one comment around each edit.
+    """Write the proposals into the document as tracked changes, one comment around each.
 
     Later text is changed first, so the offsets of the changes still to apply stay valid. Each
-    paragraph comment is anchored afterwards, around the paragraph's final content.
+    paragraph comment is anchored afterwards, around the paragraph's final content. A removal is
+    written after the edits and a move after the removals, so a moved paragraph carries its own
+    edits and a removed one stays where it is, inside the stretch a move reorders.
     """
-    revisions = _Revisions(document, len(edits) + len(comments))
+    revisions = _Revisions(
+        document, len(edits) + len(comments) + len(removals) + len(reorders)
+    )
     paragraphs = document.paragraphs
+    # Taken before any change: rejecting a move must give back the paragraph exactly as it was.
+    copies = {
+        index: copy.deepcopy(paragraphs[index]._p)
+        for reorder in reorders
+        for index in reorder.paragraphs
+    }
     for edit in sorted(
         edits, key=lambda e: (e.changes[0].paragraph, e.changes[0].start), reverse=True
     ):
@@ -304,3 +472,7 @@ def apply_edits(
         _anchor_comment(document, applied[-1][0], applied[0][-1], edit.comment)
     for comment in comments:
         _comment_paragraph(document, paragraphs[comment.paragraph]._p, comment.comment)
+    for removal in removals:
+        _remove(document, paragraphs[removal.paragraph]._p, removal.comment, revisions)
+    for reorder in reorders:
+        _move(document, paragraphs, reorder, copies, revisions)
