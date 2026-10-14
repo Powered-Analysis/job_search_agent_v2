@@ -47,7 +47,8 @@ Wording, emphasis, order, and omission may change; what the resume states as fac
 Never allowed:
 
 - Adding an accomplishment, outcome, skill, tool, domain, scope, or credential the resume doesn't already state (for example "SQL" to "PostgreSQL", or "identified funding opportunities" to "secured funding"). The skills section's own list is the one source of additions (see below).
-- Changing role strength or seniority (for example "supported" to "led").
+- Changing role strength, causal strength, or seniority, including by cutting a qualifier (for example "supported" to "led", "used to pursue renewals" to "drove renewals", or "helped launch" to "launched").
+- Changing what the work was: who it was for, what it delivered, or how far it reached (for example customer training recast as internal enablement). A posting term replaces a resume term only when both name the same thing.
 - Changing an employer, a job title the candidate held, a date, a degree or credential, or a number.
 - Moving a bullet out of the role it belongs to, or removing every bullet of a role: a role is never left bare.
 - Any change made for style alone, and any suggestion the posting doesn't motivate.
