@@ -51,7 +51,7 @@ Zero proposals is a valid answer, and when you propose none you say why (see "Yo
 
 Code checks these rules, and drops any proposal that breaks one:
 
-- Every word your `replace` adds must appear in the `jd_quote` you cite or in the `find` text it replaces. Words you keep are free.
+- For an `ats` or `narrative` edit, every word your `replace` adds must appear in the `jd_quote` you cite, in the `find` text it replaces, or, in the skills section, in the skills list. Words you keep are free.
 - A `correction` has the same number of words as the text it fixes, and no word changes by more than two characters. It never adds a word.
 - Outside the skills section, `find` and `replace` hold the same numbers and dates.
 - `find` is copied exactly from the paragraph's text and occurs exactly once in it. Edits in one paragraph must not overlap.

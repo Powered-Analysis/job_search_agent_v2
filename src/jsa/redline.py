@@ -44,8 +44,7 @@ _FLAG_FIELDS = {
     "suggestion": str,
     "reason": str,
 }
-_OUTPUT_KEYS = {"edits", "flags", "explanation"}
-_RECORD_KEYS = {"explanation", "edits", "flags"}
+_PROPOSAL_KEYS = {"edits", "flags", "explanation"}
 GOALS = ("ats", "narrative", "correction")
 MAX_FLAGS = 3
 MAX_CORRECTION_DISTANCE = 2
@@ -397,7 +396,7 @@ def parse_proposal(text: str) -> Proposal:
         raise JsaError(f"the redline agent's output is not JSON: {error}") from None
     if (
         not isinstance(raw, dict)
-        or raw.keys() != _OUTPUT_KEYS
+        or raw.keys() != _PROPOSAL_KEYS
         or not isinstance(raw["edits"], list)
         or not isinstance(raw["flags"], list)
         or not isinstance(raw["explanation"], str | None)
@@ -478,7 +477,7 @@ def edits_applied(edits_file: Path) -> bool:
     """Whether the recorded redline wrote any proposal, an edit or a flag, into the resume copy."""
     try:
         record = json.loads(edits_file.read_text(encoding="utf-8"))
-        if not isinstance(record, dict) or record.keys() != _RECORD_KEYS:
+        if not isinstance(record, dict) or record.keys() != _PROPOSAL_KEYS:
             raise ValueError("expected exactly explanation, edits, and flags")
         return any(
             proposal["validation"] is None
