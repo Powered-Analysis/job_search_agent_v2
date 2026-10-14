@@ -2,7 +2,7 @@
 
 A personal job-search pipeline. A scheduled cloud search finds postings that fit your profile and
 stores each one once in a hosted database. You decide Apply or Skip on each at the terminal. Each
-Apply becomes an application packet (the job description, a copy of your resume with an ATS redline of its wording as tracked changes) and a row in your tracker Sheet. `jsa refine` learns from your decisions and proposes
+Apply becomes an application packet (the job description, and a copy of your resume tailored to the posting as tracked changes and comments) and a row in your tracker Sheet. `jsa refine` learns from your decisions and proposes
 edits to your search profile.
 
 The product is specified in [`prds/`](prds/00-overview.md); start with `prds/00-overview.md`.
@@ -58,10 +58,10 @@ cp -r profile.example profile
 
 | File | What it holds |
 |---|---|
-| `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the ATS redline and refine |
+| `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the resume redline and refine |
 | `profile/resume.docx` | your single base resume |
 | `profile/cover_letter.*` | optional; your cover letter, copied into each packet (a `.docx` also gets a PDF) |
-| `profile/resume_skills.md` | optional; the skills you have, one per line, comma-separated, or both in one file. The redline may add, remove, or reword skills in your resume's `Skills` section, using only words from this list or the posting |
+| `profile/resume_skills.md` | optional; the skills you have, one per line, comma-separated, or both in one file. The redline may add, remove, reword, or reorder skills in your resume's `Skills` section, using only words from this list or the posting |
 | `profile/search/search.toml` | timezone, `run_at`, the weekly schedule, the Claude runner settings, and the verification mode |
 | `profile/search/*.md` | the six fragments that tell the search who you are and what you want |
 
@@ -76,7 +76,7 @@ SQL, RDMS
 Notion
 ```
 
-With it, the redline may add, remove, or reword skills in your resume's skills section for each
+With it, the redline may add, remove, reword, or reorder skills in your resume's skills section for each
 posting, first to match the posting's terms and then to fit the story of the rest of the resume. The
 section is the paragraphs after the one paragraph that reads `Skills` (a trailing colon is fine), up to
 the next heading or fully bold paragraph. A skills change may only use words from your list, the
@@ -250,18 +250,27 @@ copying the tracker with `gws`; then `uv run jsa deploy`.
 | `jsa revise --id <id>` or `--last` | amend the decision and note of a decided posting; `--last` picks the one decided most recently |
 | `jsa add <URL>` | add a posting you already want, decided Apply |
 | `jsa inbox` | the inbox machine's entrypoint: add each posting emailed to the jobs mailbox, then build its packet, upload it to the Drive packets folder, and track it (needs `[inbox] senders` and `drive_folder_id`, `JSA_INBOX_GWS_CREDENTIALS`, and `JSA_GWS_CREDENTIALS`) |
-| `jsa generate` | build each Apply posting's packet with an ATS redline, then track it |
+| `jsa generate` | build each Apply posting's packet with a resume redline, then track it |
 | `jsa packet`, `jsa track` | the two halves of `generate`, on their own |
 | `jsa refetch` | update stored postings, tracker titles, and packets from the employer's edits |
 | `jsa refine` | propose search-profile edits learned from your decisions; resolve the conflict-marked copies in `profile/refine/`, then `jsa refine --accept` or `--reject` |
 | `jsa search --agent <agent> --window-hours <n>` | run one search by hand |
 
+**The redline.** `jsa generate` has Claude tailor each packet's resume copy to its posting, for ATS
+matching first and then for narrative and positioning. It may reword the headline, the summary, the
+bullets, and the skills section, and fix spelling and grammar. It never adds a fact, changes a job
+title you held, an employer, a date, a degree, or a number, or pulls anything forward into your base
+resume. Every change except a spelling or grammar fix quotes the posting text behind it, and every
+change is a Word tracked change with a comment giving that quote and the reason. Where the agent is
+unsure of a change that could matter, it leaves a flag instead: a comment, never a change, for you to
+decide. At most three flags are kept.
+
 After `jsa generate`, review each packet's resume copy. The packet's resume files show the resume's
 condition:
 
 - **`.docx` and `.pdf`:** the redline changed nothing, so the PDF is ready to submit.
-- **A lone `.docx`:** the redline wrote tracked changes into the copy. Open it in Word to accept or
-  reject each proposed change; every change carries a comment with the posting text and reason behind
+- **A lone `.docx`:** the redline wrote tracked changes or comments into the copy. Open it in Word to accept or
+  reject each proposed change and answer each flag; every change carries a comment with the posting text and reason behind
   it. Save the file, and export your own PDF when you are done.
 
 A `.docx` cover letter always has its PDF beside it. A PDF is never replaced or refreshed after it is

@@ -1,4 +1,4 @@
-"""The redline document (PRD 04 "ATS redline"): Word tracked changes and comments written into a resume copy.
+"""The redline document (PRD 04 "Redline"): Word tracked changes and comments written into a resume copy.
 
 Pure over the loaded document (XC-9). Text offsets count the characters of a paragraph's runs, which
 is also the text the redline agent is shown, so an edit's position means the same thing throughout.
@@ -6,6 +6,7 @@ is also the text the redline agent is shown, so an edit's position means the sam
 
 import copy
 import itertools
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -15,8 +16,8 @@ from docx.oxml.ns import qn
 from docx.oxml.xmlchemy import BaseOxmlElement
 from docx.text.paragraph import Paragraph
 
-AUTHOR = "Claude (ATS)"
-_INITIALS = "ATS"
+AUTHOR = "Claude (Redline)"
+_INITIALS = "CR"
 _TEXT_TAGS = ("w:br", "w:cr", "w:noBreakHyphen", "w:ptab", "w:t", "w:tab")
 TEXT_XPATH = " | ".join(_TEXT_TAGS)
 _TEXT_QNAMES = {qn(tag) for tag in _TEXT_TAGS}
@@ -42,6 +43,14 @@ class TrackedEdit:
     comment: str
 
 
+@dataclass(frozen=True)
+class ParagraphComment:
+    """A comment on a whole body paragraph that changes none of its text."""
+
+    paragraph: int
+    comment: str
+
+
 def runs(paragraph: BaseOxmlElement) -> list[BaseOxmlElement]:
     # Runs inside a text box belong to the box's own paragraphs, not to this one (PRD 04, "Text in scope").
     return paragraph.xpath("./descendant::w:r[not(ancestor::w:txbxContent)]")
@@ -63,6 +72,15 @@ def body_paragraph_texts(document: Document) -> list[str]:
 def _wholly_bold(paragraph: Paragraph) -> bool:
     texts = [(run.bold, run.text) for run in paragraph.runs if run.text.strip()]
     return bool(texts) and all(bold is True for bold, _ in texts)
+
+
+def bold_paragraphs(document: Document) -> set[int]:
+    """The indices of the wholly bold body paragraphs, which the redline's rendering tags `bold`."""
+    return {
+        index
+        for index, paragraph in enumerate(document.paragraphs)
+        if _wholly_bold(paragraph)
+    }
 
 
 def _ends_skills_section(paragraph: Paragraph) -> bool:
@@ -250,12 +268,28 @@ def _anchor_comment(
     end.addnext(reference)
 
 
-def apply_edits(document: Document, edits: list[TrackedEdit]) -> None:
+def _comment_paragraph(
+    document: Document, paragraph: BaseOxmlElement, text: str
+) -> None:
+    """Anchor a comment on everything in the paragraph, which is left as it is."""
+    if not paragraph.xpath("./*[not(self::w:pPr)]"):
+        # A range needs something to wrap; an empty run changes no text.
+        paragraph.append(OxmlElement("w:r"))
+    children = paragraph.xpath("./*[not(self::w:pPr)]")
+    _anchor_comment(document, children[0], children[-1], text)
+
+
+def apply_edits(
+    document: Document,
+    edits: list[TrackedEdit],
+    comments: Sequence[ParagraphComment] = (),
+) -> None:
     """Write the edits into the document as tracked changes, one comment around each edit.
 
-    Later text is changed first, so the offsets of the changes still to apply stay valid.
+    Later text is changed first, so the offsets of the changes still to apply stay valid. Each
+    paragraph comment is anchored afterwards, around the paragraph's final content.
     """
-    revisions = _Revisions(document, len(edits))
+    revisions = _Revisions(document, len(edits) + len(comments))
     paragraphs = document.paragraphs
     for edit in sorted(
         edits, key=lambda e: (e.changes[0].paragraph, e.changes[0].start), reverse=True
@@ -268,3 +302,5 @@ def apply_edits(document: Document, edits: list[TrackedEdit]) -> None:
             )
         ]
         _anchor_comment(document, applied[-1][0], applied[0][-1], edit.comment)
+    for comment in comments:
+        _comment_paragraph(document, paragraphs[comment.paragraph]._p, comment.comment)
