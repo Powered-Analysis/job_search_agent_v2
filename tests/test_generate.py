@@ -2019,3 +2019,99 @@ def test_a_resume_without_a_skills_section_holds_every_paragraph_to_the_ordinary
     record = proposed(packets / PLAIN)
     assert record["edits"][0]["validation"] is None
     assert record["edits"][1]["validation"]
+
+
+# --- removals and reorders in a packet (issue #153; PRD 04 "Redline", "Written into the resume copy") ---
+
+BULLET_LINES = [
+    "Built the Quuxlate platform from scratch.",
+    "Led data work using SQL daily.",
+    "Reduced costs by 30% in 2020.",
+]
+
+
+def write_bulleted_resume(profile: Path) -> None:
+    document = docx.Document()
+    document.add_paragraph().add_run("Riley Resumeperson").bold = True
+    for text in BULLET_LINES:
+        document.add_paragraph(text, style="List Bullet")
+    document.save(profile / "resume.docx")
+
+
+def structural_reply(removals=(), reorders=()):
+    return lambda prompt: result_message(
+        result=json.dumps(
+            {
+                "edits": [],
+                "removals": list(removals),
+                "reorders": list(reorders),
+                "flags": [],
+                "explanation": None,
+            }
+        )
+    )
+
+
+def test_an_applied_removal_and_reorder_give_a_lone_docx_and_count_in_the_report(
+    gdb, env, agent, soffice, monkeypatch, capsys
+):
+    profile, packets = env
+    write_bulleted_resume(profile)
+    seed(gdb, jd=QUUX_JD)
+    quote = "Own the Quuxlate system end to end"
+    agent.respond = structural_reply(
+        removals=[
+            {"paragraph": 3, "jd_quote": quote, "reason": "REMOVAL-MARKER"},
+            {"paragraph": 0, "jd_quote": quote, "reason": "the name is no bullet"},
+        ],
+        reorders=[
+            {"paragraphs": [2, 1], "jd_quote": quote, "reason": "REORDER-MARKER"}
+        ],
+    )
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    folder = packets / PLAIN
+    record = proposed(folder)
+    assert [r["validation"] is None for r in record["removals"]] == [True, False]
+    assert [r["validation"] is None for r in record["reorders"]] == [True]
+    with zipfile.ZipFile(folder / RESUME_COPY) as archive:
+        body = archive.read("word/document.xml").decode("utf-8")
+        comments = archive.read("word/comments.xml").decode("utf-8")
+    assert "<w:moveFrom " in body and "<w:moveTo " in body
+    assert "Claude (Redline)" in body
+    assert "REMOVAL-MARKER" in comments and "REORDER-MARKER" in comments
+    assert entries(folder) == {"job_posting.md", RESUME_COPY, REDLINE_EDITS}
+    assert rendered(soffice) == []
+    assert re.search(r"\b2\b[^\n\d]*applied[^\n\d]*\b1\b[^\n\d]*dropped", output)
+
+
+def test_a_record_whose_only_applied_proposal_is_a_removal_gets_no_resume_pdf(
+    gdb, env, agent, soffice, monkeypatch, capsys
+):
+    profile, packets = env
+    posting_id = seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
+    record = json.dumps(
+        {
+            "explanation": None,
+            "edits": [],
+            "removals": [
+                {
+                    "paragraph": 1,
+                    "jd_quote": "x",
+                    "reason": "y",
+                    "validation": None,
+                }
+            ],
+            "reorders": [],
+            "flags": [],
+        }
+    )
+    (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
+    code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
+    assert code == 0
+    assert agent.calls == []
+    assert RESUME_PDF not in entries(folder)
+    assert rendered(soffice) == []
