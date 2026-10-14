@@ -682,11 +682,21 @@ def test_a_taken_directory_name_blocks_the_rename_and_flags_the_row(
 # --- a finished redline and a changed description (PRD 04 "Packet refresh on drift") ---
 
 
+# A redline record in which no edit was applied, so the packet's resume PDF is a finished file.
+NO_EDIT_RECORD = json.dumps(
+    {
+        "explanation": "Already aligned.",
+        "edits": [],
+        "removals": [],
+        "reorders": [],
+        "flags": [],
+    }
+)
+
+
 def packet_with_record(rdb, packets, posting_id, record=None):
     folder = make_packet(rdb, packets, posting_id)
-    record = record or json.dumps(
-        {"explanation": "Already aligned.", "edits": [], "flags": []}
-    )
+    record = record or NO_EDIT_RECORD
     (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
     return folder, record
 
@@ -792,10 +802,6 @@ def test_the_flag_for_a_finished_redline_does_not_stop_the_other_rows(
 
 OLD_PDF = OLD_COPY.replace(".docx", ".pdf")
 NEW_PDF = NEW_COPY.replace(".docx", ".pdf")
-# A redline record in which no edit was applied, so the packet's resume PDF is a finished file.
-NO_EDIT_RECORD = json.dumps(
-    {"explanation": "Already aligned.", "edits": [], "flags": []}
-)
 
 
 def test_a_retitle_renames_the_resume_pdf_with_the_copy_and_leaves_it_untouched(
@@ -829,6 +835,8 @@ def test_a_retitle_leaves_a_redlined_copy_without_a_pdf_and_renders_none(
         {
             "explanation": None,
             "edits": [{**QUUX_EDIT, "validation": None}],
+            "removals": [],
+            "reorders": [],
             "flags": [],
         }
     )

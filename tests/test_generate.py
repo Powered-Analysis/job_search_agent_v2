@@ -61,11 +61,23 @@ REDLINE_JSON = json.dumps(
                 "reason": "the same thing",
             }
         ],
+        "removals": [],
+        "reorders": [],
         "flags": [],
         "explanation": None,
     }
 )
 NO_EDITS_EXPLANATION = "The resume already uses the posting's terms."
+
+NO_EDITS_RECORD = json.dumps(
+    {
+        "explanation": NO_EDITS_EXPLANATION,
+        "edits": [],
+        "removals": [],
+        "reorders": [],
+        "flags": [],
+    }
+)
 
 
 class Agent:
@@ -1039,7 +1051,13 @@ QUUX_FLAG = {
 def redline_reply(*edits, flags=(), explanation=None):
     return lambda prompt: result_message(
         result=json.dumps(
-            {"edits": list(edits), "flags": list(flags), "explanation": explanation}
+            {
+                "edits": list(edits),
+                "removals": [],
+                "reorders": [],
+                "flags": list(flags),
+                "explanation": explanation,
+            }
         )
     )
 
@@ -1140,6 +1158,8 @@ def test_a_run_where_the_agent_proposes_no_edits_records_why_and_renders_the_res
     assert proposed(packets / PLAIN) == {
         "explanation": NO_EDITS_EXPLANATION,
         "edits": [],
+        "removals": [],
+        "reorders": [],
         "flags": [],
     }
     folder = packets / PLAIN
@@ -1253,8 +1273,41 @@ def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_bas
         "",
         "   \n",
         "[]",
-        json.dumps({"edits": [], "flags": [], "explanation": None}),
-        json.dumps({"edits": [], "flags": [], "explanation": ""}),
+        json.dumps(
+            {
+                "edits": [],
+                "removals": [],
+                "reorders": [],
+                "flags": [],
+                "explanation": None,
+            }
+        ),
+        json.dumps(
+            {
+                "edits": [],
+                "removals": [],
+                "reorders": [],
+                "flags": [],
+                "explanation": "",
+            }
+        ),
+        json.dumps({"edits": [], "flags": [], "explanation": NO_EDITS_EXPLANATION}),
+        json.dumps(
+            {
+                "edits": [],
+                "reorders": [],
+                "flags": [],
+                "explanation": NO_EDITS_EXPLANATION,
+            }
+        ),
+        json.dumps(
+            {
+                "edits": [],
+                "removals": [],
+                "flags": [],
+                "explanation": NO_EDITS_EXPLANATION,
+            }
+        ),
         json.dumps({"edits": [], "explanation": NO_EDITS_EXPLANATION}),
         json.dumps(
             {"edits": [], "skills_edits": [], "explanation": NO_EDITS_EXPLANATION}
@@ -1268,6 +1321,9 @@ def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_bas
         "bare-array",
         "no-edits-null-explanation",
         "no-edits-empty-explanation",
+        "the-three-key-shape",
+        "no-removals-key",
+        "no-reorders-key",
         "no-flags-key",
         "the-previous-shape",
     ],
@@ -1341,7 +1397,7 @@ def test_the_queue_path_skips_the_redline_when_the_record_exists(
     folder = packets / PLAIN
     folder.mkdir(parents=True)
     (folder / REDLINE_EDITS).write_text(
-        json.dumps({"explanation": NO_EDITS_EXPLANATION, "edits": [], "flags": []}),
+        NO_EDITS_RECORD,
         encoding="utf-8",
     )
     code, _ = jsa_generate(monkeypatch, capsys)
@@ -1384,6 +1440,8 @@ def applied_record() -> str:
         {
             "explanation": None,
             "edits": [{**QUUX_EDIT, "validation": None}],
+            "removals": [],
+            "reorders": [],
             "flags": [],
         }
     )
@@ -1424,6 +1482,8 @@ def test_a_record_whose_only_applied_proposal_is_a_flag_gets_no_resume_pdf(
         {
             "explanation": None,
             "edits": [],
+            "removals": [],
+            "reorders": [],
             "flags": [{**QUUX_FLAG, "validation": None}],
         }
     )
@@ -1436,22 +1496,31 @@ def test_a_record_whose_only_applied_proposal_is_a_flag_gets_no_resume_pdf(
     assert (folder / REDLINE_EDITS).read_text(encoding="utf-8") == record
 
 
+PREVIOUS_RECORDS = {
+    "skills-edits": {
+        "explanation": None,
+        "edits": [],
+        "skills_edits": [{**QUUX_EDIT, "validation": None}],
+    },
+    "three-keys": {
+        "explanation": NO_EDITS_EXPLANATION,
+        "edits": [],
+        "flags": [],
+    },
+}
+
+
 @pytest.mark.parametrize("args", ["queue", "id"])
+@pytest.mark.parametrize("shape", sorted(PREVIOUS_RECORDS))
 def test_a_record_in_the_previous_shape_is_not_read_and_flags_the_row(
-    gdb, env, agent, gws, soffice, monkeypatch, capsys, args
+    gdb, env, agent, gws, soffice, monkeypatch, capsys, args, shape
 ):
     profile, packets = env
     posting_id = seed(gdb)
     folder = packets / PLAIN
     folder.mkdir(parents=True)
     shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
-    record = json.dumps(
-        {
-            "explanation": None,
-            "edits": [],
-            "skills_edits": [{**SK_EDIT, "validation": None}],
-        }
-    )
+    record = json.dumps(PREVIOUS_RECORDS[shape])
     (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
     extra = ("--id", posting_id) if args == "id" else ()
     code, output = jsa_generate(monkeypatch, capsys, *extra)
@@ -1472,7 +1541,7 @@ def test_a_record_with_no_applied_edit_and_no_resume_pdf_gets_the_pdf_without_a_
     folder = packets / PLAIN
     folder.mkdir(parents=True)
     shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
-    record = json.dumps({"explanation": NO_EDITS_EXPLANATION, "edits": [], "flags": []})
+    record = NO_EDITS_RECORD
     (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
     extra = ("--id", posting_id) if args == "id" else ()
     code, _ = jsa_generate(monkeypatch, capsys, *extra)
@@ -1494,7 +1563,7 @@ def test_an_existing_resume_pdf_is_never_replaced_or_refreshed(
     shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
     (folder / RESUME_PDF).write_bytes(b"MY OWN EXPORT")
     (folder / REDLINE_EDITS).write_text(
-        json.dumps({"explanation": NO_EDITS_EXPLANATION, "edits": [], "flags": []}),
+        NO_EDITS_RECORD,
         encoding="utf-8",
     )
     extra = ("--id", posting_id) if args == "id" else ()

@@ -5,6 +5,7 @@ shared agent loop (the Claude seam, `XC-12`). Unset means unbounded. `[agents.ch
 """
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -21,7 +22,15 @@ from jsa.profile import (
 )
 from jsa.runners import WallClockExceeded
 
-REDLINE_JSON = '{"edits": [], "flags": [], "explanation": "Nothing to change."}'
+REDLINE_JSON = json.dumps(
+    {
+        "edits": [],
+        "removals": [],
+        "reorders": [],
+        "flags": [],
+        "explanation": "Nothing to change.",
+    }
+)
 
 
 def config_text(redline_extra="", refine_extra=""):
