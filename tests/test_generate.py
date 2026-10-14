@@ -1,4 +1,4 @@
-"""`jsa generate` (issue #13; PRD 04 "ATS redline", "Base resume" and "Packet directory"; PRD 02 "Packet queue"; XC-9 to XC-14).
+"""`jsa generate` (issue #13; PRD 04 "Redline", "Base resume" and "Packet directory"; PRD 02 "Packet queue"; XC-9 to XC-14).
 
 The database is the libSQL container (and a `file:` database). The outside world is replaced at the
 documented seams: HTTP at the transport, Claude at `agent_loop.query`, and `gws` by a stub script
@@ -56,11 +56,12 @@ REDLINE_JSON = json.dumps(
                 "paragraph": 99,
                 "find": "nothing here",
                 "replace": "nothing there",
+                "goal": "ats",
                 "jd_quote": "Frobnicator platform",
-                "why_same_meaning": "the same thing",
+                "reason": "the same thing",
             }
         ],
-        "skills_edits": [],
+        "flags": [],
         "explanation": None,
     }
 )
@@ -1016,22 +1017,29 @@ def test_the_command_is_registered_with_id_and_dry_run(monkeypatch, capsys):
     assert "--id" in output and "--dry-run" in output
 
 
-# --- the ATS redline (issue #82; PRD 04 "ATS redline") ------------------------
+# --- the redline (issues #82, #152; PRD 04 "Redline") -------------------------------
 
 QUUX_JD = "# Staff Engineer\n\nOwn the Quuxlate system end to end.\n"
 QUUX_EDIT = {
     "paragraph": 1,
     "find": "Quuxlate platform",
     "replace": "Quuxlate system",
+    "goal": "ats",
     "jd_quote": "Quuxlate system",
-    "why_same_meaning": "WHY-SAME-MEANING-MARKER",
+    "reason": "REASON-MARKER",
+}
+QUUX_FLAG = {
+    "paragraph": 1,
+    "jd_quote": "Own the Quuxlate system end to end",
+    "suggestion": "SUGGESTION-MARKER",
+    "reason": "FLAG-REASON-MARKER",
 }
 
 
-def redline_reply(*edits, explanation=None):
+def redline_reply(*edits, flags=(), explanation=None):
     return lambda prompt: result_message(
         result=json.dumps(
-            {"edits": list(edits), "skills_edits": [], "explanation": explanation}
+            {"edits": list(edits), "flags": list(flags), "explanation": explanation}
         )
     )
 
@@ -1092,7 +1100,7 @@ def test_every_proposed_edit_is_recorded_with_its_validation_result(
     profile, packets = env
     seed(gdb)
     agent.respond = redline_reply(
-        {**QUUX_EDIT, "paragraph": 99}, {**QUUX_EDIT, "why_same_meaning": ""}
+        {**QUUX_EDIT, "paragraph": 99}, {**QUUX_EDIT, "reason": ""}
     )
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
@@ -1132,7 +1140,7 @@ def test_a_run_where_the_agent_proposes_no_edits_records_why_and_renders_the_res
     assert proposed(packets / PLAIN) == {
         "explanation": NO_EDITS_EXPLANATION,
         "edits": [],
-        "skills_edits": [],
+        "flags": [],
     }
     folder = packets / PLAIN
     assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
@@ -1157,8 +1165,8 @@ def test_a_valid_edit_becomes_a_tracked_change_with_a_comment_in_the_resume_copy
         body = archive.read("word/document.xml").decode("utf-8")
         comments = archive.read("word/comments.xml").decode("utf-8")
     assert "<w:ins " in body and "<w:del " in body
-    assert "Claude (ATS)" in body
-    assert "Quuxlate system" in comments and "WHY-SAME-MEANING-MARKER" in comments
+    assert "Claude (Redline)" in body
+    assert "Quuxlate system" in comments and "REASON-MARKER" in comments
     # The packet holds one resume file, the redlined `.docx`, and no resume PDF.
     assert entries(folder) == {
         "job_posting.md",
@@ -1166,6 +1174,61 @@ def test_a_valid_edit_becomes_a_tracked_change_with_a_comment_in_the_resume_copy
         REDLINE_EDITS,
     }
     assert rendered(soffice) == []
+
+
+def test_a_flag_becomes_a_comment_without_a_change_and_the_resume_gets_no_pdf(
+    gdb, env, agent, soffice, monkeypatch, capsys
+):
+    profile, packets = env
+    posting_id = seed(gdb, jd=QUUX_JD)
+    agent.respond = redline_reply(flags=[QUUX_FLAG])
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    folder = packets / PLAIN
+    record = proposed(folder)
+    assert record["explanation"] is None and record["edits"] == []
+    (flag,) = record["flags"]
+    assert flag["validation"] is None
+    assert (folder / RESUME_COPY).read_bytes() != (profile / "resume.docx").read_bytes()
+    with zipfile.ZipFile(folder / RESUME_COPY) as archive:
+        body = archive.read("word/document.xml").decode("utf-8")
+        comments = archive.read("word/comments.xml").decode("utf-8")
+    assert "<w:ins " not in body and "<w:del " not in body
+    assert "SUGGESTION-MARKER" in comments and "FLAG-REASON-MARKER" in comments
+    assert entries(folder) == {"job_posting.md", RESUME_COPY, REDLINE_EDITS}
+    assert rendered(soffice) == []
+    assert re.search(r"\b1\b[^\n\d]*applied[^\n\d]*\b0\b[^\n\d]*dropped", output)
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_the_applied_and_dropped_counts_cover_edits_and_flags_together(
+    gdb, agent, monkeypatch, capsys
+):
+    seed(gdb, jd=QUUX_JD)
+    agent.respond = redline_reply(
+        QUUX_EDIT,
+        {**QUUX_EDIT, "paragraph": 99},
+        flags=[QUUX_FLAG, {**QUUX_FLAG, "paragraph": 99}, {**QUUX_FLAG, "reason": ""}],
+    )
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert re.search(r"\b2\b[^\n\d]*applied[^\n\d]*\b3\b[^\n\d]*dropped", output)
+
+
+def test_a_run_where_every_proposal_is_dropped_leaves_the_copy_and_renders_its_pdf(
+    gdb, env, agent, soffice, monkeypatch, capsys
+):
+    profile, packets = env
+    seed(gdb, jd=QUUX_JD)
+    agent.respond = redline_reply(
+        {**QUUX_EDIT, "paragraph": 99}, flags=[{**QUUX_FLAG, "paragraph": 99}]
+    )
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    folder = packets / PLAIN
+    assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_PDF).is_file()
+    assert rendered(soffice) == [RESUME_COPY]
 
 
 def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_base(
@@ -1190,9 +1253,12 @@ def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_bas
         "",
         "   \n",
         "[]",
-        json.dumps({"edits": [], "skills_edits": [], "explanation": None}),
-        json.dumps({"edits": [], "skills_edits": [], "explanation": ""}),
+        json.dumps({"edits": [], "flags": [], "explanation": None}),
+        json.dumps({"edits": [], "flags": [], "explanation": ""}),
         json.dumps({"edits": [], "explanation": NO_EDITS_EXPLANATION}),
+        json.dumps(
+            {"edits": [], "skills_edits": [], "explanation": NO_EDITS_EXPLANATION}
+        ),
     ],
     ids=[
         "prose",
@@ -1202,7 +1268,8 @@ def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_bas
         "bare-array",
         "no-edits-null-explanation",
         "no-edits-empty-explanation",
-        "no-skills-edits-key",
+        "no-flags-key",
+        "the-previous-shape",
     ],
 )
 def test_a_redline_result_that_is_not_an_edits_and_explanation_object_flags_the_row_and_exits_non_zero(
@@ -1274,9 +1341,7 @@ def test_the_queue_path_skips_the_redline_when_the_record_exists(
     folder = packets / PLAIN
     folder.mkdir(parents=True)
     (folder / REDLINE_EDITS).write_text(
-        json.dumps(
-            {"explanation": NO_EDITS_EXPLANATION, "edits": [], "skills_edits": []}
-        ),
+        json.dumps({"explanation": NO_EDITS_EXPLANATION, "edits": [], "flags": []}),
         encoding="utf-8",
     )
     code, _ = jsa_generate(monkeypatch, capsys)
@@ -1319,7 +1384,7 @@ def applied_record() -> str:
         {
             "explanation": None,
             "edits": [{**QUUX_EDIT, "validation": None}],
-            "skills_edits": [],
+            "flags": [],
         }
     )
 
@@ -1347,6 +1412,57 @@ def test_an_id_leaves_a_redlined_copy_and_its_record_alone_but_refreshes_the_pos
     assert rendered(soffice) == []
 
 
+def test_a_record_whose_only_applied_proposal_is_a_flag_gets_no_resume_pdf(
+    gdb, env, agent, soffice, monkeypatch, capsys
+):
+    profile, packets = env
+    posting_id = seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
+    record = json.dumps(
+        {
+            "explanation": None,
+            "edits": [],
+            "flags": [{**QUUX_FLAG, "validation": None}],
+        }
+    )
+    (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
+    code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
+    assert code == 0
+    assert agent.calls == []
+    assert RESUME_PDF not in entries(folder)
+    assert rendered(soffice) == []
+    assert (folder / REDLINE_EDITS).read_text(encoding="utf-8") == record
+
+
+@pytest.mark.parametrize("args", ["queue", "id"])
+def test_a_record_in_the_previous_shape_is_not_read_and_flags_the_row(
+    gdb, env, agent, gws, soffice, monkeypatch, capsys, args
+):
+    profile, packets = env
+    posting_id = seed(gdb)
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
+    record = json.dumps(
+        {
+            "explanation": None,
+            "edits": [],
+            "skills_edits": [{**SK_EDIT, "validation": None}],
+        }
+    )
+    (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
+    extra = ("--id", posting_id) if args == "id" else ()
+    code, output = jsa_generate(monkeypatch, capsys, *extra)
+    assert code != 0
+    assert "is not a redline record" in output
+    assert agent.calls == []
+    assert rendered(soffice) == []
+    assert (folder / REDLINE_EDITS).read_text(encoding="utf-8") == record
+    assert column(gdb, posting_id, "added_to_tracker") == 0
+
+
 @pytest.mark.parametrize("args", ["queue", "id"])
 def test_a_record_with_no_applied_edit_and_no_resume_pdf_gets_the_pdf_without_a_redline(
     gdb, env, agent, soffice, monkeypatch, capsys, args
@@ -1356,9 +1472,7 @@ def test_a_record_with_no_applied_edit_and_no_resume_pdf_gets_the_pdf_without_a_
     folder = packets / PLAIN
     folder.mkdir(parents=True)
     shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
-    record = json.dumps(
-        {"explanation": NO_EDITS_EXPLANATION, "edits": [], "skills_edits": []}
-    )
+    record = json.dumps({"explanation": NO_EDITS_EXPLANATION, "edits": [], "flags": []})
     (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
     extra = ("--id", posting_id) if args == "id" else ()
     code, _ = jsa_generate(monkeypatch, capsys, *extra)
@@ -1380,9 +1494,7 @@ def test_an_existing_resume_pdf_is_never_replaced_or_refreshed(
     shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
     (folder / RESUME_PDF).write_bytes(b"MY OWN EXPORT")
     (folder / REDLINE_EDITS).write_text(
-        json.dumps(
-            {"explanation": NO_EDITS_EXPLANATION, "edits": [], "skills_edits": []}
-        ),
+        json.dumps({"explanation": NO_EDITS_EXPLANATION, "edits": [], "flags": []}),
         encoding="utf-8",
     )
     extra = ("--id", posting_id) if args == "id" else ()
@@ -1650,7 +1762,7 @@ SK_EDIT = {
     "find": "Looker",
     "replace": "Looker, Python",
     "goal": "narrative",
-    "jd_quote": None,
+    "jd_quote": "Frobnicator platform",
     "reason": "GEN-SK-REASON-MARKER",
 }
 EXAMPLE_SKILLS = {
@@ -1678,19 +1790,6 @@ def write_resume_with(profile: Path, *blocks: str) -> None:
     for text in blocks:
         document.add_paragraph(text)
     document.save(profile / "resume.docx")
-
-
-def skills_reply(*skills_edits, edits=()):
-    explanation = None if edits or skills_edits else NO_EDITS_EXPLANATION
-    return lambda prompt: result_message(
-        result=json.dumps(
-            {
-                "edits": list(edits),
-                "skills_edits": list(skills_edits),
-                "explanation": explanation,
-            }
-        )
-    )
 
 
 def skills_warnings(output: str) -> list[str]:
@@ -1739,14 +1838,14 @@ def test_without_a_skills_list_the_prompt_carries_none_and_a_skills_edit_is_drop
     else:
         skills_file.write_text(content)
     seed(gdb)
-    agent.respond = skills_reply(SK_EDIT)
+    agent.respond = redline_reply(SK_EDIT)
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
     (prompt,) = agent.prompts
     assert "Stakeholder reporting" not in prompt
     assert "{{" not in prompt and "}}" not in prompt
     folder = packets / PLAIN
-    (entry,) = proposed(folder)["skills_edits"]
+    (entry,) = proposed(folder)["edits"]
     assert isinstance(entry["validation"], str) and entry["validation"]
     assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
     assert (folder / RESUME_PDF).is_file()
@@ -1758,18 +1857,18 @@ def test_a_skills_edit_is_written_into_the_resume_copy_and_the_resume_gets_no_pd
     profile, packets = env
     write_resume_with(profile, "Skills", SKILLS_LINE)
     posting_id = seed(gdb)
-    agent.respond = skills_reply(SK_EDIT)
+    agent.respond = redline_reply(SK_EDIT)
     code, output = jsa_generate(monkeypatch, capsys)
     assert code == 0
     folder = packets / PLAIN
     record = proposed(folder)
-    assert record["explanation"] is None and record["edits"] == []
-    (entry,) = record["skills_edits"]
+    assert record["explanation"] is None and record["flags"] == []
+    (entry,) = record["edits"]
     assert entry["validation"] is None
     with zipfile.ZipFile(folder / RESUME_COPY) as archive:
         body = archive.read("word/document.xml").decode("utf-8")
         comments = archive.read("word/comments.xml").decode("utf-8")
-    assert "<w:ins " in body and "<w:del " in body and "Claude (ATS)" in body
+    assert "<w:ins " in body and "<w:del " in body and "Claude (Redline)" in body
     assert "GEN-SK-REASON-MARKER" in comments
     assert RESUME_PDF not in entries(folder)
     assert rendered(soffice) == []
@@ -1777,14 +1876,14 @@ def test_a_skills_edit_is_written_into_the_resume_copy_and_the_resume_gets_no_pd
     assert column(gdb, posting_id, "added_to_tracker") == 1
 
 
-def test_the_applied_and_dropped_counts_include_skills_edits(
+def test_the_applied_and_dropped_counts_include_skills_section_edits(
     gdb, env, agent, monkeypatch, capsys
 ):
     profile, _ = env
     write_resume_with(profile, "Skills", SKILLS_LINE)
     seed(gdb)
     bad = {**SK_EDIT, "replace": "Looker, Rust"}
-    agent.respond = skills_reply(SK_EDIT, bad)
+    agent.respond = redline_reply(SK_EDIT, bad)
     code, output = jsa_generate(monkeypatch, capsys)
     assert code == 0
     assert re.search(r"\b1\b[^\n\d]*applied[^\n\d]*\b1\b[^\n\d]*dropped", output)
@@ -1796,7 +1895,7 @@ def test_a_skills_edit_that_fails_validation_leaves_the_copy_and_renders_its_pdf
     profile, packets = env
     write_resume_with(profile, "Skills", SKILLS_LINE)
     seed(gdb)
-    agent.respond = skills_reply({**SK_EDIT, "replace": "Looker, Rust"})
+    agent.respond = redline_reply({**SK_EDIT, "replace": "Looker, Rust"})
     jsa_generate(monkeypatch, capsys)
     folder = packets / PLAIN
     assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
@@ -1840,15 +1939,14 @@ def test_a_resume_without_a_skills_section_holds_every_paragraph_to_the_ordinary
 ):
     _, packets = env
     seed(gdb, jd=QUUX_JD)
-    skill = {
-        **SK_EDIT,
-        "paragraph": 1,
-        "find": "Quuxlate platform",
-        "replace": "Quuxlate platform, Python",
+    removal = {
+        **QUUX_EDIT,
+        "find": " from scratch",
+        "replace": "",
     }
-    agent.respond = skills_reply(skill, edits=[QUUX_EDIT])
+    agent.respond = redline_reply(QUUX_EDIT, removal)
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
     record = proposed(packets / PLAIN)
     assert record["edits"][0]["validation"] is None
-    assert record["skills_edits"][0]["validation"]
+    assert record["edits"][1]["validation"]
