@@ -760,6 +760,60 @@ def test_a_title_only_change_with_a_finished_redline_flags_nothing(
     assert agent.calls == []
 
 
+def test_a_manual_rows_changed_description_with_a_finished_redline_flags_the_row_in_place(
+    rdb, web, gws, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb, search_agent="manual")
+    folder, record = packet_with_record(rdb, packets, posting_id)
+    employer(web, rdb, posting_id, title=NEW_TITLE, location=OLD_LOCATION)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert code != 0
+    assert str(folder / REDLINE_EDITS) in output
+    assert f"jsa generate --id {posting_id}" in output
+    assert {path.name for path in packets.iterdir()} == {OLD_DIR}
+    assert (folder / REDLINE_EDITS).read_text(encoding="utf-8") == record
+    assert NEW_JD in (folder / "job_posting.md").read_text(encoding="utf-8")
+    assert agent.calls == []
+    assert title_updates(gws) == []
+
+
+def test_a_manual_rows_changed_description_without_a_redline_record_regenerates_in_place(
+    rdb, web, gws, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb, search_agent="manual")
+    folder = make_packet(rdb, packets, posting_id)
+    employer(web, rdb, posting_id, title=NEW_TITLE, location=OLD_LOCATION)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert "jsa generate" not in output
+    assert {path.name for path in packets.iterdir()} == {OLD_DIR}
+    assert NEW_JD in (folder / "job_posting.md").read_text(encoding="utf-8")
+    assert len(agent.calls) == 1
+    assert title_updates(gws) == []
+
+
+def test_a_manual_row_whose_only_difference_is_the_employers_title_is_left_untouched(
+    rdb, web, gws, env, agent, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(rdb, search_agent="manual")
+    packet_with_record(rdb, packets, posting_id)
+    employer(web, rdb, posting_id, title=NEW_TITLE, body=OLD_JD, location=OLD_LOCATION)
+    set_sheet(gws, (posting_id, ""))
+    row, files, times = whole_row(rdb, posting_id), tree(packets), stamps(packets)
+    code, output = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert "jsa generate" not in output
+    assert whole_row(rdb, posting_id) == row
+    assert tree(packets) == files and stamps(packets) == times
+    assert agent.calls == []
+    assert title_updates(gws) == []
+
+
 def test_a_changed_description_without_a_redline_record_runs_the_redline_and_flags_nothing(
     rdb, web, gws, env, agent, monkeypatch, capsys
 ):
