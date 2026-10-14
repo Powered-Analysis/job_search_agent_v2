@@ -226,7 +226,8 @@ def _reconcile(
         print(f"unchanged: posting {job.id}")
         return []
     title_changed = title is not None and title != job.title
-    drift = title_changed or captured.jd_markdown != job.jd_markdown
+    description_changed = captured.jd_markdown != job.jd_markdown
+    drift = title_changed or description_changed
     if dry_run:
         directory = packet_paths(config, job)[0]
         print(f"would update: posting {job.id}: {', '.join(changes)}")
@@ -275,7 +276,7 @@ def _reconcile(
                 config,
                 sources,
                 redline,
-                description_changed=captured.jd_markdown != job.jd_markdown,
+                description_changed=description_changed,
             )
         )
     # A copy is never rewritten, so a [TITLE] filled into it keeps the old title.
