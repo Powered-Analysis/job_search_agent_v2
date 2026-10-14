@@ -366,7 +366,7 @@ def test_the_redlined_resume_copy_is_uploaded_as_the_exact_docx_file(
         body = archive.read("word/document.xml").decode()
         comments = archive.read("word/comments.xml").decode()
     assert "<w:ins " in body and "<w:del " in body
-    assert "WHY-SAME-MEANING-MARKER" in comments
+    assert "REASON-MARKER" in comments
 
 
 def test_a_resume_the_redline_left_alone_is_delivered_with_its_pdf(

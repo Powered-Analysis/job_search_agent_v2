@@ -21,7 +21,7 @@ from jsa.profile import (
 )
 from jsa.runners import WallClockExceeded
 
-REDLINE_JSON = '{"edits": [], "skills_edits": [], "explanation": "Nothing to change."}'
+REDLINE_JSON = '{"edits": [], "flags": [], "explanation": "Nothing to change."}'
 
 
 def config_text(redline_extra="", refine_extra=""):

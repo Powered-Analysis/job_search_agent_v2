@@ -555,6 +555,68 @@ def test_the_example_resume_has_a_single_skills_paragraph_for_the_live_check():
     assert section is not None and len(section) > 0
 
 
+EXAMPLE_RESUME_TEXT_WITHOUT_THE_HEADLINE = [
+    "Jordan Example",
+    "Chicago, IL | jordan@example.com | example.com/jordan",
+    "Summary",
+    (
+        "Data analyst with six years in e-commerce and logistics, moving from reporting into analytics "
+        "engineering. Writes SQL daily and presents findings to non-technical stakeholders."
+    ),
+    "Experience",
+    "Analytics Engineer, Northwind Retail (Example Co.), 2022 to present",
+    "Own the dbt models and metrics layer behind the company's executive dashboards.",
+    "Built Looker and Tableau dashboards used weekly by merchandising and operations.",
+    "Ran A/B test analyses with product teams and presented results to leadership.",
+    "Data Analyst, Fabrikam Logistics (Example Co.), 2019 to 2022",
+    "Wrote SQL reports on shipment volumes and delivery delays for regional managers.",
+    "Automated the weekly operations report, saving about six hours of manual work.",
+    "Education",
+    "B.S. in Statistics, Example State University, 2019",
+    "Skills",
+    "SQL, dbt, Looker, Tableau, Python, A/B testing",
+]
+
+
+def test_the_example_resume_gains_a_one_line_headline_under_the_contact_line():
+    document = docx.Document(str(EXAMPLE_DIR / "resume.docx"))
+    texts = [paragraph.text for paragraph in document.paragraphs]
+    assert len(texts) == len(EXAMPLE_RESUME_TEXT_WITHOUT_THE_HEADLINE) + 1
+    headline = texts[2]
+    assert headline.strip() and "\n" not in headline and headline not in texts[:2]
+    assert texts[:2] == EXAMPLE_RESUME_TEXT_WITHOUT_THE_HEADLINE[:2]
+    # Everything else keeps its text and its order.
+    assert texts[:2] + texts[3:] == EXAMPLE_RESUME_TEXT_WITHOUT_THE_HEADLINE
+
+
+def test_the_example_headline_is_plain_text_not_a_bold_section_label():
+    paragraph = docx.Document(str(EXAMPLE_DIR / "resume.docx")).paragraphs[2]
+    assert not all(run.bold for run in paragraph.runs if run.text.strip())
+    assert not paragraph.style.name.startswith("Heading")
+
+
+def test_the_example_resume_still_has_one_skills_section_after_the_headline():
+    section = skills_section(docx.Document(str(EXAMPLE_DIR / "resume.docx")))
+    assert section is not None and len(section) > 0
+
+
+def test_the_readme_describes_the_tailoring_redline_and_not_an_ats_only_one():
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    lowered = text.lower()
+    assert "ats redline" not in lowered and "ats-only" not in lowered
+    for term in (
+        "headline",
+        "summary",
+        "bullet",
+        "skills",
+        "tracked change",
+        "comment",
+    ):
+        assert term in lowered, term
+    assert "flag" in lowered
+    assert "base resume" in lowered
+
+
 def test_the_readme_describes_the_skills_file_and_its_two_formats():
     text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "resume_skills.md" in text
