@@ -76,7 +76,7 @@ SQL, RDMS
 Notion
 ```
 
-With it, the redline may add, remove, reword, or reorder skills in your resume's skills section for each
+With it, the redline may add, remove, reword, or reorder skills (and the section's lines) in your resume's skills section for each
 posting, first to match the posting's terms and then to fit the story of the rest of the resume. The
 section is the paragraphs after the one paragraph that reads `Skills` (a trailing colon is fine), up to
 the next heading or fully bold paragraph. A skills change may only use words from your list, the
@@ -258,10 +258,14 @@ copying the tracker with `gws`; then `uv run jsa deploy`.
 
 **The redline.** `jsa generate` has Claude tailor each packet's resume copy to its posting, for ATS
 matching first and then for narrative and positioning. It may reword the headline, the summary, the
-bullets, and the skills section, and fix spelling and grammar. It never adds a fact, changes a job
+bullets, and the skills section, fix spelling and grammar, remove bullets that fit the posting least, and
+put the strongest bullets, and the skills lines, first. It never adds a fact, changes a job
 title you held, an employer, a date, a degree, or a number, or pulls anything forward into your base
 resume. Every change except a spelling or grammar fix quotes the posting text behind it, and every
-change is a Word tracked change with a comment giving that quote and the reason. Where the agent is
+change is a Word tracked change with a comment giving that quote and the reason. A removal is a tracked
+deletion of the whole bullet, and a reorder is a tracked move; a bullet never leaves its role, and a role
+never loses all its bullets. Removals and bullet reorders need bullets that are in a Word list or begin
+with a bullet character. Where the agent is
 unsure of a change that could matter, it leaves a flag instead: a comment, never a change, for you to
 decide. At most three flags are kept.
 
@@ -269,8 +273,9 @@ After `jsa generate`, review each packet's resume copy. The packet's resume file
 condition:
 
 - **`.docx` and `.pdf`:** the redline changed nothing, so the PDF is ready to submit.
-- **A lone `.docx`:** the redline wrote tracked changes or comments into the copy. Open it in Word to accept or
-  reject each proposed change and answer each flag; every change carries a comment with the posting text and reason behind
+- **A lone `.docx`:** the redline wrote tracked changes or comments into the copy, so review it before
+  submitting. Open it in Word to accept or reject each proposed change (edit, removal, or reorder) and answer
+  each flag; every change carries a comment with the posting text and reason behind
   it. Save the file, and export your own PDF when you are done.
 
 A `.docx` cover letter always has its PDF beside it. A PDF is never replaced or refreshed after it is
