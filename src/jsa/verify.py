@@ -1,7 +1,7 @@
-"""Liveness and recency verification (PRD 01, XC-5): pure classification, the fetches around it, and the stored-posting re-check."""
+"""Liveness, recency, and age verification (PRD 01, XC-5): pure classification, the fetches around it, and the stored-posting re-check."""
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from urllib.parse import unquote, urlsplit
@@ -20,6 +20,9 @@ type Index = Mapping[str, object]
 
 # Absorbs timezone and clock skew between agent, ATS, and pipeline (PRD 01).
 WINDOW_SLACK = timedelta(hours=24)
+# A posting created longer ago than this is dropped however recently it was updated (PRD 01).
+# The search prompt template states the same 60 days, because its slot table is fixed (XC-13).
+AGE_CEILING = timedelta(days=60)
 
 # Only a definite closed signal marks a stored posting closed (PRD 01).
 CLOSED_OUTCOMES = frozenset({"not_on_index", "page_closed"})
@@ -35,6 +38,7 @@ _ATS_DATE_KINDS = {
     "rippling": "created",
 }
 _PAGE_DATE_KIND = "published"
+_CREATED_KIND = "created"
 _GONE_STATUSES = (404, 410)
 
 
@@ -66,6 +70,17 @@ class Checked:
     record: Mapping | None = None
 
 
+@dataclass(frozen=True)
+class Fetched:
+    """One board's index fetch."""
+
+    index: Index
+    # Job id -> raw creation value, for a platform whose recency value is not one.
+    created: Index = field(default_factory=dict)
+    # The Ashby board, which is also its capture source (PRD 01).
+    record: object = None
+
+
 def _parse_timestamp(value: object, *, epoch_ms: bool = False) -> datetime | None:
     try:
         if epoch_ms and isinstance(value, int | float) and not isinstance(value, bool):
@@ -88,16 +103,28 @@ def _judge(
     kind: str,
     *,
     epoch_ms: bool = False,
+    created: object,
     window_start: datetime | None,
+    now: datetime,
     open_outcome: str,
     no_date_outcome: str,
 ) -> Verdict:
+    """`raw` is the recency value; `created` is the creation value the age ceiling reads."""
     moment = _parse_timestamp(raw, epoch_ms=epoch_ms)
+    if moment is not None:
+        ats_date = db.format_timestamp(moment)
+        if window_start is not None and moment < window_start - WINDOW_SLACK:
+            return Verdict("out_of_window", ats_date, kind)
+    # A missing creation value skips the ceiling, and the window alone judges (PRD 01).
+    born = _parse_timestamp(created, epoch_ms=epoch_ms)
+    if (
+        window_start is not None
+        and born is not None
+        and born < now - AGE_CEILING - WINDOW_SLACK
+    ):
+        return Verdict("out_of_window", db.format_timestamp(born), _CREATED_KIND)
     if moment is None:
         return Verdict(no_date_outcome)
-    ats_date = db.format_timestamp(moment)
-    if window_start is not None and moment < window_start - WINDOW_SLACK:
-        return Verdict("out_of_window", ats_date, kind)
     return Verdict(open_outcome, ats_date, kind)
 
 
@@ -105,7 +132,9 @@ def _classify_ats(
     ref: AtsRef,
     index: Index | None,
     detail: Mapping | None,
+    created: object,
     window_start: datetime | None,
+    now: datetime,
 ) -> Verdict:
     if index is None:
         return Verdict("unverifiable")
@@ -121,7 +150,10 @@ def _classify_ats(
         raw,
         _ATS_DATE_KINDS[ref.platform],
         epoch_ms=ref.platform == "lever",
+        # Only Greenhouse's recency value (a last edit) isn't a creation or publication date.
+        created=created if ref.platform == "greenhouse" else raw,
         window_start=window_start,
+        now=now,
         open_outcome="verified",
         no_date_outcome="verified_no_date",
     )
@@ -160,7 +192,9 @@ def _classify_page(
     return _judge(
         posting.date_posted if posting else None,
         _PAGE_DATE_KIND,
+        created=posting.date_posted if posting else None,
         window_start=window_start,
+        now=now,
         open_outcome="reachable",
         no_date_outcome="reachable_no_date",
     )
@@ -173,15 +207,18 @@ def classify(
     *,
     index: Index | None = None,
     detail: Mapping | None = None,
+    created: object = None,
     page: Page | None = None,
     window_start: datetime | None = None,
     now: datetime,
 ) -> Verdict:
-    """Pure (XC-9). `None` for the index, detail, or page means a fetch the check needs failed."""
+    """Pure (XC-9). `None` for the index, detail, or page means a fetch the check needs failed.
+
+    `created` is a Greenhouse posting's `first_published`, which its index recency value lacks."""
     if is_aggregator(url):
         return Verdict("aggregator")
     if ref is not None:
-        return _classify_ats(ref, index, detail, window_start)
+        return _classify_ats(ref, index, detail, created, window_start, now)
     if mode == "strict":
         return Verdict("unsupported")
     return _classify_page(url, page, window_start, now)
@@ -202,23 +239,25 @@ def _jobs_of(data: object) -> object:
     return data.get("jobs") if isinstance(data, dict) else None
 
 
-def _greenhouse_index(client: httpx.Client, board: str) -> tuple[Index, object]:
+def _greenhouse_index(client: httpx.Client, board: str) -> Fetched:
     data = get_json(client, f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs")
-    return _listing(_jobs_of(data), "updated_at"), None
+    jobs = _jobs_of(data)
+    return Fetched(
+        _listing(jobs, "updated_at"), created=_listing(jobs, "first_published")
+    )
 
 
-def _lever_index(client: httpx.Client, board: str) -> tuple[Index, object]:
+def _lever_index(client: httpx.Client, board: str) -> Fetched:
     data = get_lever_json(client, f"/v0/postings/{board}?mode=json")
-    return _listing(data, "createdAt"), None
+    return Fetched(_listing(data, "createdAt"))
 
 
-def _ashby_index(client: httpx.Client, board: str) -> tuple[Index, object]:
+def _ashby_index(client: httpx.Client, board: str) -> Fetched:
     data = get_json(client, ashby_board_url(board))
-    # The board is also Ashby's capture source (PRD 01).
-    return _listing(_jobs_of(data), "publishedAt"), data
+    return Fetched(_listing(_jobs_of(data), "publishedAt"), record=data)
 
 
-def _rippling_index(client: httpx.Client, board: str) -> tuple[Index, object]:
+def _rippling_index(client: httpx.Client, board: str) -> Fetched:
     jobs: dict[str, object] = {}
     page = 0
     while True:
@@ -230,10 +269,10 @@ def _rippling_index(client: httpx.Client, board: str) -> tuple[Index, object]:
         jobs |= _listing(data.get("items"), None)
         page += 1
         if page >= data["totalPages"]:
-            return jobs, None
+            return Fetched(jobs)
 
 
-_INDEX_FETCHERS: dict[str, Callable[[httpx.Client, str], tuple[Index, object]]] = {
+_INDEX_FETCHERS: dict[str, Callable[[httpx.Client, str], Fetched]] = {
     "greenhouse": _greenhouse_index,
     "lever": _lever_index,
     "ashby": _ashby_index,
@@ -246,19 +285,18 @@ class Verifier:
 
     def __init__(self, client: httpx.Client) -> None:
         self._client = client
-        self._indexes: dict[tuple[str, str], Index | None] = {}
-        self._boards: dict[tuple[str, str], object] = {}
+        self._fetched: dict[tuple[str, str], Fetched | None] = {}
 
-    def _index(self, ref: AtsRef) -> Index | None:
+    def _board(self, ref: AtsRef) -> Fetched | None:
         key = (ref.platform, ref.board)
-        if key not in self._indexes:
+        if key not in self._fetched:
             try:
-                self._indexes[key], self._boards[key] = _INDEX_FETCHERS[ref.platform](
+                self._fetched[key] = _INDEX_FETCHERS[ref.platform](
                     self._client, ref.board
                 )
             except httpx.HTTPError, ValueError:
-                self._indexes[key] = None
-        return self._indexes[key]
+                self._fetched[key] = None
+        return self._fetched[key]
 
     def _rippling_detail(self, ref: AtsRef) -> Mapping | None:
         try:
@@ -284,16 +322,19 @@ class Verifier:
     ) -> Checked:
         ref = resolve_ats(url)
         index = detail = page = None
-        board = None
+        created = board = None
         if ref:
-            index = self._index(ref)
+            fetched = self._board(ref)
+            if fetched is not None:
+                index = fetched.index
+                created = fetched.created.get(ref.job_id)
+                board = fetched.record
             if (
                 index is not None
                 and ref.job_id in index
                 and _needs_detail(ref, window_start)
             ):
                 detail = self._rippling_detail(ref)
-            board = self._boards.get((ref.platform, ref.board))
         elif mode == "best_effort" and not is_aggregator(url):
             page = self._page(url)
         verdict = classify(
@@ -302,6 +343,7 @@ class Verifier:
             ref,
             index=index,
             detail=detail,
+            created=created,
             page=page,
             window_start=window_start,
             now=datetime.now(UTC),
