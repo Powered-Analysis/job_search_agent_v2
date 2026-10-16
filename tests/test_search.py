@@ -136,6 +136,7 @@ class Web:
     def __init__(self):
         self.routes = {}
         self.boards = {}
+        self.created = {}
         self.broken_details = set()
         self.requests = []
 
@@ -145,9 +146,11 @@ class Web:
     def posted(self, *postings, **kwargs):
         self.perplexity(answer_with(list(postings)), **kwargs)
 
-    def job(self, token="acme", updated_at=None):
+    def job(self, token="acme", updated_at=None, first_published=None):
         """A live Greenhouse job; returns its emitted URL."""
         job_id = next(_ids)
+        if first_published is not None:
+            self.created[str(job_id)] = first_published
         self.boards.setdefault(token, {})[str(job_id)] = (
             updated_at if updated_at is not None else hours_ago(1)
         )
@@ -183,7 +186,15 @@ class Web:
         if len(parts) == 4:
             return {
                 "jobs": [
-                    {"id": int(job_id), **({} if at == "none" else {"updated_at": at})}
+                    {
+                        "id": int(job_id),
+                        **({} if at == "none" else {"updated_at": at}),
+                        **(
+                            {"first_published": self.created[job_id]}
+                            if job_id in self.created
+                            else {}
+                        ),
+                    }
                     for job_id, at in jobs.items()
                 ]
             }
@@ -1059,6 +1070,29 @@ def test_every_emitted_posting_gets_one_finding_and_only_the_verified_one_is_ins
         "fetch_failed": "0",
     }.items():
         assert summary[key] == value, key
+
+
+def test_a_job_created_over_60_days_ago_but_updated_in_the_window_is_not_inserted(
+    world, monkeypatch, capsys
+):
+    old_created = datetime.now(UTC) - timedelta(days=100)
+    old = world.web.job(updated_at=hours_ago(1), first_published=iso(old_created))
+    fresh = world.web.job(updated_at=hours_ago(1), first_published=hours_ago(5))
+    world.web.posted(entry(old), entry(fresh))
+    code, out, _err = run(monkeypatch, capsys)
+    assert code == 0
+    stale = finding_of(world.url, old)
+    assert stale["verification"] == "out_of_window"
+    assert stale["ats_date_kind"] == "created"
+    assert abs(datetime.fromisoformat(stale["ats_date"]) - old_created) < timedelta(
+        seconds=1
+    )
+    assert finding_of(world.url, fresh)["verification"] == "verified"
+    assert [p["canonical_url"] for p in postings(world.url)] == [
+        canonicalize_url(fresh)
+    ]
+    summary = summary_of(out)
+    assert (summary["verified"], summary["out_of_window"]) == ("1", "1")
 
 
 def test_the_verified_posting_is_stored_with_its_agent_jd_and_ats_title(

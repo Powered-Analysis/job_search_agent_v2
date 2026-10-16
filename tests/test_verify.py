@@ -5,7 +5,7 @@ import httpx
 import pytest
 from conftest import drop_all_tables, unique_url
 
-from jsa import db
+from jsa import db, verify
 from jsa.ats import AtsRef, resolve_ats
 from jsa.http import make_client
 from jsa.verify import Page, Verifier, classify, recheck
@@ -31,6 +31,19 @@ ATS_URLS = {
     "ashby": ASHBY_URL,
     "rippling": RIPPLING_URL,
 }
+
+
+@pytest.fixture(autouse=True)
+def fixed_clock(monkeypatch):
+    """The fetching `Verifier` reads the clock for the 60-day age ceiling, and these
+    tests date their postings against `NOW`."""
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+    monkeypatch.setattr(verify, "datetime", Clock)
 
 
 def ref_of(url):
