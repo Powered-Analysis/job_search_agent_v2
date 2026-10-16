@@ -646,7 +646,7 @@ def body_of(path):
 
 
 def text_in(paragraph, view):
-    hidden = {"accept": {"del", "moveFrom"}, "reject": {"ins", "moveTo"}}[view]
+    hidden = {"accept": {"del"}, "reject": {"ins"}}[view]
     parts = []
     for node in paragraph.iter(f"{{{W}}}t", f"{{{W}}}delText"):
         if hidden & {etree.QName(a).localname for a in node.iterancestors()}:
@@ -660,7 +660,7 @@ def view_of(path, view):
 
     A paragraph whose mark goes away (deleted on accept, inserted on reject) joins the next one.
     """
-    gone = {"accept": {"del", "moveFrom"}, "reject": {"ins", "moveTo"}}[view]
+    gone = {"accept": {"del"}, "reject": {"ins"}}[view]
     out = []
     pending = ""
     for paragraph in body_of(path).find("w:body", NS).findall("w:p", NS):
@@ -684,6 +684,23 @@ def texts(view):
 
 def original_view(ran):
     return view_of(ran.original, "accept")
+
+
+def assert_no_move_markup(path):
+    """PRD 04: a reorder is written as a move in place, with no move markup."""
+    assert not body_of(path).xpath(
+        "//w:moveFrom | //w:moveTo | //w:moveFromRangeStart | //w:moveFromRangeEnd"
+        " | //w:moveToRangeStart | //w:moveToRangeEnd",
+        namespaces=NS,
+    )
+
+
+def swapped(texts_, *pairs):
+    """`texts_` with each `(low, high)` run of indices reversed in place."""
+    out = list(texts_)
+    for low, high in pairs:
+        out[low : high + 1] = reversed(out[low : high + 1])
+    return out
 
 
 def test_the_resume_used_here_has_bullets_in_a_word_list_style(tmp_path):
@@ -745,19 +762,17 @@ def test_a_dropped_removal_changes_nothing_and_a_run_keeps_one_bullet(
     assert view_of(ran.copy, "reject") == original_view(ran)
 
 
-def test_a_reorder_is_a_tracked_move_accepting_gives_the_new_order_and_rejecting_the_old(
+def test_a_reorder_moves_the_paragraphs_in_place_with_no_tracked_change_or_move_markup(
     tmp_path, stand_in
 ):
     ran = ran_with(tmp_path, stand_in, reorders=[{**REORDER, "paragraphs": [4, 3, 2]}])
     assert ran.outcome.applied == 1
-    body = body_of(ran.copy)
-    assert body.xpath("//w:moveFrom", namespaces=NS) and body.xpath(
-        "//w:moveTo", namespaces=NS
-    )
+    assert_no_move_markup(ran.copy)
+    assert not body_of(ran.copy).xpath("//w:ins | //w:del", namespaces=NS)
     expected = list(TEXTS)
     expected[2:5] = [TEXTS[4], TEXTS[3], TEXTS[2]]
     assert texts(view_of(ran.copy, "accept")) == expected
-    assert view_of(ran.copy, "reject") == original_view(ran)
+    assert texts(view_of(ran.copy, "reject")) == expected
 
 
 def test_moved_paragraphs_keep_their_list_formatting(tmp_path, stand_in):
@@ -766,30 +781,28 @@ def test_moved_paragraphs_keep_their_list_formatting(tmp_path, stand_in):
     original = original_view(ran)
     assert [style for _, style in accepted] == [style for _, style in original]
     assert accepted[2][1] is not None
-    assert view_of(ran.copy, "reject") == original
+    assert view_of(ran.copy, "reject") == accepted
 
 
 def test_a_reorder_of_the_second_role_leaves_the_first_alone(tmp_path, stand_in):
     ran = ran_with(tmp_path, stand_in, reorders=[{**REORDER, "paragraphs": [7, 6]}])
-    expected = list(TEXTS)
-    expected[6:8] = [TEXTS[7], TEXTS[6]]
+    expected = swapped(TEXTS, (6, 7))
     assert texts(view_of(ran.copy, "accept")) == expected
-    assert view_of(ran.copy, "reject") == original_view(ran)
+    assert texts(view_of(ran.copy, "reject")) == expected
+    assert_no_move_markup(ran.copy)
 
 
 def test_two_reorders_in_one_run_both_move(tmp_path, stand_in):
     reorders = [{**REORDER, "paragraphs": [3, 2]}, {**REORDER, "paragraphs": [4, 5]}]
     ran = ran_with(tmp_path, stand_in, reorders=reorders)
     assert ran.outcome.applied == 1 and ran.outcome.dropped == 1
-    expected = list(TEXTS)
-    expected[2:4] = [TEXTS[3], TEXTS[2]]
+    expected = swapped(TEXTS, (2, 3))
     assert texts(view_of(ran.copy, "accept")) == expected
-    assert view_of(ran.copy, "reject") == original_view(ran)
+    assert texts(view_of(ran.copy, "reject")) == expected
+    assert_no_move_markup(ran.copy)
 
 
-def test_the_skills_sections_lines_can_be_reordered_as_a_tracked_move(
-    tmp_path, stand_in
-):
+def test_the_skills_sections_lines_can_be_reordered_in_place(tmp_path, stand_in):
     ran = ran_with(
         tmp_path,
         stand_in,
@@ -800,7 +813,8 @@ def test_the_skills_sections_lines_can_be_reordered_as_a_tracked_move(
     expected = list(TEXTS)
     expected[9:12] = [TEXTS[11], TEXTS[9], TEXTS[10]]
     assert texts(view_of(ran.copy, "accept")) == expected
-    assert view_of(ran.copy, "reject") == original_view(ran)
+    assert texts(view_of(ran.copy, "reject")) == expected
+    assert_no_move_markup(ran.copy)
 
 
 def test_without_a_skills_list_a_reorder_of_the_skills_lines_is_dropped(
@@ -834,7 +848,7 @@ def test_a_removal_in_the_skills_section_is_dropped_even_with_a_skills_list(
     assert ran.copy.read_bytes() == ran.before
 
 
-def test_a_paragraph_that_is_both_edited_and_moved_keeps_its_edit_inside_the_move(
+def test_a_paragraph_that_is_both_edited_and_moved_keeps_its_own_tracked_edit(
     tmp_path, stand_in
 ):
     change = as_dict(
@@ -845,10 +859,17 @@ def test_a_paragraph_that_is_both_edited_and_moved_keeps_its_edit_inside_the_mov
     )
     assert ran.outcome.applied == 2
     edited = "Ran the Quuxlate rollout."
-    expected = list(TEXTS)
-    expected[6:8] = [TEXTS[7], edited]
+    expected = swapped(TEXTS, (6, 7))
+    assert texts(view_of(ran.copy, "reject")) == expected
+    expected[7] = edited
     assert texts(view_of(ran.copy, "accept")) == expected
-    assert view_of(ran.copy, "reject") == original_view(ran)
+    assert_no_move_markup(ran.copy)
+    body = body_of(ran.copy)
+    assert {
+        etree.QName(n).localname for n in body.xpath("//w:ins | //w:del", namespaces=NS)
+    } == {"ins", "del"}
+    moved = body.find("w:body", NS).findall("w:p", NS)[7]
+    assert moved.xpath("./w:ins | ./w:del", namespaces=NS)
 
 
 def test_a_removed_paragraph_inside_a_reordered_stretch_is_deleted_in_place(
@@ -861,9 +882,13 @@ def test_a_removed_paragraph_inside_a_reordered_stretch_is_deleted_in_place(
         reorders=[{**REORDER, "paragraphs": [4, 2]}],
     )
     assert ran.outcome.applied == 2 and ran.outcome.dropped == 0
-    expected = TEXTS[:2] + [TEXTS[4], TEXTS[2]] + TEXTS[5:]
-    assert texts(view_of(ran.copy, "accept")) == expected
-    assert view_of(ran.copy, "reject") == original_view(ran)
+    assert texts(view_of(ran.copy, "accept")) == (
+        TEXTS[:2] + [TEXTS[4], TEXTS[2]] + TEXTS[5:]
+    )
+    assert texts(view_of(ran.copy, "reject")) == (
+        TEXTS[:2] + [TEXTS[4], TEXTS[3], TEXTS[2]] + TEXTS[5:]
+    )
+    assert_no_move_markup(ran.copy)
 
 
 def test_a_reorder_listing_a_paragraph_a_removal_deletes_is_dropped_with_the_removal_applied(
@@ -1006,10 +1031,38 @@ def test_comments_never_alter_the_text(tmp_path, stand_in):
         removals=[REMOVAL],
         reorders=[{**REORDER, "paragraphs": [7, 6]}],
     )
-    assert texts(view_of(ran.copy, "reject")) == TEXTS
+    assert texts(view_of(ran.copy, "reject")) == swapped(TEXTS, (6, 7))
 
 
-def test_every_tracked_change_of_a_removal_and_a_move_is_authored_by_the_redline(
+def test_a_reorders_comment_spans_the_moved_paragraphs_in_their_new_places(
+    tmp_path, stand_in
+):
+    ran = ran_with(
+        tmp_path,
+        stand_in,
+        reorders=[{**REORDER, "paragraphs": [4, 3, 2], "reason": "REORDER-WHY"}],
+    )
+    (comment,) = comments_of(ran.copy).findall("w:comment", NS)
+    assert "REORDER-WHY" in "".join(comment.itertext())
+    comment_id = comment.get(f"{{{W}}}id")
+    body = body_of(ran.copy).find("w:body", NS)
+    spanned = []
+    inside = False
+    for paragraph in body.findall("w:p", NS):
+        touched = inside
+        for marker in paragraph.iter(
+            f"{{{W}}}commentRangeStart", f"{{{W}}}commentRangeEnd"
+        ):
+            if marker.get(f"{{{W}}}id") == comment_id:
+                inside = etree.QName(marker).localname == "commentRangeStart"
+                touched = True
+        if touched:
+            spanned.append(paragraph)
+    assert [text_in(p, "accept") for p in spanned] == [TEXTS[4], TEXTS[3], TEXTS[2]]
+    assert len(body.xpath("//w:commentRangeEnd", namespaces=NS)) == 1
+
+
+def test_every_tracked_change_of_a_removal_and_a_reorder_is_authored_by_the_redline(
     tmp_path, stand_in
 ):
     ran = ran_with(
@@ -1018,9 +1071,8 @@ def test_every_tracked_change_of_a_removal_and_a_move_is_authored_by_the_redline
         removals=[REMOVAL],
         reorders=[{**REORDER, "paragraphs": [7, 6]}],
     )
-    tracked = body_of(ran.copy).xpath(
-        "//w:del | //w:ins | //w:moveFrom | //w:moveTo", namespaces=NS
-    )
+    tracked = body_of(ran.copy).xpath("//w:del | //w:ins", namespaces=NS)
+    assert_no_move_markup(ran.copy)
     assert tracked
     assert {node.get(f"{{{W}}}author") for node in tracked} == {AUTHOR}
     assert all(node.get(f"{{{W}}}date") for node in tracked)
@@ -1090,7 +1142,8 @@ def test_the_readme_describes_removals_reorders_and_the_lone_docx_review():
     text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     lowered = " ".join(text.lower().split())
     assert "removal" in lowered and "reorder" in lowered
-    assert "tracked deletion" in lowered and "tracked move" in lowered
+    assert "tracked deletion" in lowered
+    assert "tracked move" not in lowered
     assert "lone `.docx`" in lowered
     after = lowered[lowered.index("lone `.docx`") :]
     assert "tracked change" in after[:400] and "review" in after[:400]

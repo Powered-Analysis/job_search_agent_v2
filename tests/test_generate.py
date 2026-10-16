@@ -2077,7 +2077,9 @@ def test_an_applied_removal_and_reorder_give_a_lone_docx_and_count_in_the_report
     with zipfile.ZipFile(folder / RESUME_COPY) as archive:
         body = archive.read("word/document.xml").decode("utf-8")
         comments = archive.read("word/comments.xml").decode("utf-8")
-    assert "<w:moveFrom " in body and "<w:moveTo " in body
+    assert "<w:moveFrom" not in body and "<w:moveTo" not in body
+    assert "<w:del " in body
+    assert body.index("Led data work") < body.index("Built the Quuxlate")
     assert "Claude (Redline)" in body
     assert "REMOVAL-MARKER" in comments and "REORDER-MARKER" in comments
     assert entries(folder) == {"job_posting.md", RESUME_COPY, REDLINE_EDITS}
