@@ -872,6 +872,34 @@ def test_a_paragraph_that_is_both_edited_and_moved_keeps_its_own_tracked_edit(
     assert moved.xpath("./w:ins | ./w:del", namespaces=NS)
 
 
+def test_a_reorder_with_a_word_edit_in_a_moved_bullet_tracks_only_the_word_edit(
+    tmp_path, stand_in
+):
+    change = as_dict(
+        edit(paragraph=3, find="data work", replace="Quuxlate system", jd_quote=QUOTE)
+    )
+    ran = ran_with(
+        tmp_path,
+        stand_in,
+        edits=[change],
+        reorders=[{**REORDER, "paragraphs": [4, 3, 2], "reason": "REORDER-WHY"}],
+    )
+    assert ran.outcome.applied == 2
+    body = body_of(ran.copy)
+    tracked = body.xpath("//w:ins | //w:del", namespaces=NS)
+    assert sorted(etree.QName(n).localname for n in tracked) == ["del", "ins"]
+    assert (
+        "".join(t for n in tracked for t in n.itertext()) == "data workQuuxlate system"
+    )
+    assert_no_move_markup(ran.copy)
+    reject = list(TEXTS)
+    reject[2:5] = [TEXTS[4], TEXTS[3], TEXTS[2]]
+    assert texts(view_of(ran.copy, "reject")) == reject
+    comments = comments_of(ran.copy).findall("w:comment", NS)
+    reorder_comments = [c for c in comments if "REORDER-WHY" in "".join(c.itertext())]
+    assert len(comments) == 2 and len(reorder_comments) == 1
+
+
 def test_a_removed_paragraph_inside_a_reordered_stretch_is_deleted_in_place(
     tmp_path, stand_in
 ):
