@@ -263,7 +263,8 @@ put the strongest bullets, and the skills lines, first. It never adds a fact, ch
 title you held, an employer, a date, a degree, or a number, or pulls anything forward into your base
 resume. Every change except a spelling or grammar fix quotes the posting text behind it, and every
 change is a Word tracked change with a comment giving that quote and the reason. A removal is a tracked
-deletion of the whole bullet, and a reorder is a tracked move; a bullet never leaves its role, and a role
+deletion of the whole bullet. A reorder is not tracked: the bullets or skills lines are moved into the new
+order in place, under one comment, so the tracked changes show only the words that change; a bullet never leaves its role, and a role
 never loses all its bullets. Removals and bullet reorders need bullets that are in a Word list or begin
 with a bullet character. Where the agent is
 unsure of a change that could matter, it leaves a flag instead: a comment, never a change, for you to
@@ -274,7 +275,7 @@ condition:
 
 - **`.docx` and `.pdf`:** the redline changed nothing, so the PDF is ready to submit.
 - **A lone `.docx`:** the redline wrote tracked changes or comments into the copy, so review it before
-  submitting. Open it in Word to accept or reject each proposed change (edit, removal, or reorder) and answer
+  submitting. Open it in Word to accept or reject each proposed change (edit or removal), undo a reorder by hand if you disagree, and answer
   each flag; every change carries a comment with the posting text and reason behind
   it. Save the file, and export your own PDF when you are done.
 

@@ -33,7 +33,7 @@ Each edit has a `goal`:
 
 **Removals** delete a whole bullet, written as a tracked deletion. Remove a bullet that would detract from the narrative or positioning this posting calls for: one that fits the posting least, or pulls the reader toward a story the posting doesn't reward. A removal applies to bullets only, never to the skills section.
 
-**Reorders** put a role's bullets in a new order, or the skills section's lines (its categories) in a new order, written as a tracked move. Lead with what this posting rewards: put the strongest bullets, and the skills lines the posting stresses, first. A reorder lists the paragraphs it moves, by index, in their new order.
+**Reorders** put a role's bullets in a new order, or the skills section's lines (its categories) in a new order, applied in place with no tracked change. Lead with what this posting rewards: put the strongest bullets, and the skills lines the posting stresses, first. A reorder lists the paragraphs it moves, by index, in their new order.
 
 **Flags** change nothing. A flag is a comment asking the candidate to decide a change you are unsure of. Flag only a change that you are unsure of **and** that could matter a lot, in ATS or positioning terms, if made. Each flag costs the candidate's attention, so flag few: at most three are kept, the first three that pass. A change you are confident of is an edit, removal, or reorder. A change you are unsure of and that matters little is not proposed.
 

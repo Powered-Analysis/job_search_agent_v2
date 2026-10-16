@@ -25,11 +25,6 @@ _TEXT_QNAMES = {qn(tag) for tag in _TEXT_TAGS}
 _UNRESOLVED_XPATH = ".//w:ins | .//w:del | .//w:moveFrom | .//w:moveTo"
 _XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 _BULLET_START = re.compile(r"\s*(?:[•●○◦▪▫■□‣⁃∙·]|[-*–—]\s)")
-# The outermost run-level elements of a paragraph; a text box's runs sit inside a run.
-_TOP_LEVEL_XPATH = (
-    "./descendant::*[self::w:r or self::w:ins or self::w:del]"
-    "[not(ancestor::w:r or ancestor::w:ins or ancestor::w:del)]"
-)
 
 
 @dataclass(frozen=True)
@@ -68,7 +63,7 @@ class TrackedRemoval:
 
 @dataclass(frozen=True)
 class TrackedReorder:
-    """Body paragraphs moved into the order listed, with one comment."""
+    """Body paragraphs put into the order listed, in the places they occupy, with one comment."""
 
     paragraphs: list[int]
     comment: str
@@ -252,14 +247,14 @@ def _wrap(
 
 
 def _delete(
-    runs: list[BaseOxmlElement], revisions: _Revisions, tag: str = "w:del"
+    runs: list[BaseOxmlElement], revisions: _Revisions
 ) -> list[BaseOxmlElement]:
-    """Mark the runs removed, as a deletion or, with `w:moveFrom`, as the old place of a move."""
+    """Mark the runs removed."""
     for run in runs:
         for text in run.xpath("w:t"):
             text.tag = qn("w:delText")
             text.set(_XML_SPACE, "preserve")
-    return _wrap(runs, tag, revisions)
+    return _wrap(runs, "w:del", revisions)
 
 
 def _insertion(
@@ -332,21 +327,27 @@ def _anchor_comment(
     end.addnext(reference)
 
 
-def _comment_paragraph(
-    document: Document, paragraph: BaseOxmlElement, text: str
-) -> None:
-    """Anchor a comment on everything in the paragraph, which is left as it is."""
+def _content_span(
+    paragraph: BaseOxmlElement,
+) -> tuple[BaseOxmlElement, BaseOxmlElement]:
+    """The first and last child of the paragraph's content, which a comment range wraps."""
     if not paragraph.xpath("./*[not(self::w:pPr)]"):
         # A range needs something to wrap; an empty run changes no text.
         paragraph.append(OxmlElement("w:r"))
     children = paragraph.xpath("./*[not(self::w:pPr)]")
-    _anchor_comment(document, children[0], children[-1], text)
+    return children[0], children[-1]
 
 
-def _mark_paragraph(
-    paragraph: BaseOxmlElement, tag: str, revisions: _Revisions
+def _comment_paragraph(
+    document: Document, paragraph: BaseOxmlElement, text: str
 ) -> None:
-    """Track the paragraph's own mark, so accepting a deletion or move leaves no empty line."""
+    """Anchor a comment on everything in the paragraph, which is left as it is."""
+    first, last = _content_span(paragraph)
+    _anchor_comment(document, first, last, text)
+
+
+def _mark_deleted(paragraph: BaseOxmlElement, revisions: _Revisions) -> None:
+    """Track the paragraph's own mark as deleted, so accepting a removal leaves no empty line."""
     properties = paragraph.get_or_add_pPr()
     mark_properties = properties.find(qn("w:rPr"))
     if mark_properties is None:
@@ -359,7 +360,7 @@ def _mark_paragraph(
             properties.append(mark_properties)
         else:
             following.addprevious(mark_properties)
-    mark_properties.insert(0, revisions.element(tag))
+    mark_properties.insert(0, revisions.element("w:del"))
 
 
 def _remove(
@@ -368,7 +369,7 @@ def _remove(
     comment: str,
     revisions: _Revisions,
 ) -> None:
-    _mark_paragraph(paragraph, "w:del", revisions)
+    _mark_deleted(paragraph, revisions)
     deletions = _delete(runs(paragraph), revisions)
     if deletions:
         _anchor_comment(document, deletions[0], deletions[-1], comment)
@@ -376,63 +377,27 @@ def _remove(
         _comment_paragraph(document, paragraph, comment)
 
 
-# Markers that name or anchor something once; the old place of a move must not repeat them.
-_UNIQUE_MARKERS_XPATH = (
-    ".//w:bookmarkStart | .//w:bookmarkEnd | .//w:commentRangeStart"
-    " | .//w:commentRangeEnd | .//w:r[w:commentReference]"
-)
-
-
-def _old_place(paragraph: BaseOxmlElement, revisions: _Revisions) -> None:
-    """Turn a copy of a paragraph into the place a move leaves."""
-    for marker in paragraph.xpath(_UNIQUE_MARKERS_XPATH):
-        marker.getparent().remove(marker)
-    _mark_paragraph(paragraph, "w:moveFrom", revisions)
-    _delete(runs(paragraph), revisions, "w:moveFrom")
-
-
-def _bracket_move(
-    paragraph: BaseOxmlElement, direction: str, name: str, revisions: _Revisions
-) -> tuple[BaseOxmlElement, BaseOxmlElement]:
-    """Name the paragraph's end of a move, so Word pairs it with the other end; returns the two markers."""
-    start = revisions.element(f"w:move{direction}RangeStart")
-    start.set(qn("w:name"), name)
-    end = OxmlElement(f"w:move{direction}RangeEnd")
-    end.set(qn("w:id"), start.get(qn("w:id")))
-    properties = paragraph.pPr
-    if properties is None:
-        paragraph.insert(0, start)
-    else:
-        properties.addnext(start)
-    paragraph.append(end)
-    return start, end
-
-
-def _move(
-    document: Document,
-    paragraphs: list[Paragraph],
-    reorder: TrackedReorder,
-    copies: dict[int, BaseOxmlElement],
-    revisions: _Revisions,
+def _reorder(
+    document: Document, paragraphs: list[Paragraph], reorder: TrackedReorder
 ) -> None:
-    """Leave each listed paragraph's old text where it was, and put the paragraphs themselves, in the listed order, after the last."""
-    ends = {}
-    for index in reorder.paragraphs:
-        moved, old = paragraphs[index]._p, copies[index]
-        moved.addprevious(old)
-        _old_place(old, revisions)
-        name = f"move{revisions.new_id()}"
-        ends[index] = _bracket_move(old, "From", name, revisions)
-        _mark_paragraph(moved, "w:moveTo", revisions)
-        _wrap(moved.xpath(_TOP_LEVEL_XPATH), "w:moveTo", revisions)
-        _bracket_move(moved, "To", name, revisions)
-    # The comment spans the old places, so rejecting the move leaves it on the original text.
-    first, last = min(reorder.paragraphs), max(reorder.paragraphs)
-    _anchor_comment(document, ends[first][0], ends[last][1], reorder.comment)
-    target = copies[last]
-    for index in reorder.paragraphs:
-        target.addnext(paragraphs[index]._p)
-        target = paragraphs[index]._p
+    """Put the listed paragraphs, in the listed order, into the places they occupy.
+
+    A paragraph between them that the reorder doesn't list stays where it is. No move is tracked
+    (PRD 04, "Redline"), so the changes inside the paragraphs remain the only tracked changes.
+    """
+    elements = [paragraphs[index]._p for index in reorder.paragraphs]
+    places = []
+    for slot in sorted(elements, key=lambda e: e.getparent().index(e)):
+        # A stand-in marks each place, so moving one paragraph never disturbs where another goes.
+        place = OxmlElement("w:p")
+        slot.addprevious(place)
+        places.append(place)
+    for place, element in zip(places, elements, strict=True):
+        place.addprevious(element)
+        place.getparent().remove(place)
+    first, _ = _content_span(elements[0])
+    _, last = _content_span(elements[-1])
+    _anchor_comment(document, first, last, reorder.comment)
 
 
 def apply_edits(
@@ -446,19 +411,13 @@ def apply_edits(
 
     Later text is changed first, so the offsets of the changes still to apply stay valid. Each
     paragraph comment is anchored afterwards, around the paragraph's final content. A removal is
-    written after the edits and a move after the removals, so a moved paragraph carries its own
-    edits and a removed one stays where it is, inside the stretch a move reorders.
+    written after the edits and a reorder after the removals, so a reordered paragraph carries its own
+    edits and a removed one stays where it is, inside the stretch a reorder covers.
     """
     revisions = _Revisions(
         document, len(edits) + len(comments) + len(removals) + len(reorders)
     )
     paragraphs = document.paragraphs
-    # Taken before any change: rejecting a move must give back the paragraph exactly as it was.
-    copies = {
-        index: copy.deepcopy(paragraphs[index]._p)
-        for reorder in reorders
-        for index in reorder.paragraphs
-    }
     for edit in sorted(
         edits, key=lambda e: (e.changes[0].paragraph, e.changes[0].start), reverse=True
     ):
@@ -475,4 +434,4 @@ def apply_edits(
     for removal in removals:
         _remove(document, paragraphs[removal.paragraph]._p, removal.comment, revisions)
     for reorder in reorders:
-        _move(document, paragraphs, reorder, copies, revisions)
+        _reorder(document, paragraphs, reorder)
