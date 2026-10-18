@@ -11,16 +11,16 @@ This spec owns the search-and-capture pipeline (PRD Steps 1–2): scheduling, th
 ##### Business Goals
 - **Zero dead links reach review:** the pipeline itself checks every emitted posting before insert and drops what it cannot show is open, whichever runner or model produced it, then re-checks each stored posting when review starts and before its packet is built, because postings close while they wait. Under `strict` that check is the employer's own supported-ATS index; `best_effort` widens the search to other platforms and accepts a weaker page check for them (`XC-5`). Dead links cost real human review time and are the primary failure mode this pipeline exists to prevent.
 - **Idempotent re-runs:** overlapping search windows, retried crons, and hand runs never create duplicate rows — dedup is exactly one mechanism (URL canonicalization + a `UNIQUE` constraint), so a re-run is always safe (see `XC-3`).
-- **Bounded per-run cost:** each run is a single deep-research call (streamed, with a wall-clock ceiling) plus best-effort ATS fetches; cost and wall time are observable in the run log (turns, seconds, USD).
+- **Bounded per-run cost:** each run is a single deep-research call (streamed, with a wall-clock ceiling) plus best-effort ATS fetches; the agent's verification effort scales with the run's result target, not with the size of the market; cost and wall time are observable in the run log (turns, seconds, USD).
 - **Capture completeness:** full job descriptions are captured for genuinely-new postings from all four supported ATS platforms, and from other platforms' pages wherever they carry schema.org `JobPosting` data, so downstream steps (review, the resume redline) never have to re-fetch.
 
 ##### User Goals
 - As the job seeker, I get a continuously refreshed, de-duplicated, liveness-verified list of in-scope roles delivered into my review backlog with no effort on my part.
-- The roles respect my non-negotiable filters (e.g., location, industry, company type, salary floor, seniority band) while erring toward recall on *fit* so borderline roles still reach me.
+- The roles respect my non-negotiable filters (e.g., location, industry, company type, salary floor, seniority band) and each run returns the best fits it can verify, up to my result target: borderline roles still reach me when the market is thin, and stronger roles take their place when it is rich.
 - Each posting arrives with its full job description already stored, so review and packet generation are fast.
 
 ##### Non-Goals
-- **Fit decisioning** (Apply/Skip and feedback) — owned by *Fit Review & Decisioning* (PRD 03). The search agent judges *fit recall-first* and *liveness as a hard gate*, but never decides Apply/Skip.
+- **Fit decisioning** (Apply/Skip and feedback) — owned by *Fit Review & Decisioning* (PRD 03). The search agent judges *fit against the result target* and *liveness as a hard gate*, but never decides Apply/Skip.
 - **Storage schema, the idempotency constraint, and search telemetry tables** — owned by *Data & Storage* (PRD 02). This spec produces the canonical URL and the values to store; PRD 02 owns the table, the `UNIQUE(canonical_url)` guard, and `search_findings`.
 - **Resume/packet/tracker outputs** (PRD 04) and **prompt refinement** (PRD 05).
 - **A second dedup stage or embeddings** — deliberately removed; do not reintroduce (`XC-3`).
@@ -32,7 +32,8 @@ This spec owns the search-and-capture pipeline (PRD Steps 1–2): scheduling, th
 **Job seeker**
 - As the job seeker, I want the agent to run on its own several times a week, so that new roles accumulate without me searching manually.
 - As the job seeker, I want every surfaced posting to be a real, open role I can actually apply to, so that I don't waste review time on dead links.
-- As the job seeker, I want borderline-fit roles included, so that the final call stays mine rather than being pre-filtered away.
+- As the job seeker, I want borderline-fit roles included when a run finds fewer good fits than my result target, so that a thin market still reaches me and the final call stays mine.
+- As the job seeker, I want each run to return only the best fits up to my result target when the market is rich, so that my review time goes to the right roles rather than to every role that qualifies.
 
 **Operator (runs/monitors the cloud cron)**
 - As the operator, I want the cloud machine to gate itself to my weekly schedule and time of day, so that I configure one Fly schedule, never pass per-day arguments, and never have to re-establish a run time that Fly's scheduler cannot hold.
@@ -64,17 +65,28 @@ This spec owns the search-and-capture pipeline (PRD Steps 1–2): scheduling, th
   | Slot | Source | Required | What the template places around it (precedence) |
   |---|---|---|---|
   | `{{SEARCH_WINDOW}}` | run-time window | yes | The app-owned search-window filter. |
+  | `{{RESULTS_PER_RUN}}` | `results_per_run` in `profile/search/search.toml` | yes | The result target: the most postings one run returns, the best fits it can verify. |
   | `{{LIVENESS_RULES}}` | the app's liveness rules for the `[verification] mode` (one set per mode) | yes | App-owned, never user content: the Liveness and verifiability rules for the mode. |
   | `{{CANDIDATE}}` | `profile/search/candidate.md` | yes | Who the candidate is — context for judging fit; states no rules. |
-  | `{{TARGET_ROLES}}` | `profile/search/target_roles.md` | yes | Title seeds and role scope; the template adds "variants and blended titles are in scope" and applies recall-first. |
+  | `{{TARGET_ROLES}}` | `profile/search/target_roles.md` | yes | Title seeds and role scope; the template adds "variants and blended titles are in scope" and judges them on fit against the result target. |
   | `{{FILTERS}}` | `profile/search/filters.md` | yes | Hard, company- or posting-level tests; subordinate to liveness and the output contract. |
-  | `{{POSITIVE_SIGNALS}}` | `profile/search/positive_signals.md` | no | Query seeds and in-scope confirmation; absence never excludes. |
-  | `{{NEGATIVE_SIGNALS}}` | `profile/search/negative_signals.md` | no | Steer verification effort only; never exclude. |
+  | `{{POSITIVE_SIGNALS}}` | `profile/search/positive_signals.md` | no | Query seeds and evidence for fit; absence never excludes. |
+  | `{{NEGATIVE_SIGNALS}}` | `profile/search/negative_signals.md` | no | Evidence against fit and where to verify harder; never excludes on its own. |
   | `{{HARD_EXCLUSIONS}}` | `profile/search/hard_exclusions.md` | no | The only content-based drops; judged on the title alone. |
 
-- **Two output standards, never conflated (P0):** *role fit* is judged **recall-first** (catch borderline positives; false negatives on fit are the worst outcome), while *liveness/verifiability* is a **hard gate** (never recall-first).
-- **Template-owned fit policy (P0):** the template, not the fragments, defines how each kind of user rule behaves: filters are hard; a filter whose criterion the posting does not state (e.g. no published salary) never excludes; negative signals only order effort; hard exclusions are title-level only; anything else that looks wrong in a posting body is the downstream review's call — include. A fragment supplies which filters, signals, and exclusions exist, never how they operate.
-- **Template-owned machinery (P0):** Sources (where to discover postings, and which sources count as evidence), the Output contract, volume and de-duplication guidance, and Liveness and verifiability (the mode's `{{LIVENESS_RULES}}` file) live only in app-owned prompt files. No fragment can alter them, and the template states that they override any fragment that conflicts.
+- **Result target is user config (P0).** `results_per_run` in `profile/search/search.toml` (top-level, beside `timezone` and `run_at`) is the most postings one search returns: the best fits it can verify. It applies to each scheduled search on its own, so a day that runs two searches can add up to twice as many. A positive integer with no default; anything else raises at load. `profile.example/` carries it with this comment, which is part of the spec:
+
+  ```toml
+  # The most postings one search returns: the best fits it can verify. Required.
+  # Each scheduled search is its own run, so a day with two searches can add up to
+  # twice this many. A run returns fewer when fewer pass, and the pipeline's own
+  # liveness check can drop some of what the agent returns.
+  results_per_run = 10
+  ```
+- **Two output standards, never conflated (P0):** *role fit* is judged **against the result target** — the run returns the K best fits that pass, and the worst outcome is leaving out a posting that belonged among them. When fewer than K pass, borderline roles are included (recall matters most in a thin market); when many more pass, a borderline role is included only if it fits better than the weakest posting the run would otherwise return (precision matters most in a rich one). The balance between recall and precision follows from the size of the market against K, with no separate setting. *Liveness/verifiability* is a **hard gate** that neither recall nor the target ever relaxes.
+- **Template-owned fit policy (P0):** the template, not the fragments, defines how each kind of user rule behaves: filters are hard; a filter whose criterion the posting does not state (e.g. no published salary) never excludes; positive signals count toward fit; negative signals count against fit and steer verification effort, but never exclude on their own; hard exclusions are title-level only; nothing else in a posting body excludes it — the body is weighed only as part of fit, and anything that looks wrong beyond that is the downstream review's call. In a rich market a low rank can leave a posting outside the target; that is the target at work, not an exclusion. A fragment supplies which filters, signals, and exclusions exist, never how they operate.
+- **Template-owned search strategy (P0):** finding a candidate posting is cheap (one web search surfaces several), while verifying one costs fetches of its employer's record, so the template tells the agent to spend verification where it can change which postings make the target: survey broadly at the level of title, company, and snippet before verifying anything; triage the candidates by apparent fit, dropping only title-level hard exclusions at that stage; verify in triage order, judging fit on the full posting; stop once K are verified and the strongest unverified candidate looks weaker than the weakest one to be returned, after verifying a few past that point because snippets mislead; and broaden discovery when the candidates run out before K. The strategy is stated without turn or step counts, because the runners budget differently (Claude's turn cap, Perplexity's preset step budget, Gemini's wall-clock ceiling alone) and all three share one prompt (`XC-13`).
+- **Template-owned machinery (P0):** Sources (where to discover postings, and which sources count as evidence), the search strategy, the Output contract, volume and de-duplication guidance (return at most K, never pad, best fit first), and Liveness and verifiability (the mode's `{{LIVENESS_RULES}}` file) live only in app-owned prompt files. No fragment can alter them, and the template states that they override any fragment that conflicts.
 - **Liveness gates (hard, P0):** in both modes the employer's own record is the single source of truth; the posting must be open and accepting applications; recency comes from the employer's page only; and aggregators (LinkedIn, Indeed, and the like) are discovery sources, never evidence and never the emitted URL. A job on one of the four supported ATS is emitted as its ATS URL in the wire contract's form (below), and an orphaned detail page there is a closed job. The modes differ only off the four: `strict` forbids emitting such a job; `best_effort` emits the employer's own posting page once the agent has opened it and confirmed it shows the job open.
 
 **Runner and verification configuration (Priority: P0)** — model and effort are the user's; tools, limits, and how verification works are the app's; which postings verification admits is the user's (`XC-5`, `XC-14`). These settings live in `profile/search/search.toml` beside the schedule, because they ship to the cloud with it. `profile.example/` carries them with these comments, which are part of the spec:
@@ -208,7 +220,9 @@ mode = "strict"
 - **Hand runs (`jsa search`)** neither check the gate nor take the claim, so they never consume or block a scheduled day.
 - **Missing `PERPLEXITY_API_KEY` / `GEMINI_API_KEY` on that runner's run:** raises a clear `RuntimeError` before any model call.
 - **Gemini stream drops mid-run:** reconnects from the last `event_id`; the interaction keeps running server-side in the background, so a drop loses no work.
-- **Thin window (<~5 companies):** the prompt instructs broadening *discovery* (more titles/sources/variants) before concluding the window is empty — never relaxing liveness/window/filters.
+- **Thin market (candidates run out before the result target):** the prompt instructs broadening *discovery* (more titles/sources/variants) before returning fewer than K — never relaxing liveness/window/filters.
+- **Rich market (many more candidates than the result target):** the agent returns at most K, best fit first; candidates it never verified leave no trace, since only returned postings get findings.
+- **Pipeline drops among the returned K:** a run can store fewer than K when the pipeline's own check drops some of what the agent returned; the run is not repeated to make up the difference.
 
 -----
 #### Technical Considerations
