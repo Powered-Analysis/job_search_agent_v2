@@ -206,13 +206,17 @@ def load_search_config() -> SearchConfig:
     return _load(SEARCH_TOML, SearchConfig)
 
 
-def claude_settings(config: SearchConfig) -> ModelSettings:
-    if config.runners.claude is None:
+def _require_table[T](table: T | None, relative_path: str, name: str) -> T:
+    """A settings table the command needs; a missing one raises naming the file and the example."""
+    if table is None:
         raise JsaError(
-            f"{profile_dir() / SEARCH_TOML} has no [runners.claude] table. "
-            f"{_pointer(SEARCH_TOML)}"
+            f"{profile_dir() / relative_path} has no [{name}] table. {_pointer(relative_path)}"
         )
-    return config.runners.claude
+    return table
+
+
+def claude_settings(config: SearchConfig) -> ModelSettings:
+    return _require_table(config.runners.claude, SEARCH_TOML, "runners.claude")
 
 
 def tracker_spreadsheet_id() -> str:
@@ -272,30 +276,17 @@ def packet_sources() -> PacketSources:
 
 def _agent_settings[T: ModelSettings](settings: T | None, name: str) -> T:
     """An agent's model and effort (XC-14); a missing table raises before any model call."""
-    if settings is None:
-        raise JsaError(
-            f"{profile_dir() / 'config.toml'} has no [agents.{name}] table. "
-            f"{_pointer('config.toml')}"
-        )
-    return settings
+    return _require_table(settings, "config.toml", f"agents.{name}")
 
 
 def fly_settings(config: Config) -> FlyConfig:
     """The Fly app and region `jsa deploy` passes to `fly`; a missing table raises before any build."""
-    if config.fly is None:
-        raise JsaError(
-            f"{profile_dir() / 'config.toml'} has no [fly] table. {_pointer('config.toml')}"
-        )
-    return config.fly
+    return _require_table(config.fly, "config.toml", "fly")
 
 
 def inbox_settings(config: Config) -> InboxConfig:
     """The `[inbox]` table `jsa inbox` reads; a missing table raises before any mail is read."""
-    if config.inbox is None:
-        raise JsaError(
-            f"{profile_dir() / 'config.toml'} has no [inbox] table. {_pointer('config.toml')}"
-        )
-    return config.inbox
+    return _require_table(config.inbox, "config.toml", "inbox")
 
 
 def _inbox_key(config: Config, key: str) -> str:
