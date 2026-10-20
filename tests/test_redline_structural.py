@@ -1175,3 +1175,142 @@ def test_the_readme_describes_removals_reorders_and_the_lone_docx_review():
     assert "lone `.docx`" in lowered
     after = lowered[lowered.index("lone `.docx`") :]
     assert "tracked change" in after[:400] and "review" in after[:400]
+
+
+# --- skills lines separated by blank lines (issue #163; PRD 04, "Skills section") ----
+#
+#  0 Riley Resumeperson (bold)   4 Python, R           8 Education (bold)
+#  1 Skills                      5 (blank)             9 BS in Statistics
+#  2 SQL, Excel                  6 Tableau, Looker
+#  3 (blank)                     7 (blank)
+GAPPED_TEXTS = [
+    "Riley Resumeperson",
+    "Skills",
+    "SQL, Excel",
+    "",
+    "Python, R",
+    "",
+    "Tableau, Looker",
+    "",
+    "Education",
+    "BS in Statistics",
+]
+GAPPED_BLANKS = {3, 5, 7}
+GAPPED_LINES = {2, 4, 6}
+
+
+def build_gapped(document):
+    for index, text in enumerate(GAPPED_TEXTS):
+        if index in (0, 8):
+            bold_paragraph(document, text)
+        else:
+            document.add_paragraph(text)
+
+
+def gapped_ran(tmp_path, stand_in, *paragraphs, skills=SKILLS):
+    reorders = [{**REORDER, "paragraphs": list(paragraphs)}]
+    reply = reply_object([], None, reorders=reorders)
+    return run(tmp_path, stand_in, reply, build=build_gapped, jd=JD, skills=skills)
+
+
+def test_a_skills_reorder_may_span_the_blank_lines_between_categories():
+    out = validate_reorders(
+        [reorder(6, 2, 4)],
+        JD,
+        bullets=set(),
+        skills_section=GAPPED_LINES | GAPPED_BLANKS,
+        empty=GAPPED_BLANKS,
+    )
+    assert out == [None]
+
+
+def test_a_skills_reorder_across_a_blank_line_is_applied_in_place(tmp_path, stand_in):
+    ran = gapped_ran(tmp_path, stand_in, 4, 2)
+    assert (ran.outcome.applied, ran.outcome.dropped) == (1, 0)
+    assert record_of(ran)["reorders"][0]["validation"] is None
+    expected = list(GAPPED_TEXTS)
+    expected[2], expected[4] = GAPPED_TEXTS[4], GAPPED_TEXTS[2]
+    assert texts(view_of(ran.copy, "accept")) == expected
+    assert texts(view_of(ran.copy, "reject")) == expected
+    assert_no_move_markup(ran.copy)
+
+
+def test_a_skills_reorder_spanning_two_blank_lines_keeps_the_blanks_where_they_are(
+    tmp_path, stand_in
+):
+    ran = gapped_ran(tmp_path, stand_in, 6, 2, 4)
+    assert ran.outcome.applied == 1
+    accepted = texts(view_of(ran.copy, "accept"))
+    assert [text for text in accepted if text] == [
+        "Riley Resumeperson",
+        "Skills",
+        "Tableau, Looker",
+        "SQL, Excel",
+        "Python, R",
+        "Education",
+        "BS in Statistics",
+    ]
+    assert {i for i, text in enumerate(accepted) if not text} == GAPPED_BLANKS
+    assert len(accepted) == len(GAPPED_TEXTS)
+
+
+def test_a_skills_reorder_across_a_blank_line_still_must_list_every_line_of_its_stretch(
+    tmp_path, stand_in
+):
+    ran = gapped_ran(tmp_path, stand_in, 6, 2)
+    assert (ran.outcome.applied, ran.outcome.dropped) == (0, 1)
+    assert record_of(ran)["reorders"][0]["validation"]
+    assert ran.copy.read_bytes() == ran.before
+
+
+def test_a_skills_reorder_across_a_blank_line_that_keeps_the_order_is_dropped(
+    tmp_path, stand_in
+):
+    ran = gapped_ran(tmp_path, stand_in, 2, 4, 6)
+    assert (ran.outcome.applied, ran.outcome.dropped) == (0, 1)
+    assert record_of(ran)["reorders"][0]["validation"]
+
+
+def test_a_blank_line_does_not_let_a_reorder_reach_past_the_skills_section(
+    tmp_path, stand_in
+):
+    ran = gapped_ran(tmp_path, stand_in, 6, 9)
+    assert (ran.outcome.applied, ran.outcome.dropped) == (0, 1)
+    assert ran.copy.read_bytes() == ran.before
+
+
+def test_without_a_skills_list_a_reorder_across_a_blank_line_is_dropped(
+    tmp_path, stand_in
+):
+    ran = gapped_ran(tmp_path, stand_in, 4, 2, skills=())
+    assert (ran.outcome.applied, ran.outcome.dropped) == (0, 1)
+    assert ran.copy.read_bytes() == ran.before
+
+
+def test_a_blank_line_between_bullets_still_ends_the_run_so_a_bullet_reorder_across_it_is_dropped(
+    tmp_path, stand_in
+):
+    def build_bullets(document):
+        bold_paragraph(document, "Fabrikam Logistics")
+        document.add_paragraph(
+            "Built the Quuxlate platform from scratch.", "List Bullet"
+        )
+        document.add_paragraph("")
+        document.add_paragraph("Led data work using SQL daily.", style="List Bullet")
+
+    reorders = [{**REORDER, "paragraphs": [3, 1]}]
+    reply = reply_object([], None, reorders=reorders)
+    ran = run(tmp_path, stand_in, reply, build=build_bullets)
+    assert (ran.outcome.applied, ran.outcome.dropped) == (0, 1)
+    assert ran.copy.read_bytes() == ran.before
+
+
+def test_the_prompt_omits_blank_paragraphs_but_keeps_every_index(tmp_path, stand_in):
+    gapped_ran(tmp_path, stand_in, 4, 2)
+    (call,) = stand_in.calls
+    shown = {
+        int(match.group(1))
+        for line in call.prompt.splitlines()
+        if (match := re.fullmatch(r"(\d+)(?: \[(?:bullet|bold)\])*: .*", line))
+    }
+    assert shown == set(range(len(GAPPED_TEXTS))) - GAPPED_BLANKS
