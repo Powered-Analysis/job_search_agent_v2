@@ -241,6 +241,7 @@ def test_the_search_template_has_a_marker_for_every_slot_in_the_prd_table():
         "POSITIVE_SIGNALS",
         "NEGATIVE_SIGNALS",
         "HARD_EXCLUSIONS",
+        "RESULTS_PER_RUN",
     ):
         assert "{{" + slot + "}}" in template, slot
 
@@ -256,6 +257,7 @@ def test_the_search_template_has_no_marker_beyond_the_prd_table():
         "POSITIVE_SIGNALS",
         "NEGATIVE_SIGNALS",
         "HARD_EXCLUSIONS",
+        "RESULTS_PER_RUN",
     }
 
 
