@@ -366,12 +366,18 @@ def validate_removals(
     return results
 
 
+def _empty_paragraphs(paragraphs: list[str]) -> set[int]:
+    """The paragraphs the redline's rendering omits, which the agent can't list."""
+    return {index for index, text in enumerate(paragraphs) if not text.strip()}
+
+
 def _reorder_problem(
     reorder: Reorder,
     job_description: str,
     bullets: Collection[int],
     skills_section: Collection[int],
     removed: Collection[int],
+    empty: Collection[int],
     reordered: Collection[int],
 ) -> str | None:
     indices = reorder.paragraphs
@@ -384,7 +390,7 @@ def _reorder_problem(
     low, high = min(indices), max(indices)
     stretch = set(range(low, high + 1)) - set(removed)
     if all(index in skills_section for index in indices):
-        if set(indices) != set(range(low, high + 1)):
+        if set(indices) != set(range(low, high + 1)) - set(empty):
             return "paragraphs are not a consecutive stretch of the skills section"
     elif any(index in skills_section for index in indices):
         return "paragraphs mix the skills section with other paragraphs"
@@ -407,16 +413,24 @@ def validate_reorders(
     bullets: Collection[int],
     skills_section: Collection[int] = (),
     removed: Collection[int] = (),
+    empty: Collection[int] = (),
 ) -> list[str | None]:
     """Each reorder's result in order: None when it passes, else why it is dropped (PRD 04, "Validation").
 
     `removed` holds the paragraphs the passing removals delete, which a reorder is read as following.
+    `empty` holds the paragraphs the rendering omits, which a skills-section stretch spans unlisted.
     """
     reordered: set[int] = set()
     results = []
     for reorder in reorders:
         problem = _reorder_problem(
-            reorder, job_description, bullets, skills_section, removed, reordered
+            reorder,
+            job_description,
+            bullets,
+            skills_section,
+            removed,
+            empty,
+            reordered,
         )
         if problem is None:
             reordered.update(reorder.paragraphs)
@@ -600,10 +614,11 @@ def assemble_redline_prompt(
     bullets: Collection[int] = (),
 ) -> str:
     """The posting, the indexed resume paragraphs, and the skills list are the only inputs (PRD 04, XC-13)."""
+    empty = _empty_paragraphs(paragraphs)
     numbered = "\n".join(
         f"{index}{' [bullet]' if index in bullets else ''}{' [bold]' if index in bold else ''}: {text}"
         for index, text in enumerate(paragraphs)
-        if text.strip()
+        if index not in empty
     )
     slots = {
         "JOB_DESCRIPTION": Slot(job_description, "the posting's job description"),
@@ -707,7 +722,12 @@ def redline_resume(
         if problem is None
     }
     reorder_results = validate_reorders(
-        proposal.reorders, job_description, bullets, section, removed
+        proposal.reorders,
+        job_description,
+        bullets,
+        section,
+        removed,
+        _empty_paragraphs(paragraphs),
     )
     edit_results = validate_edits(
         proposal.edits, paragraphs, job_description, skills, section, removed
