@@ -237,7 +237,7 @@ def test_an_empty_schedule_is_valid(profile):
 def test_a_perplexity_only_schedule_needs_no_runner_entries(profile):
     write_search_toml(
         profile,
-        'timezone = "UTC"\nrun_at = "06:30"\n'
+        'timezone = "UTC"\nrun_at = "06:30"\nresults_per_run = 10\n'
         '[schedule]\nmonday = [{ agent = "perplexity", window_hours = 24 }]\n'
         '[verification]\nmode = "best_effort"\n',
     )
@@ -424,7 +424,7 @@ def test_a_scheduled_gemini_needs_no_runner_entry(profile):
 def test_a_gemini_only_schedule_needs_no_runners_at_all(profile):
     write_search_toml(
         profile,
-        'timezone = "America/New_York"\nrun_at = "07:00"\n\n'
+        'timezone = "America/New_York"\nrun_at = "07:00"\nresults_per_run = 10\n\n'
         '[schedule]\nfriday = [{ agent = "gemini", window_hours = 24 }]\n\n'
         '[verification]\nmode = "strict"\n',
     )

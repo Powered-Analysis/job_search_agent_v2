@@ -133,6 +133,7 @@ def test_the_claude_search_runner_has_no_time_limit_setting(profile):
         """\
 timezone = "America/New_York"
 run_at = "07:00"
+results_per_run = 10
 
 [schedule]
 monday = [{ agent = "claude", window_hours = 24 }]

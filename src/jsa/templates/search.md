@@ -15,7 +15,7 @@ Only postings published or updated within {{SEARCH_WINDOW}} are in scope. A post
 
 # The target
 
-Return the 10 postings that best fit the candidate, out of every posting that passes the filters and the liveness gates. This number is the target.
+Return the {{RESULTS_PER_RUN}} postings that best fit the candidate, out of every posting that passes the filters and the liveness gates. This number is the target.
 
 # Two standards, never mixed
 

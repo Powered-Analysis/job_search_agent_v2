@@ -4,6 +4,12 @@ timezone = "America/New_York"
 # Time of day ("HH:MM", 24-hour, in the timezone above) after which the day's searches run.
 run_at = "07:00"
 
+# The most postings one search returns: the best fits it can verify. Required.
+# Each scheduled search is its own run, so a day with two searches can add up to
+# twice this many. A run returns fewer when fewer pass, and the pipeline's own
+# liveness check can drop some of what the agent returns.
+results_per_run = 10
+
 # Each weekday lists its searches in run order. A day left out runs nothing.
 # agent is "perplexity", "claude", or "gemini"; window_hours looks back from the run.
 [schedule]
