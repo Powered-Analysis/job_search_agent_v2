@@ -259,6 +259,10 @@ INVALID_SEARCH_TOML = {
     "not-toml": "this is [not toml",
     "bad-timezone": broken('"America/New_York"', '"Mars/Olympus_Mons"'),
     "bad-run-at": broken('run_at = "07:00"', 'run_at = "25:00"'),
+    "no-results-per-run": broken("results_per_run = 10\n", ""),
+    "zero-results-per-run": broken("results_per_run = 10", "results_per_run = 0"),
+    "negative-results-per-run": broken("results_per_run = 10", "results_per_run = -1"),
+    "string-results-per-run": broken("results_per_run = 10", 'results_per_run = "10"'),
     "unknown-key": broken('run_at = "07:00"', 'run_at = "07:00"\ncolour = "blue"'),
     "unknown-agent": broken('agent = "perplexity"', 'agent = "chatgpt"'),
     "zero-window": broken("window_hours = 72", "window_hours = 0"),
@@ -284,6 +288,20 @@ def test_invalid_search_toml_aborts_before_fly(fly, monkeypatch, capsys, name, f
     code, output = jsa_deploy(monkeypatch, capsys, *flags)
     assert code != 0
     assert "search.toml" in output
+    assert calls(log) == []
+
+
+@pytest.mark.parametrize(
+    "value", ["0", "-1", '"10"', "3.5"], ids=["zero", "negative", "string", "float"]
+)
+def test_an_invalid_results_per_run_aborts_before_fly_naming_the_key(
+    fly, monkeypatch, capsys, value
+):
+    profile, log = fly
+    set_search(profile, broken("results_per_run = 10", f"results_per_run = {value}"))
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code != 0
+    assert "results_per_run" in output
     assert calls(log) == []
 
 

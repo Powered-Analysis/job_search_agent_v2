@@ -94,6 +94,31 @@ def test_the_example_search_toml_carries_the_prd_blocks_and_comments():
         assert required in text, required
 
 
+def test_the_example_search_toml_carries_results_per_run_with_the_prd_comment():
+    text = (EXAMPLE_DIR / "search" / "search.toml").read_text(encoding="utf-8")
+    assert (
+        "# The most postings one search returns: the best fits it can verify. Required.\n"
+        "# Each scheduled search is its own run, so a day with two searches can add up to\n"
+        "# twice this many. A run returns fewer when fewer pass, and the pipeline's own\n"
+        "# liveness check can drop some of what the agent returns.\n"
+        "results_per_run = 10\n"
+    ) in text
+
+
+def test_the_readme_lists_results_per_run_among_the_search_toml_keys():
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    row = next(
+        line for line in text.splitlines() if "profile/search/search.toml" in line
+    )
+    assert "results_per_run" in row
+
+
+def test_results_per_run_is_a_top_level_key_not_inside_a_table():
+    top_level = (EXAMPLE_DIR / "search" / "search.toml").read_text(encoding="utf-8")
+    top_level = top_level.split("\n[", 1)[0]
+    assert re.search(r"^results_per_run = 10$", top_level, flags=re.MULTILINE)
+
+
 def test_the_example_search_toml_names_the_pinned_perplexity_preset_and_gemini_agent():
     text = (EXAMPLE_DIR / "search" / "search.toml").read_text(encoding="utf-8")
     assert '"xhigh"' in text
@@ -505,6 +530,43 @@ def test_any_non_empty_model_string_is_accepted(profile, model):
 def test_any_positive_window_is_accepted(profile, window_hours):
     search_with(profile, {"window_hours = 72": f"window_hours = {window_hours}"})
     assert load_search_config().schedule.monday[0].window_hours == window_hours
+
+
+@pytest.mark.parametrize("value", [1, 4, 10, 50])
+def test_any_positive_integer_results_per_run_is_accepted(profile, value):
+    search_with(profile, {"results_per_run = 10": f"results_per_run = {value}"})
+    assert load_search_config().results_per_run == value
+
+
+def test_the_example_profile_results_per_run_is_ten(monkeypatch):
+    monkeypatch.setenv("JSA_PROFILE_DIR", str(EXAMPLE_DIR))
+    assert load_search_config().results_per_run == 10
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        pytest.param("", id="missing"),
+        pytest.param("results_per_run = 0", id="zero"),
+        pytest.param("results_per_run = -1", id="negative"),
+        pytest.param('results_per_run = "10"', id="string"),
+        pytest.param("results_per_run = 3.5", id="float"),
+        pytest.param("results_per_run = 10.0", id="whole-float"),
+        pytest.param("results_per_run = true", id="boolean"),
+    ],
+)
+def test_an_invalid_results_per_run_raises_at_load_naming_the_key(profile, replacement):
+    search_with(profile, {"results_per_run = 10\n": f"{replacement}\n"})
+    with pytest.raises(JsaError, match="results_per_run"):
+        load_search_config()
+
+
+def test_results_per_run_has_no_default_so_a_profile_without_it_does_not_load(profile):
+    text = SEARCH_TOML.replace("results_per_run = 10\n", "")
+    assert "results_per_run" not in text
+    write_search_toml(profile, text)
+    with pytest.raises(JsaError, match="results_per_run"):
+        load_search_config()
 
 
 @pytest.mark.parametrize("run_at", ["00:00", "07:00", "12:30", "23:59"])

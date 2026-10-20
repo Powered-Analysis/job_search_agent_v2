@@ -227,6 +227,54 @@ def test_the_window_in_the_prompt_changes_with_the_hours(profile):
     assert "the last 96 hours" in assembled(hours=96)
 
 
+# --- the result target (PRD 01 "Result target is user config") --------------
+
+
+def set_results_per_run(profile, value):
+    path = profile / "search" / "search.toml"
+    text = path.read_text(encoding="utf-8")
+    text = re.sub(
+        r"^results_per_run\s*=.*$",
+        f"results_per_run = {value}",
+        text,
+        flags=re.MULTILINE,
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+def test_the_example_profile_prompt_states_the_target_of_ten(profile):
+    assert "Return the 10 postings that best fit the candidate" in assembled()
+
+
+@pytest.mark.parametrize("value", [1, 4, 25])
+def test_the_prompt_states_the_users_result_target(profile, value):
+    set_results_per_run(profile, value)
+    prompt = assembled()
+    assert f"Return the {value} postings that best fit the candidate" in prompt
+    assert "{{" not in prompt
+
+
+def test_changing_the_result_target_changes_nothing_else_in_the_prompt(profile):
+    ten = assembled()
+    set_results_per_run(profile, 4)
+    four = assembled()
+    assert ten != four
+    assert ten.replace("Return the 10 postings", "Return the 4 postings") == four
+
+
+def test_the_result_target_reaches_the_prompt_in_every_verification_mode(profile):
+    set_results_per_run(profile, 7)
+    for mode in ("strict", "best_effort"):
+        set_mode(profile, mode)
+        assert "Return the 7 postings that best fit the candidate" in assembled()
+
+
+def test_the_search_template_hard_codes_no_result_target():
+    template = app_template("search.md")
+    assert "Return the {{RESULTS_PER_RUN}} postings that best fit" in template
+    assert "Return the 10 postings" not in template
+
+
 # --- the app templates ------------------------------------------------------
 
 
