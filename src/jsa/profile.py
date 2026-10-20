@@ -95,6 +95,7 @@ class SearchConfig(BaseModel):
     model_config = _STRICT
     timezone: NonEmptyStr
     run_at: time
+    results_per_run: Annotated[StrictInt, Field(gt=0)]
     schedule: Schedule = Schedule()
     runners: Runners = Runners()
     verification: Verification

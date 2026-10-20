@@ -71,6 +71,9 @@ def assemble_search_prompt_for(
     Only the fragments in `replaceable` (default: all) are looked for there."""
     slots = {
         "SEARCH_WINDOW": Slot(window, "the search window"),
+        "RESULTS_PER_RUN": Slot(
+            str(config.results_per_run), "results_per_run in search.toml"
+        ),
         "LIVENESS_RULES": Slot(
             app_template(f"liveness_{config.verification.mode}.md"),
             "the app's liveness rules",

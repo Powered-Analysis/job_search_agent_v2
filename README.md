@@ -62,7 +62,7 @@ cp -r profile.example profile
 | `profile/resume.docx` | your single base resume |
 | `profile/cover_letter.*` | optional; your cover letter, copied into each packet (a `.docx` also gets a PDF) |
 | `profile/resume_skills.md` | optional; the skills you have, one per line, comma-separated, or both in one file. The redline may add, remove, reword, or reorder skills in your resume's `Skills` section, using only words from this list or the posting |
-| `profile/search/search.toml` | timezone, `run_at`, the weekly schedule, the Claude runner settings, and the verification mode |
+| `profile/search/search.toml` | timezone, `run_at`, `results_per_run`, the weekly schedule, the Claude runner settings, and the verification mode |
 | `profile/search/*.md` | the six fragments that tell the search who you are and what you want |
 
 No prompt in `src/` needs an edit. If one seems to, a profile slot is missing.

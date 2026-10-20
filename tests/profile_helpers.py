@@ -18,6 +18,7 @@ FRAGMENTS = (
 SEARCH_TOML = """\
 timezone = "America/New_York"
 run_at = "07:00"
+results_per_run = 10
 
 [schedule]
 monday = [{ agent = "perplexity", window_hours = 72 }]
@@ -95,6 +96,6 @@ def schedule_toml(timezone: str, run_at: str, days: dict[str, list[tuple[str, in
         for day, searches in days.items()
     )
     return (
-        f'timezone = "{timezone}"\nrun_at = "{run_at}"\n\n[schedule]\n{schedule}\n\n'
+        f'timezone = "{timezone}"\nrun_at = "{run_at}"\nresults_per_run = 10\n\n[schedule]\n{schedule}\n\n'
         + _RUNNERS_AND_VERIFICATION
     )
