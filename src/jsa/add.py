@@ -52,6 +52,9 @@ class AddOutcome(NamedTuple):
     title: str | None
     # Whether the row now holds a job description.
     has_jd: bool
+    # Whether refine learns from the row, and whether this add changed that on an existing row.
+    in_refinement: bool
+    refinement_changed: bool
 
 
 def require_fields(company: str | None, title: str | None) -> tuple[str, str]:
@@ -68,20 +71,31 @@ def accept_derived(derived: Derived) -> tuple[str, str]:
     return require_fields(derived.company, derived.title)
 
 
+def keep_refinement(current: bool | None) -> bool:
+    """The setting `--no-input` leaves: a new row is in refinement, an existing row stays as it is."""
+    return True if current is None else current
+
+
 def _promote(
     conn: db.Connection,
     url: str,
-    posting_id: int,
-    decision: str | None,
+    existing: tuple[int, str | None, bool],
     description: str | None,
+    wanted: bool,
 ) -> AddOutcome:
+    posting_id, decision, current = existing
     if description:
         db.supply_jd(conn, posting_id, description)
     has_jd = db.has_jd(conn, posting_id)
+    changed = wanted != current
+    if changed:
+        db.set_in_refinement(conn, posting_id, wanted)
     if decision == "Apply":
-        return AddOutcome(posting_id, "already_apply", None, None, None, has_jd)
-    db.set_decision(conn, url, "Apply")
-    return AddOutcome(posting_id, "promoted", decision, None, None, has_jd)
+        kind, previous = "already_apply", None
+    else:
+        db.set_decision(conn, url, "Apply")
+        kind, previous = "promoted", decision
+    return AddOutcome(posting_id, kind, previous, None, None, has_jd, wanted, changed)
 
 
 def add_posting(
@@ -91,8 +105,12 @@ def add_posting(
     date_posted: str | None,
     description: str | None = None,
     fields: Callable[[Derived], tuple[str, str]] = accept_derived,
+    refinement: Callable[[bool | None], bool] = keep_refinement,
 ) -> AddOutcome:
     """Manual add (PRD 03): `fields` turns the derived company and title into the stored pair.
+
+    `refinement` turns the row's current refine setting (None for a new row) into the stored one.
+    Every prompt runs before the first write, so quitting at one writes nothing.
 
     `description` is the job description the caller already holds; it fills in only
     where capture yielded none (XC-5).
@@ -103,7 +121,7 @@ def add_posting(
         )
     conn = db.connect()
     if existing := db.find_posting(conn, url):
-        return _promote(conn, url, *existing, description)
+        return _promote(conn, url, existing, description, refinement(existing[2]))
 
     ref = resolve_ats(url)
     # What the page published, even when it had no description to capture.
@@ -123,6 +141,7 @@ def add_posting(
         derived_company = published.company if published else None
     derived_title = published.title if published else None
     company, title = fields(Derived(derived_company, derived_title, capture_failure))
+    in_refinement = refinement(None)
 
     posting_id = db.insert_posting(
         conn,
@@ -131,10 +150,13 @@ def add_posting(
         url=url,
         search_agent="manual",
         date_posted=date_posted,
+        in_refinement=in_refinement,
     )
     if posting_id is None:
         # Another writer stored it between the lookup and the insert.
-        return _promote(conn, url, *db.find_posting(conn, url), description)
+        return _promote(
+            conn, url, db.find_posting(conn, url), description, in_refinement
+        )
     jd_markdown = (published.jd_markdown if published else None) or description
     if published or jd_markdown:
         # No title: the one the caller confirmed stands.
@@ -144,4 +166,13 @@ def add_posting(
             jd_markdown=jd_markdown,
             location=published.location if published else None,
         )
-    return AddOutcome(posting_id, "added", None, company, title, bool(jd_markdown))
+    return AddOutcome(
+        posting_id,
+        "added",
+        None,
+        company,
+        title,
+        bool(jd_markdown),
+        in_refinement,
+        False,
+    )

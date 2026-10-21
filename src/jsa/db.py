@@ -71,6 +71,7 @@ TABLES: dict[str, tuple[str, ...]] = {
         "decided_at TEXT",
         "added_to_tracker INTEGER NOT NULL DEFAULT 0",
         "closed_at TEXT",
+        "in_refinement INTEGER NOT NULL DEFAULT 1",
     ),
     "search_findings": (
         "run_date TEXT NOT NULL",
@@ -116,10 +117,31 @@ TABLES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+
+def _add_column(table: str, name: str) -> Callable[[Connection], None]:
+    """A migration adding a column to a table that predates it; its definition is the one in `TABLES`."""
+
+    def migrate(conn: Connection) -> None:
+        existing = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM pragma_table_info(?)", (table,)
+            ).fetchall()
+        }
+        # No columns means no table yet: the create below makes it complete.
+        if existing and name not in existing:
+            definition = next(c for c in TABLES[table] if c.split()[0] == name)
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+
+    return migrate
+
+
 # Schema changes ship as migrations that run before the creates (PRD 02):
 # a rebuild parks data under another name, and a create run first would fill
-# that gap with an empty table. The initial schema needs none.
-MIGRATIONS: tuple[Callable[[Connection], None], ...] = ()
+# that gap with an empty table.
+MIGRATIONS: tuple[Callable[[Connection], None], ...] = (
+    _add_column("postings", "in_refinement"),
+)
 
 
 def ensure_schema(conn: Connection) -> None:
@@ -153,8 +175,12 @@ def insert_posting(
     url: str,
     search_agent: str,
     date_posted: str | None = None,
+    in_refinement: bool = True,
 ) -> int | None:
-    """Return the new posting's id, or None when its canonical URL is already stored."""
+    """Return the new posting's id, or None when its canonical URL is already stored.
+
+    Only a manual add chooses `in_refinement`; a searched row takes the default (PRD 02).
+    """
     manual = search_agent == "manual"
     # A manual add is decided in the INSERT itself so the row is never visible as undecided.
     decision, decided_at = ("'Apply'", NOW) if manual else ("NULL", "NULL")
@@ -162,8 +188,8 @@ def insert_posting(
         f"""
         INSERT INTO postings (
             company, title, url, date_posted, canonical_url,
-            normalized_company, title_slug, search_agent, decision, decided_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, {decision}, {decided_at})
+            normalized_company, title_slug, search_agent, in_refinement, decision, decided_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {decision}, {decided_at})
         ON CONFLICT(canonical_url) DO NOTHING
         RETURNING id
         """,
@@ -176,6 +202,7 @@ def insert_posting(
             normalize_company(company),
             title_slug(title),
             search_agent,
+            int(in_refinement),
         ),
     ).fetchall()
     return rows[0][0] if rows else None
@@ -344,13 +371,13 @@ def health_search_runs(conn: Connection, since: datetime) -> list[tuple]:
 REVISE_COLUMNS = "id, company, title, location, url, decision, fit_feedback"
 
 
-def find_posting(conn: Connection, url: str) -> tuple[int, str | None] | None:
-    """A UX-only read: the posting's (id, decision) for this URL's canonical form."""
+def find_posting(conn: Connection, url: str) -> tuple[int, str | None, bool] | None:
+    """A UX-only read: the posting's (id, decision, in_refinement) for this URL's canonical form."""
     rows = conn.execute(
-        "SELECT id, decision FROM postings WHERE canonical_url = ?",
+        "SELECT id, decision, in_refinement FROM postings WHERE canonical_url = ?",
         (canonicalize_url(url),),
     ).fetchall()
-    return (rows[0][0], rows[0][1]) if rows else None
+    return (rows[0][0], rows[0][1], bool(rows[0][2])) if rows else None
 
 
 def review_backlog(conn: Connection) -> list[tuple]:
@@ -417,6 +444,14 @@ def record_decision(
 ) -> None:
     """Store a decision with its feedback together; telemetry follows (PRD 02)."""
     _write_decision(conn, url, decision, "fit_feedback = ?, ", (feedback,))
+
+
+def set_in_refinement(conn: Connection, posting_id: int, in_refinement: bool) -> None:
+    """Set whether refine learns from a posting; a change refreshes `decided_at`, the current value is a no-op (PRD 02)."""
+    conn.execute(
+        f"UPDATE postings SET in_refinement = ?, decided_at = {NOW} WHERE id = ? AND in_refinement != ?",
+        (int(in_refinement), posting_id, int(in_refinement)),
+    )
 
 
 def clear_decision(conn: Connection, url: str) -> None:
@@ -556,17 +591,29 @@ def refinement_cutoff(conn: Connection) -> str | None:
 
 
 def decided_postings(conn: Connection) -> list[DecidedPosting]:
-    """Every decided posting in full, oldest decision first."""
+    """Every decided posting in refinement in full, oldest decision first."""
     rows = conn.execute(
         """
         SELECT id, company, title, decision, fit_feedback, search_agent, url, location,
             date_posted, jd_markdown, decided_at
         FROM postings
-        WHERE decision IS NOT NULL
+        WHERE decision IS NOT NULL AND in_refinement = 1
         ORDER BY decided_at, id
         """
     ).fetchall()
     return [DecidedPosting(*row) for row in rows]
+
+
+def excluded_decided_count(conn: Connection, cutoff: str | None) -> int:
+    """Decided postings left out of refinement that were decided after the cutoff (all of them when None)."""
+    return conn.execute(
+        """
+        SELECT COUNT(*) FROM postings
+        WHERE decision IS NOT NULL AND in_refinement = 0
+            AND (? IS NULL OR decided_at > ?)
+        """,
+        (cutoff, cutoff),
+    ).fetchone()[0]
 
 
 def record_refinement_run(

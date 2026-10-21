@@ -34,3 +34,12 @@ def choose(label: str, keys: Sequence[str], *, allow_enter: bool = False) -> str
         answer = ask(f"{label} [{'/'.join(keys)}]").strip().lower()
         if answer in valid:
             return answer
+
+
+def confirm(label: str, *, default: bool) -> bool:
+    """Re-prompt until y or n; a bare Enter takes the default, shown as the capital letter."""
+    hint = "Y/n" if default else "y/N"
+    while True:
+        answer = ask(f"{label} [{hint}]").strip().lower()
+        if answer in ("y", "n", ""):
+            return default if answer == "" else answer == "y"

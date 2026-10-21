@@ -12,6 +12,7 @@ from jsa.add import (
     Derived,
     MissingFieldsError,
     add_posting,
+    keep_refinement,
     require_fields,
 )
 from jsa.config import load_environment
@@ -61,15 +62,37 @@ def _add_fields(args: argparse.Namespace) -> Callable[[Derived], tuple[str, str]
     return fields
 
 
+def _add_refinement(args: argparse.Namespace) -> Callable[[bool | None], bool]:
+    """Whether refine learns from the posting: the flag, else asked unless --no-input."""
+
+    def refinement(current: bool | None) -> bool:
+        if args.exclude_from_refine:
+            return False
+        if args.no_input:
+            return keep_refinement(current)
+        return prompts.confirm(
+            "Use this posting to refine the search?",
+            default=keep_refinement(current),
+        )
+
+    return refinement
+
+
 def _print_added(outcome: AddOutcome) -> None:
-    if outcome.kind == "already_apply":
+    if outcome.kind == "already_apply" and not outcome.refinement_changed:
         print(f"Posting {outcome.posting_id}: already Apply; no change.")
+    elif outcome.kind == "already_apply":
+        print(f"Posting {outcome.posting_id}: already Apply.")
     elif outcome.kind == "promoted":
         previous = outcome.previous_decision or "undecided"
         print(f"Posting {outcome.posting_id}: {previous} → Apply")
     else:
         message = f"Added posting {outcome.posting_id}: {outcome.company} — {outcome.title} (Apply)"
         print(message if outcome.has_jd else f"{message}; {NO_PACKET_JD}")
+    if not outcome.in_refinement:
+        print("Excluded from search refinement: `jsa refine` will not learn from it.")
+    elif outcome.refinement_changed:
+        print("Now used to refine the search.")
 
 
 def _add(args: argparse.Namespace) -> None:
@@ -80,6 +103,7 @@ def _add(args: argparse.Namespace) -> None:
                 args.url,
                 date_posted=args.date_posted,
                 fields=_add_fields(args),
+                refinement=_add_refinement(args),
             )
         )
 
@@ -187,6 +211,11 @@ def main() -> None:
     add.add_argument("--company", help="company name (otherwise derived and confirmed)")
     add.add_argument("--title", help="job title (otherwise derived and confirmed)")
     add.add_argument("--date-posted", type=_iso_date, help="posting date, YYYY-MM-DD")
+    add.add_argument(
+        "--exclude-from-refine",
+        action="store_true",
+        help="keep this posting out of `jsa refine`, without asking",
+    )
     add.add_argument(
         "--no-input",
         action="store_true",
