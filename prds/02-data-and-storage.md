@@ -45,26 +45,27 @@ One hosted libSQL (Turso) database is the single source of truth for job-posting
 - **Autocommit via `isolation_level = None` (P0, `XC-8`):** `turso_serverless` mirrors stdlib sqlite3's *legacy* transaction model; only `isolation_level = None` actually enables autocommit. The DB-API `autocommit` attribute it also exposes is stored but never consulted — a silent no-op — so without this every DML opens an implicit `BEGIN DEFERRED` that `close()` rolls back, silently dropping the write. Both the pipeline insert and the review loop depend on this.
 
 **The `postings` table (Priority: P0)**
-- **Single table** holding: `id`; `company`, `title`, `url`, `date_posted`; `canonical_url` (`NOT NULL UNIQUE` — the idempotency key); `normalized_company`, `title_slug`; `jd_markdown`, `location`; `search_agent` (`CHECK IN ('claude','perplexity','gemini','manual')`); `first_seen_at`; `decision` (`CHECK IN ('Apply','Skip')`, nullable until reviewed); `fit_feedback`; `decided_at`; `added_to_tracker` (default 0); `closed_at` (NULL unless a re-check found the posting closed, PRD 01).
+- **Single table** holding: `id`; `company`, `title`, `url`, `date_posted`; `canonical_url` (`NOT NULL UNIQUE` — the idempotency key); `normalized_company`, `title_slug`; `jd_markdown`, `location`; `search_agent` (`CHECK IN ('claude','perplexity','gemini','manual')`); `first_seen_at`; `decision` (`CHECK IN ('Apply','Skip')`, nullable until reviewed); `fit_feedback`; `decided_at`; `added_to_tracker` (default 0); `closed_at` (NULL unless a re-check found the posting closed, PRD 01); `in_refinement` (`NOT NULL DEFAULT 1`; 0 when the user excluded the posting from search refinement, PRD 03 and PRD 05).
   - *Stored vs displayed:* `decision` stores the exact strings `Apply`/`Skip` — these double as display labels; downstream logic keys off the stored value. `search_agent` stores the wire value `claude`/`perplexity`/`gemini`/`manual`.
 - **No application state:** the table deliberately omits Date Applied / Status; those are the Sheet's user columns (`XC-4`).
 - **Single-source column list:** each table's columns are defined once, and both the `CREATE` and the migration rebuild use that definition, so the live schema and the migration target cannot drift.
 - **Timestamps and dates:** every stored timestamp (`first_seen_at`, `decided_at`, `closed_at`, `found_at`, `ats_date`, `started_at`, `finished_at`, `claimed_at`, `run_at`, `cutoff`) is UTC ISO-8601 in one fixed format, because SQLite compares them as text and the refinement scope (PRD 05) depends on those comparisons. `run_date` is a date in the profile's `timezone`; `date_posted` is an ISO date.
 
 **Idempotent insert & JD capture (Priority: P0)**
-- **The insert** uses `INSERT … ON CONFLICT(canonical_url) DO NOTHING RETURNING id`: it reports the new id, or `None` if the row already existed — the signal the pipeline uses to fetch a JD only for genuinely-new rows. A `manual` add sets `decision = 'Apply'` *in the INSERT itself* (with `decided_at` set in the same statement), so the row is never briefly visible as undecided; searched rows leave `decision`/`decided_at` NULL.
+- **The insert** uses `INSERT … ON CONFLICT(canonical_url) DO NOTHING RETURNING id`: it reports the new id, or `None` if the row already existed — the signal the pipeline uses to fetch a JD only for genuinely-new rows. A `manual` add sets `decision = 'Apply'` *in the INSERT itself* (with `decided_at` set in the same statement), so the row is never briefly visible as undecided, and sets `in_refinement` in the same INSERT; searched rows leave `decision`/`decided_at` NULL and `in_refinement` at its default.
 - **JD capture** stores `jd_markdown` + `location`; when a non-empty ATS-canonical `title` is provided it also overwrites `title` and re-derives `title_slug` (PRD 01's slug rule) so packet naming carries the canonical title. A `None`/empty title leaves title and slug untouched — the rule that keeps a failed refetch from blanking a good capture (PRD 04).
 
 **Query surface (Priority: P0)** — one database module owns every connection and every SQL statement; these are the reads and writes other steps rely on:
 - **Review backlog:** `decision IS NULL AND closed_at IS NULL`, oldest first (Step 3, PRD 03).
 - **Mark closed:** set `closed_at` on a posting a re-check found closed (PRD 01). It never touches `decision`.
 - **Decision writes:** record a decision with its feedback; change a decision; clear a decision (nulls `decision`, `fit_feedback`, and `decided_at`). Every decision write refreshes `decided_at`, so amendments and promotions re-enter refinement scope; clearing deliberately does **not** touch telemetry (see below).
-- **Lookup by canonical URL:** a UX-only read for the manual-add path (not the idempotency guard).
+- **Refinement setting:** set a row's `in_refinement` (PRD 03). A change refreshes `decided_at`, like a decision write, so a row brought back into refinement is learned from; writing the value a row already has is a no-op.
+- **Lookup by canonical URL:** a UX-only read for the manual-add path (not the idempotency guard), returning the row's `in_refinement` with its id and decision.
 - **Tracker queue:** `Apply AND added_to_tracker = 0 AND closed_at IS NULL` — the Step 5 idempotency guard (PRD 04).
 - **Packet queue:** `Apply`, by default also `added_to_tracker = 0 AND closed_at IS NULL`; targeting one posting by id waives the tracker and closed conditions, never `Apply` — the Step 4 queue (PRD 04).
 - **Refetch scope:** `Apply` by default; every row, or one row by id, when widened (PRD 04).
 - **Mark tracked:** set `added_to_tracker = 1` (Step 5 tail).
-- **Refinement scope:** decided rows after the cutoff, the compact decided history, and the cutoff itself (PRD 05).
+- **Refinement scope:** decided rows with `in_refinement = 1` after the cutoff, the compact history of every decided row with `in_refinement = 1`, the count of excluded decided rows after the cutoff, and the cutoff itself (PRD 05).
 - **Search-run log:** open and close a search's run row; read recent runs for review's health line (below; PRD 01, PRD 03).
 - **Cron claim:** the once-per-day claim (below; PRD 01).
 
