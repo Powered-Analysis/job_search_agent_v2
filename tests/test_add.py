@@ -85,6 +85,13 @@ COLUMNS = (
 )
 
 
+def in_refinement(conn, url):
+    return conn.execute(
+        "SELECT in_refinement FROM postings WHERE canonical_url = ?",
+        (canonicalize_url(url),),
+    ).fetchone()[0]
+
+
 def posting(conn, url):
     row = conn.execute(
         f"SELECT {COLUMNS} FROM postings WHERE canonical_url = ?",
@@ -491,8 +498,8 @@ def test_set_decision_refreshes_decided_at_and_syncs_findings_on_canonical_url(
 def test_find_posting_reports_id_and_decision_for_any_variant_of_the_url(db_url, conn):
     url = gh_url()
     posting_id = seed_decided(conn, url, "Skip")
-    assert db.find_posting(conn, url) == (posting_id, "Skip")
-    assert db.find_posting(conn, f"{url}?utm_campaign=x") == (posting_id, "Skip")
+    assert db.find_posting(conn, url) == (posting_id, "Skip", 1)
+    assert db.find_posting(conn, f"{url}?utm_campaign=x") == (posting_id, "Skip", 1)
     assert db.find_posting(conn, gh_url()) is None
 
 
@@ -504,12 +511,13 @@ def test_without_a_tty_empty_lines_accept_the_derived_company_and_title(
 ):
     url = gh_url()
     web.routes.update(gh_routes(url))
-    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n")
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n\n")
     assert code == 0, output
     row = posting(conn, url)
     assert row["company"] == "Acme Widgets"
     assert row["title"] == "Staff Platform Engineer"
     assert row["decision"] == "Apply"
+    assert in_refinement(conn, url) == 1
 
 
 def test_typed_answers_replace_the_derived_company_and_title_and_survive_capture(
@@ -518,13 +526,14 @@ def test_typed_answers_replace_the_derived_company_and_title_and_survive_capture
     url = gh_url()
     web.routes.update(gh_routes(url))
     code, output = jsa_add(
-        monkeypatch, capsys, url, stdin="Globex Corporation\nMy Corrected Title\n"
+        monkeypatch, capsys, url, stdin="Globex Corporation\nMy Corrected Title\n\n"
     )
     assert code == 0, output
     row = posting(conn, url)
     assert row["company"] == "Globex Corporation"
     assert row["title"] == "My Corrected Title"
     assert row["title_slug"] == title_slug("My Corrected Title")
+    assert in_refinement(conn, url) == 1
     assert "Build the platform." in row["jd_markdown"]
 
 
@@ -779,11 +788,12 @@ def test_without_a_tty_empty_lines_accept_the_derived_values_of_a_descriptionles
 ):
     url = off_four_url()
     web.routes[page_key(url)] = html_response(descriptionless_page())
-    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n")
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n\n")
     assert code == 0, output
     row = posting(conn, url)
     assert (row["company"], row["title"]) == ("Example Corp", "Staff Platform Engineer")
     assert row["jd_markdown"] is None
+    assert in_refinement(conn, url) == 1
     assert "job_posting.md" in output
 
 
@@ -847,11 +857,12 @@ def test_without_a_tty_empty_lines_accept_what_a_descriptionless_page_offers_aft
 ):
     url = ATS_PAGE_URLS["ashby"]()
     web.routes[page_key(url)] = html_response(descriptionless_page())
-    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n")
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n\n")
     assert code == 0, output
     row = posting(conn, url)
     assert (row["company"], row["title"]) == ("Acme Widgets", "Staff Platform Engineer")
     assert row["jd_markdown"] is None
+    assert in_refinement(conn, url) == 1
 
 
 def test_a_failed_ats_fetch_and_a_descriptionless_page_without_a_title_cannot_derive_one(
