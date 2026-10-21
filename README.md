@@ -248,7 +248,7 @@ copying the tracker with `gws`; then `uv run jsa deploy`.
 |---|---|
 | `jsa review` | decide Apply or Skip on each undecided posting |
 | `jsa revise --id <id>` or `--last` | amend the decision and note of a decided posting; `--last` picks the one decided most recently |
-| `jsa add <URL>` | add a posting you already want, decided Apply |
+| `jsa add <URL>` | add a posting you already want, decided Apply; it asks whether `jsa refine` may learn from it, and `--exclude-from-refine` answers no (run it again on an added posting to change the answer) |
 | `jsa inbox` | the inbox machine's entrypoint: add each posting emailed to the jobs mailbox, then build its packet, upload it to the Drive packets folder, and track it (needs `[inbox] senders` and `drive_folder_id`, `JSA_INBOX_GWS_CREDENTIALS`, and `JSA_GWS_CREDENTIALS`) |
 | `jsa generate` | build each Apply posting's packet with a resume redline, then track it |
 | `jsa packet`, `jsa track` | the two halves of `generate`, on their own |

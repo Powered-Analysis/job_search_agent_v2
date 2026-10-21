@@ -178,6 +178,10 @@ def _run_in_scratch(
     return result.text, proposed
 
 
+def _excluded_note(count: int) -> str:
+    return f"Excluded from refinement: {count} decided after the cutoff."
+
+
 def refine(*, dry_run: bool) -> None:
     directory = refine_dir()
     if not dry_run and proposal_pending(directory):
@@ -187,10 +191,13 @@ def refine(*, dry_run: bool) -> None:
     with closing(db.connect()) as conn:
         cutoff = db.refinement_cutoff(conn)
         decided = db.decided_postings(conn)
+        excluded = db.excluded_decided_count(conn, cutoff)
     # Stored timestamps share one format, so comparing them as text orders them (PRD 02).
     scope = [row for row in decided if cutoff is None or row.decided_at > cutoff]
     if not scope:
         print("Nothing new to refine.")
+        if dry_run and excluded:
+            print(_excluded_note(excluded))
         return
     if dry_run:
         since = (
@@ -199,6 +206,8 @@ def refine(*, dry_run: bool) -> None:
         print(f"{len(scope)} decided postings in scope ({since}):")
         for row in scope:
             print(history_line(row))
+        if excluded:
+            print(_excluded_note(excluded))
         return
     prompt = assemble_refine_prompt(
         render_ground_truth(scope), render_history(decided), load_search_config()

@@ -34,3 +34,9 @@ def choose(label: str, keys: Sequence[str], *, allow_enter: bool = False) -> str
         answer = ask(f"{label} [{'/'.join(keys)}]").strip().lower()
         if answer in valid:
             return answer
+
+
+def confirm(label: str, *, default: bool) -> bool:
+    """A yes/no question; a bare Enter takes the default, shown as the capital letter."""
+    answer = choose(label, ("Y", "n") if default else ("y", "N"), allow_enter=True)
+    return default if answer == "" else answer == "y"
