@@ -1499,3 +1499,21 @@ def test_a_retitle_never_refills_the_renamed_copy_or_changes_the_profile(
     refetch(monkeypatch, capsys)
     assert (packets / NEW_DIR / NEW_COPY).read_bytes() == revised
     assert (profile / "resume.docx").read_bytes() == base
+
+
+def test_a_posting_kept_out_of_refinement_is_refetched_like_any_other(
+    rdb, web, monkeypatch, capsys
+):
+    ordinary = seed(rdb)
+    excluded = seed(rdb)
+    rdb.execute("UPDATE postings SET in_refinement = 0 WHERE id = ?", (excluded,))
+    for posting_id in (ordinary, excluded):
+        employer(web, rdb, posting_id)
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    for posting_id in (ordinary, excluded):
+        assert column(rdb, posting_id, "title") == NEW_TITLE
+        assert NEW_JD in column(rdb, posting_id, "jd_markdown")
+        assert column(rdb, posting_id, "location") == NEW_LOCATION
+    assert column(rdb, excluded, "in_refinement") == 0
+    assert column(rdb, ordinary, "in_refinement") == 1

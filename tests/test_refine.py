@@ -1358,3 +1358,183 @@ def test_accept_and_reject_together_are_refused_and_change_nothing(
     assert code != 0
     assert live_snapshot(profile) == before
     assert visible_files(profile) == pending
+
+
+# --- rows kept out of refinement (issue #180; PRD 05 "Excluded rows are never seen", Edge Cases; PRD 02 "Refinement scope") ---
+
+
+def exclude(conn, *rows):
+    for row in rows:
+        conn.execute("UPDATE postings SET in_refinement = 0 WHERE id = ?", (row.id,))
+
+
+def excluded_lines(out):
+    return [line for line in out.splitlines() if "exclud" in line.lower()]
+
+
+def test_an_excluded_row_never_reaches_the_ground_truth(
+    seed, rdb, refiner, monkeypatch, capsys
+):
+    kept = seed("Apply", decided_at=at(1))
+    left_out = seed("Apply", decided_at=at(2), company="Leftoutco")
+    exclude(rdb, left_out)
+    code, _ = refine(monkeypatch, capsys)
+    assert code == 0
+    prompt = refiner.prompt
+    assert kept.jd.strip() in prompt
+    for text in (
+        left_out.title,
+        left_out.company,
+        left_out.jd.strip(),
+        left_out.feedback,
+        left_out.url,
+        left_out.location,
+    ):
+        assert text not in prompt
+
+
+def test_an_excluded_row_is_absent_from_the_history_and_its_counts(
+    seed, rdb, refiner, monkeypatch, capsys
+):
+    seed("Apply", decided_at=at(1))
+    seed("Skip", decided_at=at(2))
+    left_out = [
+        seed("Apply", decided_at=at(3), company="Leftoutco"),
+        seed("Apply", decided_at=at(4), company="Leftoutco"),
+        seed("Skip", decided_at=at(5), company="Leftoutco"),
+    ]
+    exclude(rdb, *left_out)
+    record_run(rdb, at(2), considered=2)
+    seed("Apply", decided_at=at(6))
+    code, _ = refine(monkeypatch, capsys)
+    assert code == 0
+    prompt = refiner.prompt
+    assert "Leftoutco" not in prompt
+    # Two Applies and one Skip once the excluded rows are left out.
+    assert re.search(r"apply\W*2\b|\b2\W+apply", prompt, re.IGNORECASE)
+    assert re.search(r"skip\W*1\b|\b1\W+skip", prompt, re.IGNORECASE)
+
+
+def test_an_excluded_row_decided_before_the_cutoff_is_absent_from_the_history_too(
+    seed, rdb, refiner, monkeypatch, capsys
+):
+    old = seed("Apply", decided_at=at(1), company="Historicalco")
+    exclude(rdb, old)
+    record_run(rdb, at(2), considered=1)
+    seed("Apply", decided_at=at(3))
+    refine(monkeypatch, capsys)
+    assert "Historicalco" not in refiner.prompt
+
+
+def test_the_recorded_cutoff_and_count_come_from_the_included_rows_only(
+    seed, rdb, refiner, monkeypatch, capsys
+):
+    seed("Apply", decided_at=at(5))
+    seed("Skip", decided_at=at(3))
+    exclude(rdb, seed("Apply", decided_at=at(9)), seed("Skip", decided_at=at(8)))
+    code, _ = refine(monkeypatch, capsys)
+    assert code == 0
+    assert runs(rdb) == [(at(5), 2, 0)]
+
+
+def test_the_next_run_after_one_with_excluded_rows_finds_nothing_new(
+    seed, rdb, refiner, monkeypatch, capsys
+):
+    seed("Apply", decided_at=at(5))
+    exclude(rdb, seed("Apply", decided_at=at(9)))
+    refine(monkeypatch, capsys)
+    code, out = refine(monkeypatch, capsys)
+    assert code == 0
+    assert "nothing new" in out.lower()
+    assert len(refiner.calls) == 1 and len(runs(rdb)) == 1
+
+
+def test_when_every_new_decision_is_excluded_it_is_the_nothing_new_exit(
+    seed, rdb, refiner, profile, monkeypatch, capsys
+):
+    seed("Apply", decided_at=at(1))
+    record_run(rdb, at(1))
+    exclude(rdb, seed("Apply", decided_at=at(2)), seed("Skip", decided_at=at(3)))
+    code, out = refine(monkeypatch, capsys)
+    assert code == 0
+    assert "nothing new" in out.lower()
+    assert refiner.calls == []
+    assert len(runs(rdb)) == 1
+    assert proposal_files(profile) == set()
+
+
+def test_with_no_run_recorded_a_scope_of_only_excluded_rows_is_nothing_new(
+    seed, rdb, refiner, monkeypatch, capsys
+):
+    exclude(rdb, seed("Apply", decided_at=at(1)), seed("Skip", decided_at=at(2)))
+    code, out = refine(monkeypatch, capsys)
+    assert code == 0
+    assert "nothing new" in out.lower()
+    assert refiner.calls == []
+    assert runs(rdb) == []
+
+
+def test_dry_run_lists_only_included_rows_and_names_the_excluded_count(
+    seed, rdb, refiner, profile, monkeypatch, capsys
+):
+    kept = seed("Apply", decided_at=at(4))
+    left_out = [seed("Apply", decided_at=at(5)), seed("Skip", decided_at=at(6))]
+    before_cutoff = seed("Apply", decided_at=at(1))
+    exclude(rdb, *left_out, before_cutoff)
+    record_run(rdb, at(2))
+    code, out = refine(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert kept.title in out or re.search(rf"\b{kept.id}\b", out)
+    for row in left_out + [before_cutoff]:
+        assert row.title not in out
+    # Two excluded rows were decided after the cutoff; the one decided before it isn't counted.
+    assert any(re.search(r"\b2\b", line) for line in excluded_lines(out))
+    assert refiner.calls == []
+    assert len(runs(rdb)) == 1
+    assert proposal_files(profile) == set()
+
+
+def test_dry_run_with_nothing_new_still_names_the_excluded_count(
+    seed, rdb, refiner, monkeypatch, capsys
+):
+    seed("Apply", decided_at=at(1))
+    record_run(rdb, at(1))
+    exclude(rdb, seed("Apply", decided_at=at(2)), seed("Apply", decided_at=at(3)))
+    seed("Apply", decided_at=at(0))
+    code, out = refine(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert "nothing new" in out.lower()
+    assert any(re.search(r"\b2\b", line) for line in excluded_lines(out))
+    assert refiner.calls == [] and len(runs(rdb)) == 1
+
+
+def test_dry_run_says_nothing_about_exclusions_when_there_are_none_after_the_cutoff(
+    seed, rdb, refiner, monkeypatch, capsys
+):
+    exclude(rdb, seed("Apply", decided_at=at(1)))
+    record_run(rdb, at(2))
+    seed("Apply", decided_at=at(3))
+    code, out = refine(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert excluded_lines(out) == []
+
+
+def test_dry_run_with_no_excluded_rows_at_all_says_nothing_about_exclusions(
+    seed, rdb, refiner, monkeypatch, capsys
+):
+    seed("Apply", decided_at=at(1))
+    code, out = refine(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert excluded_lines(out) == []
+
+
+def test_a_row_brought_back_into_refinement_is_in_the_next_runs_scope(
+    seed, rdb, refiner, monkeypatch, capsys
+):
+    row = seed("Apply", decided_at=at(1))
+    exclude(rdb, row)
+    record_run(rdb, at(2))
+    db.set_in_refinement(rdb, row.id, True)
+    code, _ = refine(monkeypatch, capsys)
+    assert code == 0
+    assert row.jd.strip() in refiner.prompt

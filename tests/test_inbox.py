@@ -17,6 +17,7 @@ import pytest
 from conftest import REPO_ROOT
 from profile_helpers import copy_example
 from test_add import (
+    LONG_AGO,
     count,
     descriptionless_page,
     gh_routes,
@@ -30,6 +31,7 @@ from test_add import (
 
 from jsa import cli
 from jsa.inbox import parse_posting, sender_allowed
+from jsa.urls import canonicalize_url
 
 LOCAL_DATABASE_HOSTS = {"127.0.0.1", "localhost"}
 SENDER = "jordan.example@example.com"
@@ -941,3 +943,58 @@ def test_the_example_profile_shows_a_commented_inbox_table_with_a_fictional_send
 
 def test_the_env_example_lists_the_mailbox_credential():
     assert "JSA_INBOX_GWS_CREDENTIALS" in (REPO_ROOT / ".env.example").read_text()
+
+
+# --- the refinement setting (issue #180; PRD 03 "Email side door") ---------------------------
+
+
+def setting(conn, url):
+    return conn.execute(
+        "SELECT in_refinement FROM postings WHERE canonical_url = ?",
+        (canonicalize_url(url),),
+    ).fetchone()[0]
+
+
+def test_an_emailed_new_posting_is_stored_in_refinement(
+    db_url, conn, gmail, web, monkeypatch
+):
+    url = ats_posting(web)
+    gmail.add("m1", 1000, f"{url}\n")
+    assert run_inbox(monkeypatch) == 0
+    assert setting(conn, url) == 1
+
+
+def test_an_emailed_description_less_posting_is_stored_in_refinement(
+    db_url, conn, gmail, web, monkeypatch
+):
+    url = bare_posting(web)
+    gmail.add("m1", 1000, f"{url}\n")
+    assert run_inbox(monkeypatch) == 0
+    assert setting(conn, url) == 1
+
+
+@pytest.mark.parametrize("decision", ["Apply", "Skip"])
+def test_an_emailed_url_matching_an_excluded_row_leaves_its_setting_alone(
+    db_url, conn, gmail, web, monkeypatch, decision
+):
+    url = ats_posting(web)
+    seed_decided(conn, url, decision)
+    conn.execute(
+        "UPDATE postings SET in_refinement = 0 WHERE canonical_url = ?",
+        (canonicalize_url(url),),
+    )
+    gmail.add("m1", 1000, f"{url}\n")
+    assert run_inbox(monkeypatch) == 0
+    assert setting(conn, url) == 0
+    assert posting(conn, url)["decision"] == "Apply"
+
+
+def test_an_emailed_url_matching_an_included_row_leaves_its_setting_alone(
+    db_url, conn, gmail, web, monkeypatch
+):
+    url = ats_posting(web)
+    seed_decided(conn, url, "Apply")
+    gmail.add("m1", 1000, f"{url}\n")
+    assert run_inbox(monkeypatch) == 0
+    assert setting(conn, url) == 1
+    assert posting(conn, url)["decided_at"] == LONG_AGO

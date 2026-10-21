@@ -2117,3 +2117,44 @@ def test_a_record_whose_only_applied_proposal_is_a_removal_gets_no_resume_pdf(
     assert agent.calls == []
     assert RESUME_PDF not in entries(folder)
     assert rendered(soffice) == []
+
+
+def test_a_posting_kept_out_of_refinement_gets_the_same_packet_and_tracker_row(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    _, packets = env
+    ordinary = seed(gdb, company="Beta Labs")
+    excluded = seed(gdb, company="Gamma Labs")
+    gdb.execute("UPDATE postings SET in_refinement = 0 WHERE id = ?", (excluded,))
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    # The resume copy's name carries the company; every other entry is identical.
+    assert entries(packets / "Beta Labs - Staff Engineer") == {
+        name.replace("GammaLabs", "BetaLabs")
+        for name in entries(packets / "Gamma Labs - Staff Engineer")
+    }
+    assert entries(packets / "Gamma Labs - Staff Engineer") == {
+        "job_posting.md",
+        "PatExample_Resume_StaffEngineer_GammaLabs.docx",
+        "PatExample_Resume_StaffEngineer_GammaLabs.pdf",
+        REDLINE_EDITS,
+    }
+    assert sorted(row[0] for row in appended_rows(gws)) == [ordinary, excluded]
+    assert column(gdb, excluded, "added_to_tracker") == 1
+    assert len(agent.calls) == 2
+    assert column(gdb, excluded, "in_refinement") == 0
+
+
+def test_packet_and_track_treat_a_posting_kept_out_of_refinement_like_any_other(
+    gdb, env, gws, monkeypatch, capsys
+):
+    _, packets = env
+    excluded = seed(gdb, company="Gamma Labs")
+    gdb.execute("UPDATE postings SET in_refinement = 0 WHERE id = ?", (excluded,))
+    code, _ = jsa(monkeypatch, capsys, "packet")
+    assert code == 0
+    assert (packets / "Gamma Labs - Staff Engineer" / "job_posting.md").exists()
+    code, _ = jsa(monkeypatch, capsys, "track")
+    assert code == 0
+    assert [row[0] for row in appended_rows(gws)] == [excluded]
+    assert column(gdb, excluded, "added_to_tracker") == 1

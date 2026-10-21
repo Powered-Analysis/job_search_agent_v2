@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from conftest import REJECTED, drop_all_tables, raw_connect
 
 from jsa import cli, db
 from jsa.naming import company_from_board, normalize_company, title_slug
@@ -962,3 +963,575 @@ def test_a_supported_fetcher_capture_is_not_replaced_by_page_data(
     assert row["title"] == "Staff Platform Engineer"
     assert "Build the platform." in row["jd_markdown"]
     assert "Page body" not in row["jd_markdown"]
+
+
+# --- the refinement setting (issue #180) ------------------------------
+
+QUESTION = "Use this posting to refine the search?"
+
+
+def exclude(conn, url):
+    conn.execute(
+        "UPDATE postings SET in_refinement = 0 WHERE canonical_url = ?",
+        (canonicalize_url(url),),
+    )
+
+
+def refinement_lines(output):
+    return [line for line in output.splitlines() if "exclud" in line.lower()]
+
+
+# --- the column and its migration (criterion 1; PRD 02 "Schema creation and change") -----
+
+
+def table_shape(url):
+    conn = raw_connect(url)
+    try:
+        rows = conn.execute(
+            "SELECT name, type, \"notnull\", dflt_value FROM pragma_table_info('postings')"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {row[0]: tuple(row[1:]) for row in rows}
+
+
+def downgrade(url):
+    """Leave the database as a version without the column left it, holding three decided rows."""
+    drop_all_tables(url)
+    db.connect().close()
+    conn = raw_connect(url)
+    try:
+        conn.execute("ALTER TABLE postings DROP COLUMN in_refinement")
+        for n, decision in enumerate(("Apply", "Skip", None)):
+            conn.execute(
+                "INSERT INTO postings (company, title, url, canonical_url, search_agent, decision, decided_at) "
+                "VALUES ('Acme', 'Engineer', ?, ?, 'claude', ?, ?)",
+                (
+                    f"https://x.example/{n}",
+                    f"https://x.example/{n}",
+                    decision,
+                    LONG_AGO,
+                ),
+            )
+    finally:
+        conn.close()
+
+
+def test_a_fresh_postings_table_holds_in_refinement_not_null_defaulting_to_one(
+    db_url, conn
+):
+    drop_all_tables(db_url)
+    fresh = db.connect()
+    fresh.execute(
+        "INSERT INTO postings (company, title, url, canonical_url, search_agent) "
+        "VALUES ('Acme', 'Engineer', 'https://x.example/a', 'https://x.example/a', 'claude')"
+    )
+    assert fresh.execute("SELECT in_refinement FROM postings").fetchall() == [(1,)]
+    with pytest.raises(REJECTED):
+        fresh.execute(
+            "INSERT INTO postings (company, title, url, canonical_url, search_agent, in_refinement) "
+            "VALUES ('Acme', 'Engineer', 'https://x.example/b', 'https://x.example/b', 'claude', NULL)"
+        )
+    fresh.close()
+
+
+def test_a_database_made_before_the_column_gains_it_with_every_row_in_refinement(
+    db_url,
+):
+    downgrade(db_url)
+    assert "in_refinement" not in table_shape(db_url)
+    db.connect().close()
+    conn = raw_connect(db_url)
+    rows = conn.execute("SELECT in_refinement FROM postings ORDER BY id").fetchall()
+    conn.close()
+    assert rows == [(1,), (1,), (1,)]
+
+
+def test_the_migration_is_a_no_op_once_applied(db_url):
+    downgrade(db_url)
+    db.connect().close()
+    conn = raw_connect(db_url)
+    conn.execute("UPDATE postings SET in_refinement = 0 WHERE decision = 'Skip'")
+    before = conn.execute(
+        "SELECT name, sql FROM sqlite_master ORDER BY name"
+    ).fetchall()
+    rows_before = conn.execute(
+        "SELECT id, in_refinement FROM postings ORDER BY id"
+    ).fetchall()
+    conn.close()
+    for _ in range(2):
+        db.connect().close()
+    conn = raw_connect(db_url)
+    after = conn.execute("SELECT name, sql FROM sqlite_master ORDER BY name").fetchall()
+    rows_after = conn.execute(
+        "SELECT id, in_refinement FROM postings ORDER BY id"
+    ).fetchall()
+    conn.close()
+    assert after == before
+    assert rows_after == rows_before
+
+
+def test_a_migrated_table_matches_a_fresh_one(db_url):
+    drop_all_tables(db_url)
+    db.connect().close()
+    fresh = table_shape(db_url)
+    downgrade(db_url)
+    db.connect().close()
+    assert table_shape(db_url) == fresh
+
+
+def test_the_migration_keeps_existing_rows_otherwise_unchanged(db_url):
+    downgrade(db_url)
+    conn = raw_connect(db_url)
+    before = conn.execute(
+        "SELECT id, company, title, canonical_url, decision, decided_at FROM postings ORDER BY id"
+    ).fetchall()
+    conn.close()
+    db.connect().close()
+    conn = raw_connect(db_url)
+    after = conn.execute(
+        "SELECT id, company, title, canonical_url, decision, decided_at FROM postings ORDER BY id"
+    ).fetchall()
+    conn.close()
+    assert after == before
+
+
+# --- the setting write (PRD 02 "Query surface") -------------------------------------------
+
+
+def test_a_searched_row_is_inserted_in_refinement(db_url, conn):
+    url = gh_url()
+    db.insert_posting(
+        conn, company="Acme", title="Engineer", url=url, search_agent="claude"
+    )
+    assert in_refinement(conn, url) == 1
+
+
+def test_writing_the_setting_a_row_already_has_changes_nothing(db_url, conn):
+    url = gh_url()
+    posting_id = seed_decided(conn, url, "Apply")
+    db.set_in_refinement(conn, posting_id, True)
+    assert posting(conn, url)["decided_at"] == LONG_AGO
+    assert in_refinement(conn, url) == 1
+
+
+def test_changing_the_setting_stores_it_and_refreshes_decided_at(db_url, conn):
+    url = gh_url()
+    posting_id = seed_decided(conn, url, "Apply")
+    db.set_in_refinement(conn, posting_id, False)
+    assert in_refinement(conn, url) == 0
+    refreshed = posting(conn, url)["decided_at"]
+    assert refreshed > LONG_AGO
+    db.set_in_refinement(conn, posting_id, True)
+    assert in_refinement(conn, url) == 1
+    assert posting(conn, url)["decided_at"] >= refreshed
+    assert posting(conn, url)["decided_at"] > LONG_AGO
+
+
+def test_the_setting_is_committed_immediately(http_url, web):
+    url = gh_url()
+    conn = db.connect()
+    posting_id = seed_decided(conn, url, "Apply")
+    db.set_in_refinement(conn, posting_id, False)
+    raw = raw_connect(http_url)
+    rows = raw.execute(
+        "SELECT in_refinement FROM postings WHERE id = ?", (posting_id,)
+    ).fetchall()
+    raw.close()
+    conn.close()
+    assert rows == [(0,)]
+
+
+# --- a new row (criteria 2 and 3) ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("answer", "stored"),
+    [("", 1), ("y", 1), ("Y", 1), ("n", 0), ("N", 0)],
+    ids=["enter", "y", "upper-y", "n", "upper-n"],
+)
+def test_a_new_row_stores_the_answer_to_the_refinement_question(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+    answer,
+    stored,
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    code, output = jsa_add(
+        monkeypatch, capsys, url, stdin=f"Globex Corporation\nMy Title\n{answer}\n"
+    )
+    assert code == 0, output
+    row = posting(conn, url)
+    assert (row["company"], row["title"], row["decision"]) == (
+        "Globex Corporation",
+        "My Title",
+        "Apply",
+    )
+    assert in_refinement(conn, url) == stored
+    assert QUESTION in output
+    assert "[Y/n]" in output
+
+
+def test_the_refinement_question_follows_the_company_and_title_prompts(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    # An answer to the refinement question can't be taken for a company or a title.
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="n\nn\nn\n")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert (row["company"], row["title"]) == ("n", "n")
+    assert in_refinement(conn, url) == 0
+
+
+def test_a_bad_answer_to_the_refinement_question_is_asked_again(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\nmaybe\nn\n")
+    assert code == 0, output
+    assert in_refinement(conn, url) == 0
+
+
+def test_the_exclude_flag_stores_zero_without_asking(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    code, output = jsa_add(
+        monkeypatch, capsys, url, "--exclude-from-refine", stdin="\n\n"
+    )
+    assert code == 0, output
+    assert in_refinement(conn, url) == 0
+    assert QUESTION not in output
+    assert posting(conn, url)["decision"] == "Apply"
+
+
+def test_no_input_alone_stores_one(db_url, conn, web, monkeypatch, capsys):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert in_refinement(conn, url) == 1
+    assert QUESTION not in output
+
+
+def test_no_input_with_the_exclude_flag_stores_zero(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    code, output = jsa_add(
+        monkeypatch, capsys, url, "--no-input", "--exclude-from-refine"
+    )
+    assert code == 0, output
+    assert in_refinement(conn, url) == 0
+
+
+def test_the_closing_line_says_when_a_new_posting_is_excluded_and_only_then(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    excluded, included = gh_url(), gh_url()
+    web.routes.update(gh_routes(excluded))
+    web.routes.update(gh_routes(included))
+    _, out_excluded = jsa_add(
+        monkeypatch, capsys, excluded, "--no-input", "--exclude-from-refine"
+    )
+    _, out_included = jsa_add(monkeypatch, capsys, included, "--no-input")
+    assert refinement_lines(out_excluded)
+    assert refinement_lines(out_included) == []
+
+
+# --- an existing row (criteria 4, 5, 6) ------------------------------------------------------
+
+
+def test_an_existing_row_is_asked_straight_after_the_lookup(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply")
+    # No company or title prompt precedes it: the first line is the answer.
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="n\n")
+    assert code == 0, output
+    assert QUESTION in output
+    assert in_refinement(conn, url) == 0
+
+
+def test_enter_keeps_an_included_row_included_and_writes_nothing(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply")
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n")
+    assert code == 0, output
+    assert in_refinement(conn, url) == 1
+    assert posting(conn, url)["decided_at"] == LONG_AGO
+    assert "already Apply; no change." in output
+
+
+def test_enter_keeps_an_excluded_row_excluded_and_writes_nothing(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply")
+    exclude(conn, url)
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n")
+    assert code == 0, output
+    assert in_refinement(conn, url) == 0
+    assert posting(conn, url)["decided_at"] == LONG_AGO
+    assert "already Apply; no change." in output
+
+
+def test_an_excluded_row_is_brought_back_by_a_yes(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    posting_id = seed_decided(conn, url, "Apply")
+    exclude(conn, url)
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="y\n")
+    assert code == 0, output
+    assert in_refinement(conn, url) == 1
+    assert posting(conn, url)["decided_at"] > LONG_AGO
+    assert str(posting_id) in output
+    assert "no change" not in output
+    assert refinement_lines(output) == []
+
+
+def test_a_no_excludes_an_included_row_and_refreshes_decided_at(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    posting_id = seed_decided(conn, url, "Apply", feedback="great fit")
+    before = posting(conn, url)
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="n\n")
+    assert code == 0, output
+    after = posting(conn, url)
+    assert in_refinement(conn, url) == 0
+    assert after["decided_at"] > LONG_AGO
+    for field in ("id", "company", "title", "decision", "fit_feedback", "search_agent"):
+        assert after[field] == before[field]
+    assert str(posting_id) in output
+    assert "no change" not in output
+    assert refinement_lines(output)
+
+
+def test_the_exclude_flag_changes_an_existing_row_without_asking(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply")
+    code, output = jsa_add(monkeypatch, capsys, url, "--exclude-from-refine", stdin="")
+    assert code == 0, output
+    assert in_refinement(conn, url) == 0
+    assert posting(conn, url)["decided_at"] > LONG_AGO
+    assert QUESTION not in output
+    assert "no change" not in output
+
+
+def test_the_exclude_flag_on_an_already_excluded_row_is_no_change(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply")
+    exclude(conn, url)
+    code, output = jsa_add(monkeypatch, capsys, url, "--exclude-from-refine")
+    assert code == 0, output
+    assert in_refinement(conn, url) == 0
+    assert posting(conn, url)["decided_at"] == LONG_AGO
+    assert "already Apply; no change." in output
+
+
+@pytest.mark.parametrize("excluded", [False, True], ids=["included", "excluded"])
+def test_no_input_without_the_flag_leaves_an_existing_rows_setting_as_it_is(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+    excluded,
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply")
+    if excluded:
+        exclude(conn, url)
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert in_refinement(conn, url) == (0 if excluded else 1)
+    assert posting(conn, url)["decided_at"] == LONG_AGO
+    assert "already Apply; no change." in output
+
+
+def test_re_adding_a_skipped_row_with_the_flag_promotes_and_excludes_it(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    seed_decided(conn, url, "Skip", feedback="too junior", agent="gemini")
+    code, output = jsa_add(monkeypatch, capsys, url, "--exclude-from-refine")
+    assert code == 0, output
+    row = posting(conn, url)
+    assert row["decision"] == "Apply"
+    assert row["fit_feedback"] == "too junior"
+    assert row["search_agent"] == "gemini"
+    assert in_refinement(conn, url) == 0
+    assert "Skip → Apply" in output
+    assert refinement_lines(output)
+
+
+def test_re_adding_a_searched_row_never_changes_a_setting_it_keeps(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    seed_decided(conn, url, "Skip")
+    exclude(conn, url)
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert posting(conn, url)["decision"] == "Apply"
+    assert in_refinement(conn, url) == 0
+
+
+# --- quitting writes nothing (criterion 6) ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "stdin", ["\n\n", "Globex Corporation\nMy Title\n"], ids=["empty-answers", "typed"]
+)
+def test_end_of_input_at_the_refinement_prompt_writes_nothing_for_a_new_row(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+    stdin,
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    before = count(conn, "postings")
+    code, _ = jsa_add(monkeypatch, capsys, url, stdin=stdin)
+    assert code != 0
+    assert posting(conn, url) is None
+    assert count(conn, "postings") == before
+    assert count(conn, "search_findings", url) == 0
+
+
+def test_ctrl_c_at_the_refinement_prompt_writes_nothing_for_a_new_row(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    answers = iter(["", ""])
+
+    def input_then_interrupt(*_args, **_kwargs):
+        try:
+            return next(answers)
+        except StopIteration:
+            raise KeyboardInterrupt from None
+
+    monkeypatch.setattr(builtins, "input", input_then_interrupt)
+    code, _ = jsa_add(monkeypatch, capsys, url, stdin="")
+    assert code != 0
+    assert posting(conn, url) is None
+
+
+@pytest.mark.parametrize("decision", ["Apply", "Skip"])
+def test_end_of_input_at_the_refinement_prompt_writes_nothing_for_an_existing_row(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+    decision,
+):
+    url = gh_url()
+    seed_decided(conn, url, decision, feedback="note")
+    before = posting(conn, url)
+    code, _ = jsa_add(monkeypatch, capsys, url, stdin="")
+    assert code != 0
+    assert posting(conn, url) == before
+    assert in_refinement(conn, url) == 1
+
+
+def test_ctrl_c_at_the_refinement_prompt_writes_nothing_for_an_existing_row(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+):
+    url = gh_url()
+    seed_decided(conn, url, "Skip")
+    before = posting(conn, url)
+
+    def interrupt(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(builtins, "input", interrupt)
+    code, _ = jsa_add(monkeypatch, capsys, url, stdin="")
+    assert code != 0
+    assert posting(conn, url) == before
+    assert in_refinement(conn, url) == 1

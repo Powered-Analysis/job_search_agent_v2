@@ -675,3 +675,20 @@ def test_env_example_documents_jsa_gws_bin():
     from conftest import REPO_ROOT
 
     assert "JSA_GWS_BIN" in (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+
+
+def test_a_posting_kept_out_of_refinement_is_tracked_like_any_other(
+    tdb, gws, monkeypatch, capsys
+):
+    _, log = gws
+    ordinary = seed(tdb, company="Beta Labs", url="https://x.example/beta/1")
+    excluded = seed(tdb, company="Beta Labs", url="https://x.example/beta/2")
+    tdb.execute("UPDATE postings SET in_refinement = 0 WHERE id = ?", (excluded,))
+    code, _ = jsa_track(monkeypatch, capsys)
+    assert code == 0
+    ordinary_row, excluded_row = sorted(appended_rows(log), key=lambda row: row[0])
+    assert (ordinary_row[0], excluded_row[0]) == (ordinary, excluded)
+    assert len(excluded_row) == len(ordinary_row) == 8
+    assert excluded_row[1:3] == ordinary_row[1:3]
+    assert excluded_row[4:] == ordinary_row[4:]
+    assert tracked_flag(tdb, excluded) == tracked_flag(tdb, ordinary) == 1
