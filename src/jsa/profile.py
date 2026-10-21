@@ -172,6 +172,7 @@ class Config(BaseModel):
         return path.expanduser()
 
 
+CONFIG_TOML = "config.toml"
 SEARCH_TOML = "search/search.toml"
 
 
@@ -200,7 +201,7 @@ def _load[Model: BaseModel](relative_path: str, model: type[Model]) -> Model:
 
 
 def load_config() -> Config:
-    return _load("config.toml", Config)
+    return _load(CONFIG_TOML, Config)
 
 
 def load_search_config() -> SearchConfig:
@@ -225,8 +226,8 @@ def tracker_spreadsheet_id() -> str:
     spreadsheet_id = load_config().tracker_spreadsheet_id
     if not spreadsheet_id:
         raise JsaError(
-            f"tracker_spreadsheet_id is missing or empty in {profile_dir() / 'config.toml'}. "
-            f"{_pointer('config.toml')}"
+            f"tracker_spreadsheet_id is missing or empty in {profile_dir() / CONFIG_TOML}. "
+            f"{_pointer(CONFIG_TOML)}"
         )
     return spreadsheet_id
 
@@ -277,17 +278,17 @@ def packet_sources() -> PacketSources:
 
 def _agent_settings[T: ModelSettings](settings: T | None, name: str) -> T:
     """An agent's model and effort (XC-14); a missing table raises before any model call."""
-    return _require_table(settings, "config.toml", f"agents.{name}")
+    return _require_table(settings, CONFIG_TOML, f"agents.{name}")
 
 
 def fly_settings(config: Config) -> FlyConfig:
     """The Fly app and region `jsa deploy` passes to `fly`; a missing table raises before any build."""
-    return _require_table(config.fly, "config.toml", "fly")
+    return _require_table(config.fly, CONFIG_TOML, "fly")
 
 
 def inbox_settings(config: Config) -> InboxConfig:
     """The `[inbox]` table `jsa inbox` reads; a missing table raises before any mail is read."""
-    return _require_table(config.inbox, "config.toml", "inbox")
+    return _require_table(config.inbox, CONFIG_TOML, "inbox")
 
 
 def _inbox_key(config: Config, key: str) -> str:
@@ -295,8 +296,8 @@ def _inbox_key(config: Config, key: str) -> str:
     value = getattr(inbox_settings(config), key)
     if not value:
         raise JsaError(
-            f"[inbox] {key} is missing in {profile_dir() / 'config.toml'}. "
-            f"{_pointer('config.toml')}"
+            f"[inbox] {key} is missing in {profile_dir() / CONFIG_TOML}. "
+            f"{_pointer(CONFIG_TOML)}"
         )
     return value
 
