@@ -12,6 +12,7 @@ from time import sleep
 from jsa.config import SEARCH_AGENT_KEYS, fly_bin
 from jsa.errors import JsaError
 from jsa.profile import (
+    CONFIG_TOML,
     Config,
     FlyConfig,
     Schedule,
@@ -51,7 +52,7 @@ BUILD_INPUTS = (
 # The inbox machine's profile files, set as machine files so they never enter the image (XC-11).
 # The image's working directory is /app, where the app looks for `profile/`.
 MACHINE_PROFILE_DIR = "/app/profile"
-INBOX_FILES = ("config.toml", "resume.docx")
+INBOX_FILES = (CONFIG_TOML, "resume.docx")
 INBOX_ENTRYPOINT = "jsa inbox"
 DATABASE_SECRETS = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
 INBOX_SECRETS = (
