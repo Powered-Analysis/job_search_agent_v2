@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Job Search Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* Static weights, not Google's variable font: Chrome prints a variable font as Type 3, which breaks copying text out of the PDF. */
+  @font-face { font-family: "Plex Sans Static"; font-weight: 300; src: url("https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/files/ibm-plex-sans-latin-300-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Plex Sans Static"; font-weight: 400; src: url("https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/files/ibm-plex-sans-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Plex Sans Static"; font-weight: 500; src: url("https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/files/ibm-plex-sans-latin-500-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Plex Sans Static"; font-weight: 400; font-style: italic; src: url("https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/files/ibm-plex-sans-latin-400-italic.woff2") format("woff2"); }
+</style>
+<script src="https://cdn.tailwindcss.com/3.4.16"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['"Plex Sans Static"', '"IBM Plex Sans"', '"Hanken Grotesk"', 'Barlow', '"DM Sans"', 'system-ui', 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'Menlo', 'monospace'],
+      },
+      colors: { accent: '#C8102E' },
+    },
+  },
+}
+</script>
+<style type="text/tailwindcss">
+  @page { size: letter; margin: 0; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { @apply bg-stone-50 text-stone-900 font-sans antialiased; font-size: 9pt; line-height: 1.45; }
+  .page { width: 8.5in; height: 11in; padding: 0.6in 0.65in 0.5in; position: relative; overflow: hidden; break-after: page; }
+  .row { @apply grid grid-cols-12 gap-x-6 border-t border-stone-900 pt-4; }
+  .cap { @apply uppercase tracking-[0.12em] text-stone-900/50; font-size: 7pt; line-height: 1.3; }
+  .num { @apply text-accent font-medium tabular-nums; }
+  .secnum { @apply text-accent font-light tabular-nums leading-none; font-size: 22pt; }
+  .secname { @apply font-light tracking-tight leading-none; font-size: 17pt; }
+  .cmd { @apply font-mono bg-stone-900 text-stone-50 px-3 py-2 mt-3.5 block w-fit whitespace-nowrap; font-size: 10.5pt; }
+  .cmdsm { @apply font-mono bg-stone-900 text-stone-50 px-1.5 py-0.5 inline-block whitespace-nowrap; font-size: 8.5pt; }
+  code { @apply font-mono; font-size: 8.3pt; }
+  .muted { @apply text-stone-900/70; }
+  .quiet { @apply text-stone-900/45; }
+  .term { @apply font-mono bg-stone-100 border-l-2 border-stone-900 px-3 py-2.5 text-stone-900/60 whitespace-pre; font-size: 7.6pt; line-height: 1.6; }
+  .term b { @apply font-medium text-stone-900; }
+  .key { @apply font-mono font-medium inline-flex items-center justify-center border-2 border-stone-900 w-[1.9em] h-[1.9em]; font-size: 12pt; }
+  .ins { @apply text-accent underline decoration-accent underline-offset-2; }
+  .del { @apply text-accent line-through decoration-accent; }
+  .pnum { @apply absolute right-[0.65in] bottom-[0.25in] cap; }
+</style>
+</head>
+<body>
+
+<!-- ================================================================ PAGE 1 -->
+<section class="page" style="padding-top:0.5in">
+
+  <!-- Rhythm -->
+  <h1 class="font-mono text-stone-900" style="font-size:20pt; letter-spacing:-0.01em">job_search_agent_v2</h1>
+  <p class="cap mt-5 mb-3">Workflow</p>
+  <ol class="grid grid-cols-6 gap-x-4">
+    <li class="border-t-[3px] border-accent pt-2"><span class="num" style="font-size:14pt">01</span><p class="font-medium mt-1" style="font-size:10pt">Search</p><p class="muted mt-0.5">The AI searches for you on a schedule.</p></li>
+    <li class="border-t-[3px] border-stone-900 pt-2"><span class="num" style="font-size:14pt">02</span><p class="font-medium mt-1" style="font-size:10pt">Review</p><p class="muted mt-0.5">Apply or Skip each job.</p></li>
+    <li class="border-t-[3px] border-stone-900 pt-2"><span class="num" style="font-size:14pt">03</span><p class="font-medium mt-1" style="font-size:10pt">Generate</p><p class="muted mt-0.5">Get a folder for each Apply.</p></li>
+    <li class="border-t-[3px] border-stone-900 pt-2"><span class="num" style="font-size:14pt">04</span><p class="font-medium mt-1" style="font-size:10pt">Edit</p><p class="muted mt-0.5">Check resume changes in Word.</p></li>
+    <li class="border-t-[3px] border-stone-900 pt-2"><span class="num" style="font-size:14pt">05</span><p class="font-medium mt-1" style="font-size:10pt">Apply</p><p class="muted mt-0.5">Submit, then update the Tracking Sheet.</p></li>
+    <li class="border-t-[3px] border-stone-900 pt-2"><span class="num" style="font-size:14pt">06</span><p class="font-medium mt-1" style="font-size:10pt">Refine</p><p class="muted mt-0.5">Teach the AI. Every week or two.</p></li>
+  </ol>
+
+  <!-- Start -->
+  <section class="row mt-6">
+    <div class="col-span-4">
+      <p class="secname !mt-0">Start here</p>
+    </div>
+    <div class="col-span-8">
+      <div class="flex items-center gap-3" style="font-size:11pt">
+        <span>Open <span class="font-medium">Terminal</span></span>
+        <span class="text-accent">&rarr;</span>
+        <span class="font-mono bg-stone-900 text-stone-50 px-3 py-1.5" style="font-size:11.5pt">go-jsa</span>
+        <span class="text-accent">&rarr;</span>
+        <span>press <span class="font-medium">Return</span></span>
+      </div>
+      <p class="muted mt-3">Then type the commands below. <span class="font-medium text-stone-900">Ctrl-C</span> stops anything, and your work so far stays saved.</p>
+    </div>
+  </section>
+
+  <!-- Files -->
+  <section class="row mt-6">
+    <div class="col-span-4">
+      <p class="secname !mt-0">Your files</p>
+      <p class="muted mt-2">In the <code>profile</code> folder.</p>
+    </div>
+    <div class="col-span-8 grid grid-cols-2 gap-x-6 gap-y-4">
+      <div>
+        <p class="font-medium">The search</p>
+        <p class="quiet"><code>search/</code></p>
+        <p class="muted mt-1.5">What the AI search looks for, in plain sentences. After editing, run:</p>
+        <span class="cmdsm mt-2">uv run jsa deploy</span>
+      </div>
+      <div>
+        <p class="font-medium">Your resume</p>
+        <p class="quiet"><code>resume.docx</code></p>
+        <p class="muted mt-1.5">The starting point for every job. Type <code>[COMPANY]</code>, <code>[TITLE]</code> or <code>[DATE]</code> to have them filled in.</p>
+      </div>
+      <div>
+        <p class="font-medium">Your cover letter <span class="font-normal quiet">(optional)</span></p>
+        <p class="quiet"><code>cover_letter.docx</code></p>
+        <p class="muted mt-1.5">Copied into every job&rsquo;s folder, with a PDF. The same placeholders work here. The AI never rewrites it.</p>
+      </div>
+      <div>
+        <p class="font-medium">Your skills</p>
+        <p class="quiet"><code>resume_skills.md</code></p>
+        <p class="muted mt-1.5">Skills you really have, one per line or separated by commas. The AI may add these to a resume.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 Review -->
+  <section class="row mt-6">
+    <div class="col-span-4">
+      <div class="flex items-baseline gap-3"><span class="secnum">02</span><span class="secname">Review</span></div>
+      <span class="cmd">uv run jsa review</span>
+      <p class="muted mt-3">Each new job opens in Chrome. Read it, then answer in Terminal.</p>
+    </div>
+    <div class="col-span-8">
+      <div class="flex gap-6">
+        <div class="flex items-center gap-2"><span class="key">a</span> Apply</div>
+        <div class="flex items-center gap-2"><span class="key">s</span> Skip</div>
+        <div class="flex items-center gap-2"><span class="key">b</span> Back</div>
+        <div class="flex items-center gap-2"><span class="key">q</span> Quit</div>
+      </div>
+      <p class="mt-4"><span class="font-medium">Then type one sentence on why.</span> <span class="muted">The search learns from it.</span></p>
+      <div class="term mt-2.5"><b>Acme — Communications Manager</b>
+Location: Remote (US)
+Decision [a/s/b/q]: <b>s</b>
+Feedback (…): <b>Great mission, but the salary is too low</b></div>
+      <p class="muted mt-3">Changed your mind later? <span class="cmdsm">uv run jsa revise --last</span></p>
+    </div>
+  </section>
+
+  <!-- Add -->
+  <section class="row mt-6">
+    <div class="col-span-4">
+      <div class="flex items-baseline gap-3"><span class="secnum">+</span><span class="secname">Add a job</span></div>
+      <span class="cmd">uv run jsa add &lt;link&gt;</span>
+    </div>
+    <div class="col-span-8 space-y-2 pt-1">
+      <p><span class="font-medium">Use the employer&rsquo;s own link,</span> <span class="muted">not LinkedIn or Indeed.</span></p>
+      <p><span class="font-medium">Check the company and title,</span> <span class="muted">then press Return.</span></p>
+      <p><span class="font-medium">&ldquo;Use this posting to refine the search?&rdquo;</span> <span class="muted">Press Return if you want more jobs like it. Type</span> <code>n</code> <span class="muted">for a one-off.</span></p>
+      <p class="muted">It&rsquo;s marked Apply, so it skips review. Run Generate to make its folder.</p>
+    </div>
+  </section>
+
+  <p class="pnum">1 / 2</p>
+</section>
+
+<!-- ================================================================ PAGE 2 -->
+<section class="page">
+
+  <!-- 03 Generate -->
+  <section class="row">
+    <div class="col-span-4">
+      <div class="flex items-baseline gap-3"><span class="secnum">03</span><span class="secname">Generate</span></div>
+      <span class="cmd">uv run jsa generate</span>
+      <p class="muted mt-3">Makes a folder for each Apply in <span class="font-medium text-stone-900">Documents&nbsp;&rsaquo; Job&nbsp;Applications</span> and adds it to your Tracking Sheet.</p>
+    </div>
+    <div class="col-span-8">
+      <p class="cap mb-2">Look at the resume files in the folder</p>
+      <div class="grid grid-cols-2 gap-x-4">
+        <div class="bg-stone-100 px-4 py-3.5">
+          <p class="font-mono" style="font-size:10pt">.docx&ensp;+&ensp;.pdf</p>
+          <p class="mt-2" style="font-size:10pt"><span class="font-medium">Ready.</span> Send the PDF.</p>
+        </div>
+        <div class="bg-accent/10 border-l-[3px] border-accent px-4 py-3.5">
+          <p class="font-mono" style="font-size:10pt">.docx&ensp;only</p>
+          <p class="mt-2" style="font-size:10pt"><span class="font-medium">Changes to check.</span> See 04.</p>
+        </div>
+      </div>
+      <p class="muted mt-3">If it says <code>no job description</code>, the AI couldn&rsquo;t read that posting. Paste the posting into a plain-text file named <code>job_posting.md</code> in its folder, then run the command it shows, starting with <code>uv&nbsp;run</code>.</p>
+    </div>
+  </section>
+
+  <!-- 04 Edit -->
+  <section class="row mt-10">
+    <div class="col-span-4">
+      <div class="flex items-baseline gap-3"><span class="secnum">04</span><span class="secname">Edit in Word</span></div>
+      <ol class="mt-4 space-y-2.5">
+        <li class="flex gap-2.5"><span class="num">1</span><span>Open the <code>.docx</code>. <span class="font-medium">Review</span> tab.</span></li>
+        <li class="flex gap-2.5"><span class="num">2</span><span><span class="font-medium">Accept</span> or <span class="font-medium">Reject</span> each change. Its comment says why.</span></li>
+        <li class="flex gap-2.5"><span class="num">3</span><span>Delete the comments.</span></li>
+        <li class="flex gap-2.5"><span class="num">4</span><span><span class="font-medium">File&nbsp;&rsaquo; Save&nbsp;As&nbsp;&rsaquo; PDF,</span> choosing <span class="font-medium">Best for electronic distribution</span> so links keep working. Send that.</span></li>
+      </ol>
+    </div>
+    <div class="col-span-8">
+      <div class="bg-stone-100 p-3 grid grid-cols-12 gap-x-3">
+        <div class="col-span-7 bg-stone-50 border border-stone-200 px-3.5 py-3" style="font-size:8.4pt; line-height:1.55">
+          <p class="font-medium mb-1.5">Communications Manager, Northwind Foundation</p>
+          <p class="pl-3 -indent-3 mb-1.5">&bull;&nbsp;Wrote <span class="del">newsletters</span> <span class="ins">donor newsletters</span> for 40,000&nbsp;readers <sup class="num">1</sup></p>
+          <p class="pl-3 -indent-3 mb-1.5">&bull;&nbsp;Ran the organization&rsquo;s social media <sup class="num">2</sup></p>
+          <p class="pl-3 -indent-3"><span class="del">&bull;&nbsp;Planned weekly staff meetings</span> <sup class="num">3</sup></p>
+        </div>
+        <div class="col-span-5 space-y-1.5" style="font-size:7.3pt; line-height:1.4">
+          <div class="border-l-2 border-accent bg-stone-50 px-2 py-1.5"><span class="num">1</span> Posting: &ldquo;donor newsletters&rdquo;<br><span class="muted">Uses the job&rsquo;s own words.</span></div>
+          <div class="border-l-2 border-stone-900 bg-stone-50 px-2 py-1.5"><span class="num">2</span> <span class="font-medium">For you to decide; this is not a change.</span><br><span class="muted">Name Instagram here, if true.</span></div>
+          <div class="border-l-2 border-accent bg-stone-50 px-2 py-1.5"><span class="num">3</span> Posting: &ldquo;external communications&rdquo;<br><span class="muted">Internal work distracts here.</span></div>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-x-4 mt-3">
+        <p><span class="num">1</span> <span class="font-medium">A change.</span> <span class="muted">Accept or reject.</span></p>
+        <p><span class="num">2</span> <span class="font-medium">A question.</span> <span class="muted">Your call.</span></p>
+        <p><span class="num">3</span> <span class="font-medium">A removal.</span> <span class="muted">Reject to keep it.</span></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 Apply -->
+  <section class="row mt-10">
+    <div class="col-span-4">
+      <div class="flex items-baseline gap-3"><span class="secnum">05</span><span class="secname">Apply</span></div>
+      <p class="muted mt-3">Submit, then fill in your two columns in the Tracking Sheet.</p>
+    </div>
+    <div class="col-span-8 pt-1">
+      <table class="w-full border-collapse whitespace-nowrap tabular-nums" style="font-size:8pt">
+        <thead><tr class="border-b border-stone-900">
+          <th scope="col" class="cap text-left font-normal pb-1.5">Company</th><th scope="col" class="cap text-left font-normal pb-1.5">Title</th><th scope="col" class="cap text-left font-normal pb-1.5">Added</th>
+          <th scope="col" class="cap text-left font-normal pb-1.5 pl-2 !text-accent">Date Applied</th><th scope="col" class="cap text-left font-normal pb-1.5 pl-2 !text-accent">Status</th>
+        </tr></thead>
+        <tbody><tr>
+          <td class="quiet py-2">Acme</td><td class="quiet py-2">Communications Manager</td><td class="quiet py-2">Oct 21</td>
+          <td class="bg-accent/10 font-medium py-2 pl-2">Oct 23</td><td class="bg-accent/10 font-medium py-2 pl-2">Applied&nbsp;&#9662;</td>
+        </tr></tbody>
+      </table>
+      <p class="cap mt-2">The AI fills the rest. <span class="!text-accent">You fill the red columns.</span></p>
+    </div>
+  </section>
+
+  <!-- 06 Refine -->
+  <section class="row mt-10">
+    <div class="col-span-4">
+      <div class="flex items-baseline gap-3"><span class="secnum">06</span><span class="secname">Refine</span></div>
+      <span class="cmd">uv run jsa refine</span>
+      <ol class="mt-4 space-y-2.5">
+        <li class="flex gap-2.5"><span class="num">1</span><span>Open the <code>profile/refine</code> folder. Each file is one of your search files, with the AI&rsquo;s suggestions marked.</span></li>
+        <li class="flex gap-2.5"><span class="num">2</span><span>Fix each marked block, and save.</span></li>
+        <li class="flex gap-2.5"><span class="num">3</span><span class="flex flex-col gap-1.5 items-start"><span>When every block is fixed:</span><span class="cmdsm">uv run jsa refine --accept</span><span class="cmdsm">uv run jsa deploy</span></span></li>
+      </ol>
+    </div>
+    <div class="col-span-8">
+      <p class="cap mb-2">A marked block</p>
+      <div class="font-mono bg-stone-100 border-l-2 border-stone-900 px-3 py-2.5 whitespace-pre" style="font-size:8pt; line-height:1.65"><span class="text-accent font-medium">&lt;&lt;&lt;&lt;&lt;&lt;&lt; current</span>     <span class="quiet">&larr; what the search uses now</span>
+- Communications Manager
+<span class="text-accent font-medium">=======</span>
+- Communications Manager, nonprofit or public sector
+<span class="text-accent font-medium">&gt;&gt;&gt;&gt;&gt;&gt;&gt; proposed</span>    <span class="quiet">&larr; the AI&rsquo;s suggestion</span></div>
+      <p class="mt-3"><span class="font-medium">Keep one side, or write your own.</span> <span class="muted">Then delete the three marker lines:</span></p>
+      <div class="font-mono bg-stone-100 border-l-2 border-accent px-3 py-2.5 mt-2" style="font-size:8pt">- Communications Manager, nonprofit or public sector</div>
+      <p class="muted mt-3">To throw out the whole suggestion instead: <span class="cmdsm">uv run jsa refine --reject</span></p>
+    </div>
+  </section>
+
+  <p class="pnum">2 / 2</p>
+</section>
+
+</body>
+</html>
