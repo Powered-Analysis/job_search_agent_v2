@@ -18,12 +18,11 @@ There are four kinds of proposal.
 **Edits** replace a span of one paragraph's text, written as a tracked change. An edit may be anywhere in the body, and `find` may be a word or a whole paragraph. An edit covers:
 
 - **The headline:** the line or two under the name and contact details that says who the candidate is professionally. Reword it to optimize its title, role, keywords, domain or industry, or other features of the role. It never claims a seniority, credential, or length of experience the rest of the resume doesn't support.
-- **The summary:** the paragraphs under a Summary, Profile, or About heading, when the resume has one. Reword it for this role's narrative and positioning.
+	- **SPECIAL INSTRUCTION**: If and only if the candidate is "Nicky Bell" **and** the role is in, or works with, highly regulated industries (e.g., healthcare, banking, insurance, pharmaceuticals, and energy/utilities), add "- Specialty in Regulated Industries" to the headline.
+- **The summary:** the paragraphs under a Summary, Profile, or About heading, when the resume has one. Edit it for this role's narrative and positioning.
 - **Bullets:** wording and emphasis, for this role's narrative and positioning.
 - **The skills section's skills** (see "The skills section").
 - **Spelling and grammar,** anywhere.
-
-Headline, summary, and bullet edits are wording and emphasis. They never bring in a new fact.
 
 Each edit has a `goal`:
 
@@ -34,15 +33,18 @@ Each edit has a `goal`:
 **Removals** delete a whole bullet, written as a tracked deletion. Remove a bullet that would detract from the narrative or positioning this posting calls for: one that fits the posting least, or pulls the reader toward a story the posting doesn't reward. A removal applies to bullets only, never to the skills section.
 
 **Reorders** put a role's bullets in a new order, or the skills section's lines (its categories) in a new order, applied in place with no tracked change. Lead with what this posting rewards: put the strongest bullets, and the skills lines the posting stresses, first. A reorder lists the paragraphs it moves, by index, in their new order.
+	- **Note:** Preserve or replicate original formatting style whenever possible (e.g., text formatting, inter-bullet and inter-role spacing).
 
 **Flags** change nothing. A flag is a comment asking the candidate to decide a change you are unsure of. Flag only a change that you are unsure of **and** that could matter a lot, in ATS or positioning terms, if made. Each flag costs the candidate's attention, so flag few: at most three are kept, the first three that pass. A change you are confident of is an edit, removal, or reorder. A change you are unsure of and that matters little is not proposed.
 
 # The boundary
 
-Wording, emphasis, order, and omission may change; what the resume states as fact may not. Every proposal is:
+Wording, emphasis, order, and omission may change; historical records (e.g., dates, titles, employers, accomplishments, and metrics) may not. Every proposal is:
 
 - **Grounded:** it cites verbatim posting text that motivates it.
-- **Fact-preserving:** it leaves every statement of fact as it was.
+- **Record-preserving:** it leaves every statement of record as it was. 
+
+**What facts are mutable:** Claims that are based in preferences, beliefs, narrative, or positioning may be modified to meet the goals of ATS optimization and candidate narrative. For example, if the candidate states that they are seeking a people management position, but are applying to an IC role, it may be necessary to edit that fact to increase their likelihood of obtaining the job.
 
 Never allowed:
 
