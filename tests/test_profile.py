@@ -684,3 +684,44 @@ def test_the_readme_describes_the_skills_file_and_its_two_formats():
     assert "resume_skills.md" in text
     near = text[text.index("resume_skills.md") :].lower()
     assert "comma" in near and ("line" in near or "newline" in near)
+
+
+# --- one shared positive-integer type ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        pytest.param("0", id="zero"),
+        pytest.param("-1", id="negative"),
+        pytest.param('"72"', id="string"),
+        pytest.param("72.5", id="float"),
+        pytest.param("72.0", id="whole-float"),
+        pytest.param("true", id="boolean"),
+    ],
+)
+def test_an_invalid_window_hours_raises_at_load_naming_the_key(profile, replacement):
+    search_with(profile, {"window_hours = 72": f"window_hours = {replacement}"})
+    with pytest.raises(JsaError, match="window_hours"):
+        load_search_config()
+
+
+def test_window_hours_and_results_per_run_enforce_the_same_rule(profile):
+    from jsa.profile import ScheduledSearch, SearchConfig
+
+    window = ScheduledSearch.model_fields["window_hours"]
+    results = SearchConfig.model_fields["results_per_run"]
+    assert window.annotation is results.annotation
+    assert window.metadata == results.metadata
+
+
+def test_the_positive_integer_rule_is_spelled_once_in_the_source():
+    spellings = [
+        path.relative_to(REPO_ROOT)
+        for path in (REPO_ROOT / "src").rglob("*.py")
+        if "StrictInt" in path.read_text(encoding="utf-8")
+    ]
+    assert spellings == [(REPO_ROOT / "src/jsa/profile.py").relative_to(REPO_ROOT)]
+    text = (REPO_ROOT / "src/jsa/profile.py").read_text(encoding="utf-8")
+    assert len(re.findall(r"StrictInt, Field\(gt=0\)", text)) == 1
+    assert len(re.findall(r"\bStrictInt\b", text)) == 2  # import and alias definition
