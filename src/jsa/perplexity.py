@@ -13,8 +13,9 @@ from jsa.config import SEARCH_AGENT_KEYS, api_key
 from jsa.http import SseEvents
 from jsa.runners import (
     CANCEL_TIMEOUT_SECONDS,
-    POLL_SECONDS,
+    BackgroundRunner,
     Deadline,
+    ReconnectWindowClosed,
     RunnerError,
     RunnerResult,
     within,
@@ -53,6 +54,14 @@ class StreamState:
     def text(self) -> str:
         # The done event is the complete answer; deltas are only the fallback.
         return self.final_text if self.final_text is not None else "".join(self.deltas)
+
+    @property
+    def run_id(self) -> str | None:
+        return self.response_id
+
+    @property
+    def cursor(self) -> int | None:
+        return self.sequence_number
 
     @property
     def ended(self) -> bool:
@@ -138,61 +147,41 @@ def fold_events(events: Iterable[tuple[str, dict]]) -> StreamState:
     return state
 
 
-class PerplexityRunner:
+class PerplexityRunner(BackgroundRunner):
+    provider = "Perplexity"
+    unit = "response"
+
     def __init__(
         self, client: httpx.Client, sleep: Callable[[float], None] = time.sleep
     ) -> None:
+        super().__init__(sleep)
         # Validated here, so a missing key raises before any request is made.
         self._key = api_key(SEARCH_AGENT_KEYS["perplexity"])
         self._client = client
-        self._sleep = sleep
         self._headers = {"Authorization": f"Bearer {self._key}"}
-        # The latest stream state, kept here so a run that raises still knows which response to cancel.
-        self._latest = StreamState()
-        self._reconnects = 0
-
-    def run(self, prompt: str) -> RunnerResult:
-        self._latest = StreamState()
-        self._reconnects = 0
-        try:
-            return self._research(prompt)
-        except BaseException:
-            # A background run outlives the connection: left alone it keeps working and billing (PRD 01).
-            self._cancel_unfinished()
-            raise
 
     def _research(self, prompt: str) -> RunnerResult:
         deadline = Deadline()
-        state = self._consume(
+        return self._outcome(self._drive(prompt, deadline), deadline)
+
+    def _open(self, prompt: str, deadline: Deadline) -> StreamState:
+        return self._consume(
             StreamState(), partial(self._create, prompt, deadline), deadline
         )
-        # Once the reconnect window has passed (HTTP 400) the run is polled instead.
-        window_open = True
-        while not state.ended:
-            deadline.check()
-            if state.response_id is None:
-                raise RunnerError("the Perplexity stream dropped before the run began")
-            before = state.sequence_number
-            if window_open and before is not None:
-                log.info("stream dropped; reconnecting after event %s", before)
-                self._reconnects += 1
-                try:
-                    state = self._consume(
-                        state,
-                        partial(self._reconnect, state.response_id, before, deadline),
-                        deadline,
-                    )
-                except httpx.HTTPStatusError as error:
-                    if error.response.status_code != 400:
-                        raise
-                    log.info("reconnect window has passed; polling the run")
-                    window_open = False
-            if not state.ended and (not window_open or state.sequence_number == before):
-                # A reconnect that gains nothing, or none left: ask the status instead of spinning on it.
-                state = self._poll(state, deadline)
-                if not state.ended:
-                    self._sleep(POLL_SECONDS)
-        return self._outcome(state, deadline)
+
+    def _reconnect(self, state: StreamState, deadline: Deadline) -> StreamState:
+        try:
+            return self._consume(
+                state,
+                partial(
+                    self._resume, state.response_id, state.sequence_number, deadline
+                ),
+                deadline,
+            )
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code != 400:
+                raise
+            raise ReconnectWindowClosed from error
 
     def _create(self, prompt: str, deadline: Deadline) -> SseEvents:
         return SseEvents(
@@ -203,7 +192,7 @@ class PerplexityRunner:
             read_timeout=deadline.request_timeout(),
         )
 
-    def _reconnect(
+    def _resume(
         self, response_id: str, sequence_number: int, deadline: Deadline
     ) -> SseEvents:
         return SseEvents(
@@ -296,29 +285,9 @@ class PerplexityRunner:
             raise self._failure(state)
         return state
 
-    def _track(self, state: StreamState) -> StreamState:
-        if state.response_id and not self._latest.response_id:
-            # Logged at once, so a run that dies uncancelled can still be found and cancelled by hand.
-            log.info("perplexity response %s", state.response_id)
-        self._latest = state
-        return state
-
-    def _cancel_unfinished(self) -> None:
-        response_id = self._latest.response_id
-        if response_id is None or self._latest.ended:
-            return
-        try:
-            response = self._client.post(
-                f"{URL}/{response_id}/cancel",
-                headers=self._headers,
-                timeout=CANCEL_TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
-        except Exception:
-            # Never let a failed cancel hide the error that ended the run.
-            log.exception(
-                "Could not cancel Perplexity response %s, so it may still be running",
-                response_id,
-            )
-        else:
-            log.info("cancelled Perplexity response %s", response_id)
+    def _cancel(self, run_id: str) -> None:
+        self._client.post(
+            f"{URL}/{run_id}/cancel",
+            headers=self._headers,
+            timeout=CANCEL_TIMEOUT_SECONDS,
+        ).raise_for_status()
