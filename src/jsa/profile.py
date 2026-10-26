@@ -25,6 +25,7 @@ from jsa.errors import JsaError
 _STRICT = ConfigDict(extra="forbid", frozen=True)
 # XC-14: model and agent are checked only for being non-empty, never against a list of allowed values.
 NonEmptyStr = Annotated[str, StringConstraints(strict=True, min_length=1)]
+PositiveInt = Annotated[StrictInt, Field(gt=0)]
 COVER_LETTER_PREFIX = "cover_letter"
 _COVER_LETTER = re.compile(rf"{COVER_LETTER_PREFIX}\..+")
 _RUN_AT = re.compile(r"([01]\d|2[0-3]):([0-5]\d)")
@@ -51,7 +52,7 @@ class AgentSettings(ModelSettings):
 class ScheduledSearch(BaseModel):
     model_config = _STRICT
     agent: Literal["perplexity", "claude", "gemini"]
-    window_hours: Annotated[StrictInt, Field(gt=0)]
+    window_hours: PositiveInt
 
 
 class Schedule(BaseModel):
@@ -95,7 +96,7 @@ class SearchConfig(BaseModel):
     model_config = _STRICT
     timezone: NonEmptyStr
     run_at: time
-    results_per_run: Annotated[StrictInt, Field(gt=0)]
+    results_per_run: PositiveInt
     schedule: Schedule = Schedule()
     runners: Runners = Runners()
     verification: Verification
