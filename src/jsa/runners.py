@@ -14,6 +14,10 @@ WALL_CLOCK_CEILING_SECONDS = 3600
 # surfaces as a transport error. Each request is also capped by the time left on the ceiling,
 # and `within` abandons a read still blocked when the ceiling passes, aborting its connection.
 READ_TIMEOUT_SECONDS = 1800
+# How long a runner waits between status checks once streaming has stopped helping.
+POLL_SECONDS = 10
+# The cancel is sent after the run's own deadline may have passed, so it has its own short one.
+CANCEL_TIMEOUT_SECONDS = 30
 # How often a streamed runner logs that it is still working.
 HEARTBEAT_SECONDS = 5
 

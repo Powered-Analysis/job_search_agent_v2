@@ -12,6 +12,8 @@ from google import genai
 
 from jsa.config import SEARCH_AGENT_KEYS, api_key
 from jsa.runners import (
+    CANCEL_TIMEOUT_SECONDS,
+    POLL_SECONDS,
     READ_TIMEOUT_SECONDS,
     Deadline,
     RunnerError,
@@ -24,9 +26,6 @@ log = logging.getLogger(__name__)
 
 # Pinned (PRD 01, XC-14): the only other Deep Research agent runs past the wall-clock ceiling on this search.
 AGENT = "deep-research-preview-04-2026"
-POLL_SECONDS = 10
-# The cancel is sent after the run's own deadline may have passed, so it has its own short one.
-CANCEL_TIMEOUT_SECONDS = 30
 AGENT_CONFIG = {
     "type": "deep-research",
     # Without summaries the stream carries no progress; headless, so no plan to approve (PRD 01).
