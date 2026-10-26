@@ -38,19 +38,26 @@ def get_lever_json(client: httpx.Client, path: str) -> object:
 
 
 class SseEvents:
-    """A POST's server-sent events as (event name, JSON data), readable now and abortable from another thread."""
+    """A request's server-sent events as (event name, JSON data), readable now and abortable from another thread.
+
+    The request is a POST with a JSON `body`, or a GET when `method` says so.
+    """
 
     def __init__(
         self,
         client: httpx.Client,
         url: str,
-        body: dict,
+        body: dict | None = None,
         *,
+        method: str = "POST",
+        params: dict | None = None,
         headers: dict[str, str],
         read_timeout: float,
     ) -> None:
         self._response: httpx.Response | None = None
-        self._events = self._read(client, url, body, headers, read_timeout)
+        self._events = self._read(
+            client, method, url, body, params, headers, read_timeout
+        )
 
     def __iter__(self) -> Self:
         return self
@@ -79,14 +86,16 @@ class SseEvents:
     def _read(
         self,
         client: httpx.Client,
+        method: str,
         url: str,
-        body: dict,
+        body: dict | None,
+        params: dict | None,
         headers: dict[str, str],
         read_timeout: float,
     ) -> Iterator[tuple[str, dict]]:
         timeout = httpx.Timeout(client.timeout.connect, read=read_timeout)
         with client.stream(
-            "POST", url, json=body, headers=headers, timeout=timeout
+            method, url, json=body, params=params, headers=headers, timeout=timeout
         ) as response:
             self._response = response
             if response.is_error:
