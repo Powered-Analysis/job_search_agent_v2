@@ -421,19 +421,21 @@ def test_an_unknown_agent_is_refused(world, monkeypatch, capsys):
 # --- the Perplexity request ------------------------------------------------------
 
 
-def test_request_body_pins_the_xhigh_preset_with_no_overrides():
+def test_request_body_pins_the_xhigh_effort_with_no_overrides():
     body = request_body("the assembled prompt")
-    assert body["preset"] == "xhigh"
+    assert body["effort"] == "xhigh"
     assert body["input"] == "the assembled prompt"
+    assert body["background"] is True
     assert body["stream"] is True
-    for forbidden in ("model", "max_steps", "tools", "service_tier"):
+    for forbidden in ("preset", "model", "max_steps", "tools", "service_tier"):
         assert forbidden not in body
 
 
-def test_request_body_carries_nothing_beyond_the_preset_and_io():
+def test_request_body_carries_nothing_beyond_the_effort_and_io():
     assert set(request_body("p")) == {
-        "preset",
+        "effort",
         "input",
+        "background",
         "stream",
         "response_format",
     }
@@ -468,11 +470,12 @@ def test_the_request_on_the_wire_is_an_authorised_streaming_post_to_the_agent_ap
     assert str(request.url) == "https://api.perplexity.ai/v1/agent"
     assert request.headers["authorization"] == "Bearer test-perplexity-key"
     body = json.loads(request.content)
-    assert body["preset"] == "xhigh"
+    assert body["effort"] == "xhigh"
+    assert body["background"] is True
     assert body["stream"] is True
     assert body["response_format"]["type"] == "json_schema"
     assert body["input"].strip()
-    for forbidden in ("model", "max_steps", "tools", "service_tier"):
+    for forbidden in ("preset", "model", "max_steps", "tools", "service_tier"):
         assert forbidden not in body
 
 
