@@ -30,7 +30,7 @@ friday    = [{ agent = "gemini", window_hours = 24 }]
 model  = "claude-opus-5-5"
 effort = "high"
 
-# Perplexity and Gemini have no settings: Perplexity always runs the "xhigh" preset, and
+# Perplexity and Gemini have no settings: Perplexity always runs the "xhigh" effort, and
 # Gemini the "deep-research-preview-04-2026" agent.
 
 [verification]

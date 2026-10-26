@@ -138,10 +138,6 @@ def fold_events(events: Iterable[tuple[str, dict]]) -> StreamState:
     return state
 
 
-def _dropped(error: Exception) -> bool:
-    return isinstance(error, httpx.TransportError)
-
-
 class PerplexityRunner:
     def __init__(
         self, client: httpx.Client, sleep: Callable[[float], None] = time.sleep
