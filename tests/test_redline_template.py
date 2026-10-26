@@ -46,12 +46,22 @@ def test_the_prompt_tells_the_agent_how_to_recognise_the_headline_and_the_summar
     assert "under the name and contact details" in prompt
 
 
-def test_the_prompt_says_headline_summary_and_bullet_edits_bring_in_no_new_facts(
+def test_the_prompt_says_edits_preserve_records_while_wording_and_emphasis_may_change(
     prompt,
 ):
     lowered = prompt.lower()
-    assert "wording and emphasis" in lowered
-    assert "new fact" in lowered
+    assert "wording" in lowered and "emphasis" in lowered
+    assert "record-preserving" in lowered
+    assert "historical records" in lowered
+
+
+def test_the_prompt_allows_preference_belief_narrative_and_positioning_claims_to_change(
+    prompt,
+):
+    lowered = prompt.lower()
+    for mutable in ("preferences", "beliefs", "narrative", "positioning"):
+        assert mutable in lowered, mutable
+    assert "mutable" in lowered
 
 
 def test_the_prompt_tells_the_agent_to_flag_only_when_unsure_and_high_in_value(prompt):
