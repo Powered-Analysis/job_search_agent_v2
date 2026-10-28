@@ -40,7 +40,7 @@ Who the candidate is, as context for judging fit. This states no rules.
 
 ## Skills
 
-The terms the candidate's resume can claim. This is a pool of vocabulary to match against a posting's requirements, not a ranking: a posting that names many of these terms is not for that reason a better fit, and the candidate's shape under Candidate decides what fits. Judge qualification against the posting's must-haves.
+A list of skills drawn from the candidate's experience. It is a guide to what he can do, not the whole of it and not a limit: a requirement missing from this list does not mean he lacks it, so never treat the list as a strict test of qualification. Use it as vocabulary to match against a posting's requirements, not as a ranking: a posting that names many of these terms is not for that reason a better fit, and the candidate's shape under Candidate decides what fits. Judge qualification against the posting's must-haves.
 
 {{RESUME_SKILLS}}
 
