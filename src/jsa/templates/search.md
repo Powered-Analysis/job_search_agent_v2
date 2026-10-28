@@ -15,7 +15,7 @@ Only postings published or updated within {{SEARCH_WINDOW}} are in scope. A post
 
 # The target
 
-Return the {{RESULTS_PER_RUN}} postings that best fit the candidate, out of every posting that passes the filters and the liveness gates. This number is the target.
+Return no more than {{RESULTS_PER_RUN}} postings that best fit the candidate, out of every posting that passes the filters and the liveness gates. You are not required to return {{RESULTS_PER_RUN}} postings, but you may not exceed that number. If you determine that the market is thin, you should aim to return half that number of postings.
 
 # Two standards, never mixed
 
