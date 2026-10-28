@@ -60,6 +60,7 @@ cp -r profile.example profile
 |---|---|
 | `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the resume redline and refine |
 | `profile/resume.docx` | your single base resume |
+| `profile/role_families/<name>/` | one folder per kind of role you apply to, named for it (`Data Analysis`). It holds that role family's base resume, `resume.docx`, and optionally a `cover_letter.*`. You need at least one; `jsa review`, `jsa revise`, and `jsa add` refuse to start when a `resume.docx` is missing or empty, a folder holds two cover letters, or two names give the same email tag (the name in lowercase, each run of other characters turned into one `-`) |
 | `profile/cover_letter.*` | optional; your cover letter, copied into each packet (a `.docx` also gets a PDF) |
 | `profile/resume_skills.md` | optional; the skills you have, one per line, comma-separated, or both in one file. The redline may add, remove, reword, or reorder skills in your resume's `Skills` section, using only words from this list or the posting |
 | `profile/search/search.toml` | timezone, `run_at`, `results_per_run`, the weekly schedule, the Claude runner settings, and the verification mode |
@@ -233,7 +234,7 @@ credentials leave it only as the inbox app's two exported ones, each scoped to i
 (while the OAuth consent screen is in testing status the token expires after 7 days; publish it, or
 sign in again when `jsa track` reports exit code 2); `flyctl` (`jsa deploy`); LibreOffice (`soffice`, override `JSA_SOFFICE_BIN`; renders the resume and cover letter PDFs); Google Drive for Desktop (with the inbox, `packets_dir` mirrors the Drive packets folder); Microsoft Word (reviewing the redline); the Claude Code CLI (the local Claude commands).
 
-**The profile:** `config.toml`, `resume.docx`, `search/search.toml`, and the six `search/*.md`
+**The profile:** `config.toml`, `resume.docx`, `role_families/`, `search/search.toml`, and the six `search/*.md`
 fragments, seeded from `profile.example/` (step 4).
 
 **Outside the profile:** the Google Sheet (step 2); with the inbox, the Drive packets folder and the
@@ -246,15 +247,24 @@ copying the tracker with `gws`; then `uv run jsa deploy`.
 
 | Command | What it does |
 |---|---|
-| `jsa review` | decide Apply or Skip on each undecided posting |
-| `jsa revise --id <id>` or `--last` | amend the decision and note of a decided posting; `--last` picks the one decided most recently |
-| `jsa add <URL>` | add a posting you already want, decided Apply; it asks whether `jsa refine` may learn from it, and `--exclude-from-refine` answers no (run it again on an added posting to change the answer) |
+| `jsa review` | decide Apply or Skip on each undecided posting; an Apply also asks its role family |
+| `jsa revise --id <id>` or `--last` | amend the decision, role family, and note of a decided posting; `--last` picks the one decided most recently |
+| `jsa add <URL>` | add a posting you already want, decided Apply; it asks its role family, then whether `jsa refine` may learn from it, and `--exclude-from-refine` answers no (run it again on an added posting to change the answer) |
 | `jsa inbox` | the inbox machine's entrypoint: add each posting emailed to the jobs mailbox, then build its packet, upload it to the Drive packets folder, and track it (needs `[inbox] senders` and `drive_folder_id`, `JSA_INBOX_GWS_CREDENTIALS`, and `JSA_GWS_CREDENTIALS`) |
 | `jsa generate` | build each Apply posting's packet with a resume redline, then track it |
 | `jsa packet`, `jsa track` | the two halves of `generate`, on their own |
 | `jsa refetch` | update stored postings, tracker titles, and packets from the employer's edits |
 | `jsa refine` | propose search-profile edits learned from your decisions; resolve the conflict-marked copies in `profile/refine/`, then `jsa refine --accept` or `--reject` |
 | `jsa search --agent <agent> --window-hours <n>` | run one search by hand |
+
+**Role families.** After you press `a` in `jsa review`, a list shows every role family in your
+profile, numbered from 1 in name order, plus `n` (none fits) and `b` (back to the decision). Press a
+number to choose, or `n` to store the Apply with no role family. Enter keeps the posting's current role
+family when it has one. With only one role family nobody is asked: it is chosen. Skip clears the role
+family, and `:a` at the note prompt asks the list before anything is saved. `jsa revise` and `jsa add`
+ask the same list; `jsa add --no-input` chooses the only role family, and with several leaves a new posting
+without one (an existing posting keeps its own) and prints the `jsa revise --id <id>` line that gives it one.
+Packets still start from `profile/resume.docx`.
 
 **The redline.** `jsa generate` has Claude tailor each packet's resume copy to its posting, for ATS
 matching first and then for narrative and positioning. It may reword the headline, the summary, the

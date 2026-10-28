@@ -55,6 +55,9 @@ class AddOutcome(NamedTuple):
     # Whether refine learns from the row, and whether this add changed that on an existing row.
     in_refinement: bool
     refinement_changed: bool
+    # The row's role family (None when it fits none), and whether this add changed it on an existing row.
+    role_family: str | None
+    role_family_changed: bool
 
 
 def require_fields(company: str | None, title: str | None) -> tuple[str, str]:
@@ -76,14 +79,20 @@ def keep_refinement(current: bool | None) -> bool:
     return True if current is None else current
 
 
+def keep_role_family(current: str | None) -> str | None:
+    """The role family a caller with no prompt leaves: an existing row's own, none for a new one."""
+    return current
+
+
 def _promote(
     conn: db.Connection,
     url: str,
-    existing: tuple[int, str | None, bool],
+    existing: tuple[int, str | None, bool, str | None],
     description: str | None,
     wanted: bool,
+    family: str | None,
 ) -> AddOutcome:
-    posting_id, decision, current = existing
+    posting_id, decision, current, current_family = existing
     if description:
         db.supply_jd(conn, posting_id, description)
     has_jd = db.has_jd(conn, posting_id)
@@ -95,7 +104,21 @@ def _promote(
     else:
         db.set_decision(conn, url, "Apply")
         kind, previous = "promoted", decision
-    return AddOutcome(posting_id, kind, previous, None, None, has_jd, wanted, changed)
+    family_changed = family != current_family
+    if family_changed:
+        db.set_role_family(conn, posting_id, family)
+    return AddOutcome(
+        posting_id,
+        kind,
+        previous,
+        None,
+        None,
+        has_jd,
+        wanted,
+        changed,
+        family,
+        family_changed,
+    )
 
 
 def add_posting(
@@ -106,10 +129,12 @@ def add_posting(
     description: str | None = None,
     fields: Callable[[Derived], tuple[str, str]] = accept_derived,
     refinement: Callable[[bool | None], bool] = keep_refinement,
+    role_family: Callable[[str | None], str | None] = keep_role_family,
 ) -> AddOutcome:
     """Manual add (PRD 03): `fields` turns the derived company and title into the stored pair.
 
-    `refinement` turns the row's current refine setting (None for a new row) into the stored one.
+    `refinement` turns the row's current refine setting (None for a new row) into the stored one;
+    `role_family` does the same for its role family (None for a new row or one with none), asked first.
     Every prompt runs before the first write, so quitting at one writes nothing.
 
     `description` is the job description the caller already holds; it fills in only
@@ -121,7 +146,10 @@ def add_posting(
         )
     conn = db.connect()
     if existing := db.find_posting(conn, url):
-        return _promote(conn, url, existing, description, refinement(existing[2]))
+        family = role_family(existing[3])
+        return _promote(
+            conn, url, existing, description, refinement(existing[2]), family
+        )
 
     ref = resolve_ats(url)
     # What the page published, even when it had no description to capture.
@@ -141,6 +169,7 @@ def add_posting(
         derived_company = published.company if published else None
     derived_title = published.title if published else None
     company, title = fields(Derived(derived_company, derived_title, capture_failure))
+    family = role_family(None)
     in_refinement = refinement(None)
 
     posting_id = db.insert_posting(
@@ -151,11 +180,12 @@ def add_posting(
         search_agent="manual",
         date_posted=date_posted,
         in_refinement=in_refinement,
+        role_family=family,
     )
     if posting_id is None:
         # Another writer stored it between the lookup and the insert.
         return _promote(
-            conn, url, db.find_posting(conn, url), description, in_refinement
+            conn, url, db.find_posting(conn, url), description, in_refinement, family
         )
     jd_markdown = (published.jd_markdown if published else None) or description
     if published or jd_markdown:
@@ -174,5 +204,7 @@ def add_posting(
         title,
         bool(jd_markdown),
         in_refinement,
+        False,
+        family,
         False,
     )

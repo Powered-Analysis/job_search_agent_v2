@@ -23,9 +23,10 @@ from jsa.generate import generate
 from jsa.http import make_client
 from jsa.inbox import inbox
 from jsa.packet import build_packets
+from jsa.profile import role_family_names
 from jsa.refetch import refetch
 from jsa.refine import accept, refine, reject
-from jsa.review import review, revise
+from jsa.review import ask_role_family, review, revise
 from jsa.search import RUNNERS, Summary, search
 from jsa.tracker import track
 
@@ -78,8 +79,22 @@ def _add_refinement(args: argparse.Namespace) -> Callable[[bool | None], bool]:
     return refinement
 
 
+def _add_role_family(
+    args: argparse.Namespace, names: list[str]
+) -> Callable[[str | None], str | None]:
+    """The posting's role family: the only one there is, else asked, or with --no-input the row's own."""
+
+    def role_family(current: str | None) -> str | None:
+        if args.no_input:
+            return names[0] if len(names) == 1 else current
+        return ask_role_family(names, current, allow_back=False).name
+
+    return role_family
+
+
 def _print_added(outcome: AddOutcome) -> None:
-    if outcome.kind == "already_apply" and not outcome.refinement_changed:
+    unchanged = not (outcome.refinement_changed or outcome.role_family_changed)
+    if outcome.kind == "already_apply" and unchanged:
         print(f"Posting {outcome.posting_id}: already Apply; no change.")
     elif outcome.kind == "already_apply":
         print(f"Posting {outcome.posting_id}: already Apply.")
@@ -93,9 +108,17 @@ def _print_added(outcome: AddOutcome) -> None:
         print("Excluded from search refinement: `jsa refine` will not learn from it.")
     elif outcome.refinement_changed:
         print("Now used to refine the search.")
+    if not outcome.role_family:
+        print(
+            "No role family: its packet waits until "
+            f"`jsa revise --id {outcome.posting_id}` gives it one."
+        )
+    elif outcome.kind != "already_apply" or outcome.role_family_changed:
+        print(f"Role family: {outcome.role_family}")
 
 
 def _add(args: argparse.Namespace) -> None:
+    names = role_family_names()
     with make_client() as client:
         _print_added(
             add_posting(
@@ -104,6 +127,7 @@ def _add(args: argparse.Namespace) -> None:
                 date_posted=args.date_posted,
                 fields=_add_fields(args),
                 refinement=_add_refinement(args),
+                role_family=_add_role_family(args, names),
             )
         )
 

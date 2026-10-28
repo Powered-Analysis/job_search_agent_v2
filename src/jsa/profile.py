@@ -26,6 +26,7 @@ _STRICT = ConfigDict(extra="forbid", frozen=True)
 # XC-14: model and agent are checked only for being non-empty, never against a list of allowed values.
 NonEmptyStr = Annotated[str, StringConstraints(strict=True, min_length=1)]
 PositiveInt = Annotated[StrictInt, Field(gt=0)]
+RESUME_DOCX = "resume.docx"
 COVER_LETTER_PREFIX = "cover_letter"
 _COVER_LETTER = re.compile(rf"{COVER_LETTER_PREFIX}\..+")
 _RUN_AT = re.compile(r"([01]\d|2[0-3]):([0-5]\d)")
@@ -233,27 +234,82 @@ def tracker_spreadsheet_id() -> str:
     return spreadsheet_id
 
 
-def base_resume() -> Path:
-    """The single base resume (XC-11); a missing or empty file raises before any row is processed."""
-    path = profile_dir() / "resume.docx"
+def _resume_in(folder: Path, relative_path: str) -> Path:
+    """`resume.docx` in a folder of the profile; a missing or empty file raises before any row is processed."""
+    path = folder / RESUME_DOCX
     if not path.is_file() or path.stat().st_size == 0:
-        raise JsaError(f"{path} is missing or empty. {_pointer('resume.docx')}")
+        raise JsaError(f"{path} is missing or empty. {_pointer(relative_path)}")
     return path
 
 
-def cover_letter() -> Path | None:
+def _cover_letter_in(folder: Path, relative_path: str) -> Path | None:
     """The optional cover letter (XC-11); more than one match raises, since the app won't guess which is meant."""
     matches = sorted(
         path
-        for path in profile_dir().glob(f"{COVER_LETTER_PREFIX}.*")
+        for path in folder.glob(f"{COVER_LETTER_PREFIX}.*")
         if path.is_file() and _COVER_LETTER.fullmatch(path.name)
     )
     if len(matches) > 1:
         raise JsaError(
-            f"{profile_dir()} holds more than one cover letter: "
-            f"{', '.join(path.name for path in matches)}. Keep one."
+            f"{folder} holds more than one cover letter: "
+            f"{', '.join(path.name for path in matches)}. Keep one. {_pointer(relative_path)}"
         )
     return matches[0] if matches else None
+
+
+def base_resume() -> Path:
+    """The single base resume (XC-11)."""
+    return _resume_in(profile_dir(), RESUME_DOCX)
+
+
+def cover_letter() -> Path | None:
+    return _cover_letter_in(profile_dir(), "cover_letter.docx")
+
+
+ROLE_FAMILIES_DIR = "role_families"
+_NOT_ALNUM = re.compile(r"[\W_]+")
+
+
+def role_family_tag(name: str) -> str:
+    """The email tag a role family answers to (PRD 03): lowercase, each run of other characters one `-`, none at either end."""
+    return _NOT_ALNUM.sub("-", name.lower()).strip("-")
+
+
+class RoleFamily(NamedTuple):
+    """A kind of role the user applies to: a folder under `role_families/` named for it (PRD 04)."""
+
+    name: str
+    resume: Path
+    cover_letter: Path | None
+
+
+def role_families() -> list[RoleFamily]:
+    """Every role family in name order (PRD 04); an unusable profile raises before any row is processed."""
+    root = profile_dir() / ROLE_FAMILIES_DIR
+    folders = sorted(root.iterdir()) if root.is_dir() else []
+    folders = [folder for folder in folders if folder.is_dir()]
+    if not folders:
+        raise JsaError(
+            f"{root} holds no role family. {_pointer(f'{ROLE_FAMILIES_DIR}/')}"
+        )
+    families = [
+        RoleFamily(
+            folder.name,
+            _resume_in(folder, f"{ROLE_FAMILIES_DIR}/<name>/{RESUME_DOCX}"),
+            _cover_letter_in(folder, f"{ROLE_FAMILIES_DIR}/<name>/"),
+        )
+        for folder in folders
+    ]
+    owners: dict[str, str] = {}
+    for family in families:
+        tag = role_family_tag(family.name)
+        if tag in owners:
+            raise JsaError(
+                f"{root / owners[tag]} and {root / family.name} share the email tag "
+                f"{tag!r}. Rename one. {_pointer(f'{ROLE_FAMILIES_DIR}/')}"
+            )
+        owners[tag] = family.name
+    return families
 
 
 RESUME_SKILLS = "resume_skills.md"
@@ -263,6 +319,11 @@ def resume_skills() -> Path | None:
     """The optional skills list (XC-11), or None when the profile has none."""
     path = profile_dir() / RESUME_SKILLS
     return path if path.is_file() else None
+
+
+def role_family_names() -> list[str]:
+    """The role families a prompt lists, validated before any prompt."""
+    return [family.name for family in role_families()]
 
 
 class PacketSources(NamedTuple):
