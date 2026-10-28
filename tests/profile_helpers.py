@@ -85,6 +85,14 @@ def write_role_families(profile: Path, names: tuple[str, ...] = ROLE_FAMILIES) -
         (folder / name / "resume.docx").write_bytes(b"base resume")
 
 
+ROLE_FAMILY = ROLE_FAMILIES[0]
+
+
+def family_dir(profile: Path, name: str = ROLE_FAMILY) -> Path:
+    """A role family's folder in the profile (PRD 04): its `resume.docx` and optional `cover_letter.*` live here."""
+    return profile / "role_families" / name
+
+
 def use_role_families(
     tmp_path: Path, monkeypatch, names: tuple[str, ...] = ROLE_FAMILIES
 ) -> Path:

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from conftest import REJECTED, unique_url
+from conftest import REJECTED, drop_all_tables, raw_connect, unique_url
 
 from jsa import db
 
@@ -224,3 +224,234 @@ def test_capture_jd_does_not_change_decision_or_identity(conn):
         _row(conn, posting_id, "canonical_url, decision, decided_at, search_agent")
         == before
     )
+
+
+# --- role families (PRD 02 "The postings table", "Query surface") ------------------
+
+
+def _family(conn, posting_id):
+    return _row(conn, posting_id, "role_family")[0]
+
+
+def _decided(conn, url, decision="Apply", role_family="Data Analysis"):
+    db.record_decision(conn, url, decision, "note", role_family)
+
+
+def test_a_new_row_has_no_role_family_unless_the_insert_gives_one(conn):
+    searched, _ = _insert(conn)
+    manual, _ = _insert(conn, search_agent="manual", role_family="Data Analysis")
+    manual_without, _ = _insert(conn, search_agent="manual")
+    assert _family(conn, searched) is None
+    assert _family(conn, manual) == "Data Analysis"
+    assert _family(conn, manual_without) is None
+
+
+def test_a_manual_insert_stores_the_role_family_with_its_apply_decision(conn):
+    posting_id, _ = _insert(conn, search_agent="manual", role_family="Data Analysis")
+    assert _row(conn, posting_id, "decision, role_family") == ("Apply", "Data Analysis")
+
+
+def test_record_decision_stores_the_role_family_of_an_apply(conn):
+    posting_id, args = _insert(conn)
+    db.record_decision(conn, args["url"], "Apply", "great fit", "Data Analysis")
+    assert _row(conn, posting_id, "decision, fit_feedback, role_family") == (
+        "Apply",
+        "great fit",
+        "Data Analysis",
+    )
+
+
+def test_record_decision_without_a_role_family_stores_an_apply_with_none(conn):
+    posting_id, args = _insert(conn)
+    db.record_decision(conn, args["url"], "Apply", None)
+    assert _row(conn, posting_id, "decision, role_family") == ("Apply", None)
+
+
+def test_record_decision_replaces_the_role_family_of_a_decided_apply(conn):
+    posting_id, args = _insert(conn)
+    _decided(conn, args["url"], role_family="Data Analysis")
+    _decided(conn, args["url"], role_family="Analytics Engineering")
+    assert _family(conn, posting_id) == "Analytics Engineering"
+    _decided(conn, args["url"], role_family=None)
+    assert _family(conn, posting_id) is None
+
+
+def test_a_skip_never_stores_a_role_family(conn):
+    posting_id, args = _insert(conn)
+    db.record_decision(conn, args["url"], "Skip", "too junior", "Data Analysis")
+    assert _row(conn, posting_id, "decision, role_family") == ("Skip", None)
+
+
+def test_a_skip_clears_the_role_family_of_a_row_that_was_apply(conn):
+    posting_id, args = _insert(conn)
+    _decided(conn, args["url"])
+    db.record_decision(conn, args["url"], "Skip", "changed my mind")
+    assert _row(conn, posting_id, "decision, role_family") == ("Skip", None)
+
+
+def test_changing_a_decision_to_skip_clears_the_role_family(conn):
+    posting_id, args = _insert(conn)
+    _decided(conn, args["url"])
+    db.set_decision(conn, args["url"], "Skip")
+    assert _row(conn, posting_id, "decision, fit_feedback, role_family") == (
+        "Skip",
+        "note",
+        None,
+    )
+
+
+def test_clearing_a_decision_clears_the_role_family(conn):
+    posting_id, args = _insert(conn)
+    _decided(conn, args["url"])
+    db.clear_decision(conn, args["url"])
+    assert _row(
+        conn, posting_id, "decision, fit_feedback, decided_at, role_family"
+    ) == (None, None, None, None)
+
+
+def test_the_role_family_write_sets_it_and_leaves_decided_at_alone(conn):
+    posting_id, args = _insert(conn)
+    _decided(conn, args["url"], role_family="Data Analysis")
+    conn.execute(
+        "UPDATE postings SET decided_at = '2020-01-01T00:00:00.000Z' WHERE id = ?",
+        (posting_id,),
+    )
+    db.set_role_family(conn, posting_id, "Analytics Engineering")
+    assert _row(conn, posting_id, "role_family, decided_at, decision") == (
+        "Analytics Engineering",
+        "2020-01-01T00:00:00.000Z",
+        "Apply",
+    )
+
+
+def test_the_role_family_write_can_set_none(conn):
+    posting_id, args = _insert(conn)
+    _decided(conn, args["url"])
+    db.set_role_family(conn, posting_id, None)
+    assert _family(conn, posting_id) is None
+
+
+def test_the_role_family_write_of_the_current_value_changes_nothing(conn):
+    posting_id, args = _insert(conn)
+    _decided(conn, args["url"])
+    conn.execute(
+        "UPDATE postings SET decided_at = '2020-01-01T00:00:00.000Z' WHERE id = ?",
+        (posting_id,),
+    )
+    before = _row(conn, posting_id, "role_family, decided_at, fit_feedback")
+    db.set_role_family(conn, posting_id, "Data Analysis")
+    assert _row(conn, posting_id, "role_family, decided_at, fit_feedback") == before
+
+
+def test_the_role_family_write_touches_only_its_own_row(conn):
+    first, first_args = _insert(conn)
+    second, second_args = _insert(conn)
+    _decided(conn, first_args["url"])
+    _decided(conn, second_args["url"])
+    db.set_role_family(conn, first, "Analytics Engineering")
+    assert _family(conn, second) == "Data Analysis"
+
+
+def test_a_decision_write_leaves_other_rows_role_families_alone(conn):
+    _, first_args = _insert(conn)
+    second, second_args = _insert(conn)
+    _decided(conn, first_args["url"])
+    _decided(conn, second_args["url"])
+    db.record_decision(conn, first_args["url"], "Skip", None)
+    db.clear_decision(conn, first_args["url"])
+    assert _family(conn, second) == "Data Analysis"
+
+
+def test_the_lookup_returns_the_role_family_with_id_decision_and_refinement(conn):
+    posting_id, args = _insert(conn)
+    assert db.find_posting(conn, args["url"]) == (posting_id, None, True, None)
+    _decided(conn, args["url"])
+    assert db.find_posting(conn, args["url"]) == (
+        posting_id,
+        "Apply",
+        True,
+        "Data Analysis",
+    )
+
+
+def test_the_revise_reads_return_the_role_family(conn):
+    posting_id, args = _insert(conn)
+    _decided(conn, args["url"])
+    by_id = db.posting_by_id(conn, posting_id)
+    latest = db.last_decided_posting(conn)
+    assert by_id is not None and latest is not None
+    assert by_id[-1] == "Data Analysis"
+    assert latest[-1] == "Data Analysis"
+    assert by_id[0] == latest[0] == posting_id
+
+
+def _without_role_family(url):
+    """Leave the database as a version without the column left it, holding three rows."""
+    drop_all_tables(url)
+    db.connect().close()
+    conn = raw_connect(url)
+    try:
+        conn.execute("ALTER TABLE postings DROP COLUMN role_family")
+        for n, decision in enumerate(("Apply", "Skip", None)):
+            conn.execute(
+                "INSERT INTO postings (company, title, url, canonical_url, search_agent, decision, decided_at) "
+                "VALUES ('Acme', 'Engineer', ?, ?, 'claude', ?, '2020-01-01T00:00:00.000Z')",
+                (f"https://x.example/{n}", f"https://x.example/{n}", decision),
+            )
+    finally:
+        conn.close()
+
+
+def _schema_and_rows(url):
+    conn = raw_connect(url)
+    try:
+        return (
+            conn.execute(
+                "SELECT name, sql FROM sqlite_master ORDER BY name"
+            ).fetchall(),
+            conn.execute("SELECT * FROM postings ORDER BY id").fetchall(),
+        )
+    finally:
+        conn.close()
+
+
+def test_opening_a_database_made_before_the_column_adds_it_with_every_row_none(
+    db_url,
+):
+    _without_role_family(db_url)
+    db.connect().close()
+    conn = raw_connect(db_url)
+    rows = conn.execute("SELECT decision, role_family FROM postings ORDER BY id")
+    assert rows.fetchall() == [("Apply", None), ("Skip", None), (None, None)]
+    conn.close()
+
+
+def test_the_role_family_migration_is_a_no_op_once_applied(db_url):
+    _without_role_family(db_url)
+    db.connect().close()
+    conn = raw_connect(db_url)
+    conn.execute("UPDATE postings SET role_family = 'Data Analysis' WHERE id = 1")
+    conn.close()
+    before = _schema_and_rows(db_url)
+    for _ in range(2):
+        db.connect().close()
+    assert _schema_and_rows(db_url) == before
+
+
+def test_a_migrated_table_gets_the_same_column_as_a_fresh_one(db_url):
+    drop_all_tables(db_url)
+    db.connect().close()
+    conn = raw_connect(db_url)
+    fresh = conn.execute(
+        "SELECT name, type, \"notnull\", dflt_value FROM pragma_table_info('postings') ORDER BY name"
+    ).fetchall()
+    conn.close()
+    _without_role_family(db_url)
+    db.connect().close()
+    conn = raw_connect(db_url)
+    migrated = conn.execute(
+        "SELECT name, type, \"notnull\", dflt_value FROM pragma_table_info('postings') ORDER BY name"
+    ).fetchall()
+    conn.close()
+    assert migrated == fresh
+    assert ("role_family", "TEXT", 0, None) in fresh

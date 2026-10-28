@@ -2,6 +2,7 @@ import builtins
 import io
 import json
 import random
+import re
 import sys
 import uuid
 from datetime import UTC, datetime
@@ -1603,3 +1604,275 @@ def test_ctrl_c_at_the_refinement_prompt_writes_nothing_for_an_existing_row(
     assert code != 0
     assert posting(conn, url) == before
     assert in_refinement(conn, url) == 1
+
+
+# --- role families (PRD 03 "Manual-add side door → Role family") -------------------------
+
+ANALYTICS, DATA = ROLE_FAMILIES  # numbered 1 and 2 in name order
+
+
+@pytest.fixture
+def two_families(profile):
+    write_role_families(profile)
+
+
+def revise_line(output, posting_id):
+    return f"jsa revise --id {posting_id}" in output
+
+
+def test_a_new_row_stores_the_role_family_picked_by_number(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n1\nn\n")
+    assert code == 0, output
+    assert stored_role_family(conn, url) == ANALYTICS
+    assert not revise_line(output, posting(conn, url)["id"])
+
+
+def test_none_fits_stores_the_row_with_no_role_family_and_says_how_to_give_it_one(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\nn\nn\n")
+    assert code == 0, output
+    assert posting(conn, url)["decision"] == "Apply"
+    assert stored_role_family(conn, url) is None
+    assert revise_line(output, posting(conn, url)["id"])
+
+
+def test_the_role_family_list_is_numbered_in_name_order(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    _, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n1\nn\n")
+    assert output.index(ANALYTICS) < output.index(DATA)
+    assert re.search(rf"1\D.*{ANALYTICS}", output)
+    assert re.search(rf"2\D.*{DATA}", output)
+
+
+@pytest.mark.parametrize("bad", ["3", "0", "x", ""])
+def test_an_invalid_role_family_answer_is_asked_again(
+    db_url, conn, web, monkeypatch, capsys, two_families, bad
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    code, output = jsa_add(monkeypatch, capsys, url, stdin=f"\n\n{bad}\n2\nn\n")
+    assert code == 0, output
+    assert stored_role_family(conn, url) == DATA
+    assert in_refinement(conn, url) == 0
+
+
+def test_with_one_role_family_a_new_row_gets_it_without_asking(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    # Company, title, refinement: the third line can only be the refinement answer.
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\nn\n")
+    assert code == 0, output
+    assert stored_role_family(conn, url) == ANALYTICS
+    assert in_refinement(conn, url) == 0
+    assert not revise_line(output, posting(conn, url)["id"])
+
+
+def test_enter_keeps_an_existing_rows_role_family_and_changes_nothing(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply", role_family=DATA)
+    before = posting(conn, url)
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n")
+    assert code == 0, output
+    assert f"Enter keeps {DATA}" in output
+    assert "already Apply; no change." in output
+    assert posting(conn, url) == before
+    assert stored_role_family(conn, url) == DATA
+
+
+def test_a_changed_answer_is_stored_reported_and_leaves_decided_at_alone(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply", role_family=DATA, feedback="note")
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="1\n\n")
+    assert code == 0, output
+    assert stored_role_family(conn, url) == ANALYTICS
+    assert ANALYTICS in output
+    assert "already Apply; no change." not in output
+    kept = posting(conn, url)
+    assert (kept["decided_at"], kept["fit_feedback"]) == (LONG_AGO, "note")
+
+
+def test_n_on_an_existing_row_clears_its_role_family_and_names_revise(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    posting_id = seed_decided(conn, url, "Apply", role_family=DATA)
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="n\n\n")
+    assert code == 0, output
+    assert stored_role_family(conn, url) is None
+    assert revise_line(output, posting_id)
+    assert posting(conn, url)["decided_at"] == LONG_AGO
+
+
+def test_an_existing_apply_row_with_none_is_offered_no_enter(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply")
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n2\n\n")
+    assert code == 0, output
+    assert "Enter keeps" not in output.split("Role famil", 1)[1]
+    assert stored_role_family(conn, url) == DATA
+
+
+def test_re_adding_a_skipped_row_promotes_it_with_the_role_family_picked(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    seed_decided(conn, url, "Skip", feedback="no")
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="2\n\n")
+    assert code == 0, output
+    assert posting(conn, url)["decision"] == "Apply"
+    assert stored_role_family(conn, url) == DATA
+
+
+@pytest.mark.parametrize("ending", ["ctrl-d", "ctrl-c"])
+def test_quitting_at_the_role_family_prompt_writes_nothing_for_an_existing_row(
+    db_url, conn, web, monkeypatch, capsys, two_families, ending
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply", role_family=DATA)
+    before = posting(conn, url)
+    if ending == "ctrl-c":
+
+        def interrupt(*_args, **_kwargs):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(builtins, "input", interrupt)
+    code, _ = jsa_add(monkeypatch, capsys, url, stdin="")
+    assert code != 0
+    assert posting(conn, url) == before
+    assert stored_role_family(conn, url) == DATA
+
+
+@pytest.mark.parametrize("ending", ["ctrl-d", "ctrl-c"])
+def test_quitting_at_the_role_family_prompt_inserts_no_new_row(
+    db_url, conn, web, monkeypatch, capsys, two_families, ending
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    if ending == "ctrl-c":
+
+        def interrupt(*_args, **_kwargs):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(builtins, "input", interrupt)
+        stdin = ""
+    else:
+        stdin = "\n\n"
+    code, _ = jsa_add(monkeypatch, capsys, url, stdin=stdin)
+    assert code != 0
+    assert posting(conn, url) is None
+
+
+# --no-input
+
+
+def test_no_input_with_one_role_family_stores_it_on_a_new_row(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert stored_role_family(conn, url) == ANALYTICS
+    assert not revise_line(output, posting(conn, url)["id"])
+
+
+def test_no_input_with_several_role_families_stores_none_on_a_new_row_and_names_revise(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert posting(conn, url)["decision"] == "Apply"
+    assert stored_role_family(conn, url) is None
+    assert revise_line(output, posting(conn, url)["id"])
+
+
+def test_no_input_with_several_role_families_leaves_an_existing_rows_role_family(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply", role_family=DATA)
+    before = posting(conn, url)
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert "already Apply; no change." in output
+    assert posting(conn, url) == before
+    assert stored_role_family(conn, url) == DATA
+
+
+def test_no_input_with_several_role_families_on_an_existing_apply_with_none_names_revise(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    posting_id = seed_decided(conn, url, "Apply")
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert stored_role_family(conn, url) is None
+    assert revise_line(output, posting_id)
+
+
+def test_no_input_with_several_role_families_promotes_a_skip_with_none(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    posting_id = seed_decided(conn, url, "Skip", feedback="no")
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert posting(conn, url)["decision"] == "Apply"
+    assert stored_role_family(conn, url) is None
+    assert revise_line(output, posting_id)
+
+
+def test_no_input_with_one_role_family_promotes_a_skip_with_it(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    seed_decided(conn, url, "Skip")
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert posting(conn, url)["decision"] == "Apply"
+    assert stored_role_family(conn, url) == ANALYTICS
+
+
+def test_no_input_with_one_role_family_gives_an_existing_apply_with_none_that_one(
+    db_url, conn, web, monkeypatch, capsys
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply")
+    code, output = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0, output
+    assert stored_role_family(conn, url) == ANALYTICS
+    assert posting(conn, url)["decided_at"] == LONG_AGO
+    assert "already Apply; no change." not in output
+
+
+def test_a_searched_row_never_gets_a_role_family_from_a_re_add_with_several(
+    db_url, conn, web, monkeypatch, capsys, two_families
+):
+    url = gh_url()
+    seed_decided(conn, url, "Apply", agent="perplexity", role_family=ANALYTICS)
+    code, _ = jsa_add(monkeypatch, capsys, url, "--no-input")
+    assert code == 0
+    assert stored_role_family(conn, url) == ANALYTICS

@@ -5,7 +5,7 @@ single definition.
 """
 
 import pytest
-from profile_helpers import write_config_toml
+from profile_helpers import ROLE_FAMILIES, write_config_toml, write_role_families
 
 from jsa.errors import JsaError
 from jsa.profile import (
@@ -88,7 +88,9 @@ def test_the_inbox_machine_ships_config_toml_by_its_file_name(profile, monkeypat
     from jsa.deploy import MACHINE_PROFILE_DIR, inbox_machine_files
 
     write_config_toml(profile)
-    (profile / "resume.docx").write_bytes(b"")
+    write_role_families(profile)
     files = inbox_machine_files()
     assert files[f"{MACHINE_PROFILE_DIR}/config.toml"] == profile / "config.toml"
-    assert files[f"{MACHINE_PROFILE_DIR}/resume.docx"] == profile / "resume.docx"
+    for family in ROLE_FAMILIES:
+        path = f"role_families/{family}/resume.docx"
+        assert files[f"{MACHINE_PROFILE_DIR}/{path}"] == profile / path

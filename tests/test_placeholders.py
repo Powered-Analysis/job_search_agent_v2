@@ -18,6 +18,7 @@ from docx.oxml import parse_xml
 from profile_helpers import (
     SEARCH_TOML,
     copy_example,
+    family_dir,
     write_config_toml,
     write_search_toml,
 )
@@ -339,7 +340,7 @@ def pdb(db_url):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """A profile whose resume holds the tokens, and its packets directory."""
+    """A profile whose role family folders the tests fill, and its packets directory."""
     profile = copy_example(tmp_path / "profile")
     packets = tmp_path / "packets"
     write_config_toml(
@@ -386,8 +387,8 @@ def test_the_resume_copy_is_filled_and_the_profiles_resume_is_byte_for_byte_unch
     pdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx")
-    base = digest(profile / "resume.docx")
+    save_with_tokens(family_dir(profile) / "resume.docx")
+    base = digest(family_dir(profile) / "resume.docx")
     seed(pdb, company="Acme Widgets, Inc.", title="Staff Engineer")
     before = datetime.now(ZoneInfo("America/New_York")).date()
     code, _ = jsa_packet(monkeypatch, capsys)
@@ -400,15 +401,15 @@ def test_the_resume_copy_is_filled_and_the_profiles_resume_is_byte_for_byte_unch
         for day in (before, after)
     }
     assert document.sections[0].header.paragraphs[0].text == "Acme Widgets header"
-    assert digest(profile / "resume.docx") == base
+    assert digest(family_dir(profile) / "resume.docx") == base
 
 
 def test_a_docx_cover_letter_copy_is_filled_and_the_profiles_letter_is_unchanged(
     pdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_tokens(profile / "cover_letter.docx", header=False)
-    base = digest(profile / "cover_letter.docx")
+    save_with_tokens(family_dir(profile) / "cover_letter.docx", header=False)
+    base = digest(family_dir(profile) / "cover_letter.docx")
     seed(pdb, title="Data Engineer")
     code, _ = jsa_packet(monkeypatch, capsys)
     assert code == 0
@@ -417,14 +418,14 @@ def test_a_docx_cover_letter_copy_is_filled_and_the_profiles_letter_is_unchanged
         "Applying to Acme Widgets as Data Engineer on "
     )
     assert "[" not in letter.paragraphs[1].text
-    assert digest(profile / "cover_letter.docx") == base
+    assert digest(family_dir(profile) / "cover_letter.docx") == base
 
 
 def test_the_company_filled_is_the_normalized_company_not_the_raw_name(
     pdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx")
+    save_with_tokens(family_dir(profile) / "resume.docx")
     seed(pdb, company="Foo Bar Corp LLC")
     normalized = pdb.execute("SELECT normalized_company FROM postings").fetchone()[0]
     jsa_packet(monkeypatch, capsys)
@@ -437,17 +438,18 @@ def test_a_source_with_no_token_is_copied_byte_for_byte(pdb, env, monkeypatch, c
     profile, packets = env
     document = docx.Document()
     document.add_paragraph("No placeholders [Company] [ROLE] here.")
-    document.save(profile / "resume.docx")
-    document.save(profile / "cover_letter.docx")
+    document.save(family_dir(profile) / "resume.docx")
+    document.save(family_dir(profile) / "cover_letter.docx")
     seed(pdb)
     jsa_packet(monkeypatch, capsys)
     folder = packet_folder(packets)
     assert (
-        copy_in(folder, "Resume").read_bytes() == (profile / "resume.docx").read_bytes()
+        copy_in(folder, "Resume").read_bytes()
+        == (family_dir(profile) / "resume.docx").read_bytes()
     )
     assert (
         copy_in(folder, "CoverLetter").read_bytes()
-        == (profile / "cover_letter.docx").read_bytes()
+        == (family_dir(profile) / "cover_letter.docx").read_bytes()
     )
 
 
@@ -456,7 +458,7 @@ def test_a_cover_letter_that_is_not_a_docx_is_copied_as_it_is(
     pdb, env, monkeypatch, capsys, extension
 ):
     profile, packets = env
-    source = profile / f"cover_letter.{extension}"
+    source = family_dir(profile) / f"cover_letter.{extension}"
     source.write_bytes(b"Dear [COMPANY], about [TITLE] on [DATE]")
     seed(pdb)
     jsa_packet(monkeypatch, capsys)
@@ -470,8 +472,8 @@ def test_the_resume_is_filled_when_the_cover_letter_is_a_pdf(
     pdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx")
-    (profile / "cover_letter.pdf").write_bytes(b"[COMPANY]")
+    save_with_tokens(family_dir(profile) / "resume.docx")
+    (family_dir(profile) / "cover_letter.pdf").write_bytes(b"[COMPANY]")
     seed(pdb)
     jsa_packet(monkeypatch, capsys)
     folder = packet_folder(packets)
@@ -486,7 +488,7 @@ def test_values_with_markup_or_regex_characters_land_as_literal_text_in_the_copy
     pdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx", header=False)
+    save_with_tokens(family_dir(profile) / "resume.docx", header=False)
     seed(pdb, company="A&B <i>Co</i> \\1 $1", title="R&D <b>Lead</b> \\g<0> $&")
     normalized = pdb.execute("SELECT normalized_company FROM postings").fetchone()[0]
     jsa_packet(monkeypatch, capsys)
@@ -503,7 +505,7 @@ def test_date_is_today_in_the_profiles_timezone(
     pdb, env, monkeypatch, capsys, timezone, other
 ):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx", header=False)
+    save_with_tokens(family_dir(profile) / "resume.docx", header=False)
     write_search_toml(profile, SEARCH_TOML.replace("America/New_York", timezone))
     seed(pdb)
     before = datetime.now(ZoneInfo(timezone)).date()
@@ -519,7 +521,7 @@ def test_date_is_today_in_the_profiles_timezone(
 
 def test_date_ignores_the_hosts_tz_variable(pdb, env, monkeypatch, capsys):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx", header=False)
+    save_with_tokens(family_dir(profile) / "resume.docx", header=False)
     write_search_toml(
         profile, SEARCH_TOML.replace("America/New_York", "Pacific/Kiritimati")
     )
@@ -538,7 +540,7 @@ def test_a_packet_for_each_posting_is_filled_with_its_own_company_and_title(
     pdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx", header=False)
+    save_with_tokens(family_dir(profile) / "resume.docx", header=False)
     seed(pdb, company="Alpha Labs", title="Backend Engineer")
     seed(pdb, company="Beta Works", title="Data Scientist")
     code, _ = jsa_packet(monkeypatch, capsys)
@@ -559,13 +561,13 @@ def test_an_existing_packet_is_not_refilled_when_the_profile_changes(
     pdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx", header=False)
+    save_with_tokens(family_dir(profile) / "resume.docx", header=False)
     seed(pdb)
     jsa_packet(monkeypatch, capsys)
     folder = packet_folder(packets)
     copy_path = copy_in(folder, "Resume")
     filled = copy_path.read_bytes()
-    save_with_tokens(profile / "resume.docx")
+    save_with_tokens(family_dir(profile) / "resume.docx")
     code, _ = jsa_packet(monkeypatch, capsys)
     assert code == 0
     assert copy_path.read_bytes() == filled
@@ -575,7 +577,7 @@ def test_a_users_own_token_typed_into_an_existing_copy_stays_as_typed(
     pdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx", header=False)
+    save_with_tokens(family_dir(profile) / "resume.docx", header=False)
     seed(pdb, jd=JD)
     jsa_packet(monkeypatch, capsys)
     copy_path = copy_in(packet_folder(packets), "Resume")
@@ -589,10 +591,10 @@ def test_a_users_own_token_typed_into_an_existing_copy_stays_as_typed(
 
 def test_a_dry_run_fills_and_copies_nothing(pdb, env, monkeypatch, capsys):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx")
-    base = digest(profile / "resume.docx")
+    save_with_tokens(family_dir(profile) / "resume.docx")
+    base = digest(family_dir(profile) / "resume.docx")
     seed(pdb)
     code, _ = jsa_packet(monkeypatch, capsys, "--dry-run")
     assert code == 0
     assert not packets.exists() or not list(packets.iterdir())
-    assert digest(profile / "resume.docx") == base
+    assert digest(family_dir(profile) / "resume.docx") == base

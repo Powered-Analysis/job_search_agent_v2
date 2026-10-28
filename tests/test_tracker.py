@@ -5,6 +5,7 @@ and the profile is a temporary directory.
 """
 
 import json
+import shutil
 import stat
 import sys
 from datetime import date, datetime
@@ -14,8 +15,11 @@ from zoneinfo import ZoneInfo
 import pytest
 from conftest import drop_all_tables, unique_url
 from profile_helpers import (
+    ROLE_FAMILIES,
+    ROLE_FAMILY,
     SEARCH_TOML,
     copy_example,
+    family_dir,
     write_config_toml,
     write_search_toml,
 )
@@ -26,7 +30,8 @@ from jsa.naming import normalize_company
 LONG_AGO = "2020-01-01T00:00:00.000Z"
 
 # Logs each invocation's argv to $STUB_LOG; fails when the row's ID is listed in $STUB_FAIL_IDS
-# (as exit 1, garbage output, or an append response reporting no updated row, per $STUB_FAIL_MODE).
+# (as exit 1, garbage output, or an append response reporting no updated row, per $STUB_FAIL_MODE),
+# and exits 1 for a range on a tab listed in $STUB_MISSING_TABS (separated by "|"), as Sheets does.
 STUB = """\
 #!{python}
 import json, os, sys
@@ -34,6 +39,18 @@ import json, os, sys
 argv = sys.argv[1:]
 with open(os.environ["STUB_LOG"], "a") as log:
     log.write(json.dumps(argv) + "\\n")
+params = {{}}
+for item in argv:
+    try:
+        parsed = json.loads(item)
+    except ValueError:
+        continue
+    if isinstance(parsed, dict):
+        params.update(parsed)
+tab = params["range"].rsplit("!", 1)[0].strip("'")
+if tab in os.environ.get("STUB_MISSING_TABS", "").split("|"):
+    print("Unable to parse range: " + params["range"], file=sys.stderr)
+    sys.exit(1)
 body = json.loads(argv[argv.index("--json") + 1])
 posting_id = str(body["values"][0][0])
 failing = os.environ.get("STUB_FAIL_IDS", "").split(",")
@@ -78,6 +95,7 @@ def gws(tmp_path, monkeypatch):
     monkeypatch.setenv("STUB_LOG", str(log))
     monkeypatch.delenv("STUB_FAIL_IDS", raising=False)
     monkeypatch.delenv("STUB_FAIL_MODE", raising=False)
+    monkeypatch.delenv("STUB_MISSING_TABS", raising=False)
     return profile, log
 
 
@@ -104,6 +122,7 @@ def seed(
     tracked=False,
     closed=False,
     date_posted=None,
+    role_family=ROLE_FAMILY,
 ):
     posting_id = db.insert_posting(
         conn,
@@ -115,12 +134,13 @@ def seed(
     )
     conn.execute(
         "UPDATE postings SET decision = ?, decided_at = ?, added_to_tracker = ?, "
-        "closed_at = ? WHERE id = ?",
+        "closed_at = ?, role_family = ? WHERE id = ?",
         (
             decision,
             LONG_AGO if decision else None,
             int(tracked),
             LONG_AGO if closed else None,
+            role_family,
             posting_id,
         ),
     )
@@ -263,22 +283,41 @@ def test_one_gws_call_per_queued_posting_with_the_spec_d_options(
         assert "OVERWRITE" in joined
         assert "INSERT_ROWS" not in joined
         assert "sheet-123" in joined
-        assert "Applications" in joined
+        assert ROLE_FAMILY in joined
     assert [row[0] for row in appended_rows(log)] == ids
 
 
-def test_the_append_names_the_applications_tab_and_the_configured_sheet(
-    tdb, gws, monkeypatch, capsys
+@pytest.mark.parametrize("family", ROLE_FAMILIES)
+def test_the_append_names_the_postings_role_familys_tab_and_the_configured_sheet(
+    tdb, gws, monkeypatch, capsys, family
 ):
     _, log = gws
-    seed(tdb)
+    seed(tdb, role_family=family)
     jsa_track(monkeypatch, capsys)
     [argv] = calls(log)
     merged = params_of(argv)
     assert merged["spreadsheetId"] == "sheet-123"
-    assert merged["range"].startswith("Applications")
+    assert merged["range"] == f"'{family}'!A:H"
     assert merged["valueInputOption"] == "USER_ENTERED"
     assert merged["insertDataOption"] == "OVERWRITE"
+
+
+def test_each_posting_goes_to_the_tab_of_its_own_role_family(
+    tdb, gws, monkeypatch, capsys
+):
+    _, log = gws
+    first, second, third = ROLE_FAMILIES[0], ROLE_FAMILIES[1], ROLE_FAMILIES[0]
+    ids = [
+        seed(tdb, title=f"Engineer {n}", role_family=f)
+        for n, f in enumerate((first, second, third))
+    ]
+    code, output = jsa_track(monkeypatch, capsys)
+    assert code == 0, output
+    tabs = {
+        row[0]: params_of(argv)["range"].rsplit("!", 1)[0]
+        for argv, row in zip(calls(log), appended_rows(log))
+    }
+    assert tabs == {ids[0]: f"'{first}'", ids[1]: f"'{second}'", ids[2]: f"'{third}'"}
 
 
 def test_the_program_is_the_one_named_by_jsa_gws_bin(
@@ -471,6 +510,92 @@ def test_a_failed_row_is_picked_up_by_the_next_run(tdb, gws, monkeypatch, capsys
     assert code == 0
     assert tracked_flag(tdb, posting_id) == 1
     assert len(calls(log)) == 2
+
+
+# --- a role family's tab, and a posting without a usable role family ----------
+
+
+def test_a_missing_tab_fails_that_rows_append_naming_the_tab_and_leaves_it_untracked(
+    tdb, gws, monkeypatch, capsys
+):
+    absent = ROLE_FAMILIES[1]
+    monkeypatch.setenv("STUB_MISSING_TABS", absent)
+    kept = seed(tdb, title="On a tab", role_family=ROLE_FAMILIES[0])
+    stranded = seed(tdb, title="Without a tab", role_family=absent)
+    code, output = jsa_track(monkeypatch, capsys)
+    assert code != 0
+    assert absent in output
+    assert tracked_flag(tdb, stranded) == 0
+    assert tracked_flag(tdb, kept) == 1
+    assert [row[0] for row in db.tracker_queue(tdb)] == [stranded]
+
+
+def test_a_finished_tab_lets_the_next_run_append_the_stranded_row(
+    tdb, gws, monkeypatch, capsys
+):
+    absent = ROLE_FAMILIES[1]
+    monkeypatch.setenv("STUB_MISSING_TABS", absent)
+    posting_id = seed(tdb, role_family=absent)
+    code, _ = jsa_track(monkeypatch, capsys)
+    assert code != 0
+    monkeypatch.delenv("STUB_MISSING_TABS")
+    code, _ = jsa_track(monkeypatch, capsys)
+    assert code == 0
+    assert tracked_flag(tdb, posting_id) == 1
+
+
+@pytest.mark.parametrize("role_family", [None, "Quantum Basket Weaving"])
+def test_a_row_without_a_role_family_the_profile_has_is_flagged_not_appended_and_stays_queued(
+    tdb, gws, monkeypatch, capsys, role_family
+):
+    _, log = gws
+    unassigned = seed(tdb, title="Unassigned", role_family=role_family)
+    fine = seed(tdb, title="Assigned")
+    _, output = jsa_track(monkeypatch, capsys)
+    assert str(unassigned) in output
+    assert f"jsa revise --id {unassigned}" in output
+    assert [row[0] for row in appended_rows(log)] == [fine]
+    assert tracked_flag(tdb, unassigned) == 0
+    assert tracked_flag(tdb, fine) == 1
+    assert [row[0] for row in db.tracker_queue(tdb)] == [unassigned]
+
+
+def test_id_flags_a_row_without_a_role_family_and_appends_nothing(
+    tdb, gws, monkeypatch, capsys
+):
+    _, log = gws
+    posting_id = seed(tdb, role_family=None)
+    _, output = jsa_track(monkeypatch, capsys, "--id", posting_id)
+    assert f"jsa revise --id {posting_id}" in output
+    assert calls(log) == []
+    assert tracked_flag(tdb, posting_id) == 0
+
+
+@pytest.mark.parametrize("flags", [[], ["--dry-run"]])
+def test_a_profile_without_a_usable_role_family_fails_before_any_row_is_processed(
+    tdb, gws, monkeypatch, capsys, flags
+):
+    profile, log = gws
+    shutil.rmtree(profile / "role_families")
+    posting_id = seed(tdb)
+    code, output = jsa_track(monkeypatch, capsys, *flags)
+    assert code != 0
+    assert "profile.example" in output
+    assert calls(log) == []
+    assert tracked_flag(tdb, posting_id) == 0
+
+
+def test_a_role_family_with_an_empty_resume_fails_the_run_before_any_append(
+    tdb, gws, monkeypatch, capsys
+):
+    profile, log = gws
+    (family_dir(profile, ROLE_FAMILIES[1]) / "resume.docx").write_bytes(b"")
+    posting_id = seed(tdb)
+    code, output = jsa_track(monkeypatch, capsys)
+    assert code != 0
+    assert str(family_dir(profile, ROLE_FAMILIES[1])) in output
+    assert calls(log) == []
+    assert tracked_flag(tdb, posting_id) == 0
 
 
 # --- the queue ----------------------------------------------------------------

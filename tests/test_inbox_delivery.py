@@ -17,7 +17,13 @@ import docx
 import httpx
 import pytest
 from conftest import REPO_ROOT, drop_all_tables
-from profile_helpers import copy_example, write_config_toml
+from profile_helpers import (
+    ROLE_FAMILIES,
+    ROLE_FAMILY,
+    copy_example,
+    family_dir,
+    write_config_toml,
+)
 from test_generate import (
     JD,
     PLAIN,
@@ -47,6 +53,8 @@ FOLDER_ID = "folder-123"
 OTHER_FOLDER_ID = "elsewhere-456"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 BASE_LINE = "Built the Quuxlate platform from scratch."
+OTHER_FAMILY = ROLE_FAMILIES[1]
+OTHER_BASE_LINE = "Reported the Zorblax metrics every week."
 CONFIG = """\
 candidate_name = "Pat Example"
 tracker_spreadsheet_id = "sheet-123"
@@ -273,7 +281,7 @@ def agent(monkeypatch):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """A profile with an `[inbox]` table and a distinctive base resume; returns (profile, packets_dir)."""
+    """A profile with an `[inbox]` table and a distinctive base resume per role family; returns (profile, packets_dir)."""
     from test_inbox import FAKE_GWS as GMAIL_STUB
 
     profile = copy_example(tmp_path / "profile")
@@ -281,10 +289,11 @@ def env(tmp_path, monkeypatch):
     write_config_toml(
         profile, CONFIG.format(packets=packets, sender=SENDER, folder=FOLDER_ID)
     )
-    document = docx.Document()
-    document.add_paragraph().add_run("Riley Resumeperson").bold = True
-    document.add_paragraph(BASE_LINE)
-    document.save(profile / "resume.docx")
+    for family, line in ((ROLE_FAMILY, BASE_LINE), (OTHER_FAMILY, OTHER_BASE_LINE)):
+        document = docx.Document()
+        document.add_paragraph().add_run("Riley Resumeperson").bold = True
+        document.add_paragraph(line)
+        document.save(family_dir(profile, family) / "resume.docx")
     monkeypatch.setenv("JSA_PROFILE_DIR", str(profile))
     gmail_stub = tmp_path / "gmail-gws"
     gmail_stub.write_text(GMAIL_STUB.format(python=sys.executable), encoding="utf-8")
@@ -317,9 +326,16 @@ def world(env, tmp_path) -> World:
     return World(tmp_path / "world.json")
 
 
-def email(gmail, conn, message_id="m1", **seed_fields) -> int:
-    """Store an Apply posting that has a description, and email its URL; returns its id."""
+def give_role_family(conn, posting_id, role_family) -> None:
+    conn.execute(
+        "UPDATE postings SET role_family = ? WHERE id = ?", (role_family, posting_id)
+    )
+
+
+def email(gmail, conn, message_id="m1", role_family=ROLE_FAMILY, **seed_fields) -> int:
+    """Store an Apply posting that has a description and a role family, and email its URL; returns its id."""
     posting_id = seed(conn, **seed_fields)
+    give_role_family(conn, posting_id, role_family)
     url = conn.execute(
         "SELECT url FROM postings WHERE id = ?", (posting_id,)
     ).fetchone()[0]
@@ -361,7 +377,7 @@ def test_the_redlined_resume_copy_is_uploaded_as_the_exact_docx_file(
     run_inbox(monkeypatch)
     [folder_id] = world.folders(PLAIN)
     uploaded = world.contents(folder_id)
-    assert uploaded[RESUME_COPY] != (profile / "resume.docx").read_bytes()
+    assert uploaded[RESUME_COPY] != (family_dir(profile) / "resume.docx").read_bytes()
     with zipfile.ZipFile(io.BytesIO(uploaded[RESUME_COPY])) as archive:
         body = archive.read("word/document.xml").decode()
         comments = archive.read("word/comments.xml").decode()
@@ -377,7 +393,7 @@ def test_a_resume_the_redline_left_alone_is_delivered_with_its_pdf(
     assert run_inbox(monkeypatch) == 0
     [folder_id] = world.folders(PLAIN)
     uploaded = world.contents(folder_id)
-    assert uploaded[RESUME_COPY] == (profile / "resume.docx").read_bytes()
+    assert uploaded[RESUME_COPY] == (family_dir(profile) / "resume.docx").read_bytes()
     assert uploaded[RESUME_PDF].decode() == f"PDF OF: {RESUME_COPY}"
 
 
@@ -385,7 +401,7 @@ def test_a_docx_cover_letter_is_delivered_with_its_pdf(
     db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     profile, _ = env
-    (profile / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
+    (family_dir(profile) / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
     agent.respond = redline_reply(QUUX_EDIT)
     email(gmail, conn, jd=QUUX_JD)
     assert run_inbox(monkeypatch) == 0
@@ -400,7 +416,7 @@ def test_a_cover_letter_in_the_profile_is_delivered_with_the_packet(
     db_url, conn, env, gmail, world, agent, requests, monkeypatch
 ):
     profile, _ = env
-    (profile / "cover_letter.pdf").write_bytes(b"THE COVER LETTER")
+    (family_dir(profile) / "cover_letter.pdf").write_bytes(b"THE COVER LETTER")
     agent.respond = redline_reply(QUUX_EDIT)
     email(gmail, conn, jd=QUUX_JD)
     assert run_inbox(monkeypatch) == 0
@@ -511,6 +527,45 @@ def test_the_delivered_packet_is_what_jsa_generate_id_builds_locally(
             assert path.read_bytes() == uploaded[path.name], path.name
 
 
+def test_the_packet_is_built_from_the_postings_role_family_and_tracked_on_its_tab(
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
+):
+    profile, _ = env
+    other_cover_letter = family_dir(profile, OTHER_FAMILY) / "cover_letter.docx"
+    other_cover_letter.write_bytes(b"THE OTHER COVER LETTER")
+    family_dir(profile).joinpath("cover_letter.docx").write_bytes(b"THE FIRST LETTER")
+    posting_id = email(gmail, conn, role_family=OTHER_FAMILY)
+    assert run_inbox(monkeypatch) == 0
+    assert gmail.outcome_labels("m1") == ["jsa/tracked"]
+    assert tracked(conn, posting_id)
+    assert OTHER_BASE_LINE in agent.prompts[0]
+    assert BASE_LINE not in agent.prompts[0]
+    [folder_id] = world.folders(PLAIN)
+    uploaded = world.contents(folder_id)
+    letter = RESUME_COPY.replace("_Resume_", "_CoverLetter_")
+    assert uploaded[letter] == b"THE OTHER COVER LETTER"
+    assert set(uploaded) >= {RESUME_COPY, letter}
+    [call] = world.sheet_calls()
+    assert call["params"]["range"] == f"'{OTHER_FAMILY}'!A:H"
+
+
+@pytest.mark.parametrize(
+    "role_family", [None, "Retired Family"], ids=["none", "unknown"]
+)
+def test_a_posting_whose_role_family_the_profile_lacks_is_labeled_failed_and_stays_untracked(
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch, role_family
+):
+    posting_id = email(gmail, conn, role_family=role_family)
+    run_inbox(monkeypatch)
+    assert gmail.outcome_labels("m1") == ["jsa/failed"]
+    assert not gmail.in_inbox("m1")
+    assert agent.calls == []
+    assert world.drive_calls("create") == [] and world.sheet_calls() == []
+    assert not tracked(conn, posting_id)
+    assert column(conn, posting_id, "decision") == "Apply"
+    assert column(conn, posting_id, "role_family") == role_family
+
+
 # --- acceptance 1: no liveness re-check ----------------------------------------
 
 
@@ -530,6 +585,15 @@ def test_an_emailed_description_goes_all_the_way_to_a_delivered_packet(
     db_url, conn, env, gmail, world, agent, web, monkeypatch
 ):
     url = bare_posting(web)
+    # The address-tag rule that gives a new emailed row its role family is PRD 03's; here the row has one already.
+    db.insert_posting(
+        conn,
+        company="Example",
+        title="Staff Platform Engineer",
+        url=url,
+        search_agent="manual",
+        role_family=ROLE_FAMILY,
+    )
     gmail.add("m1", 1000, f"{url}\n\n{DESCRIPTION}\n")
     assert run_inbox(monkeypatch) == 0
     assert gmail.outcome_labels("m1") == ["jsa/tracked"]
@@ -810,6 +874,7 @@ def test_a_tracker_append_outside_the_inbox_uses_the_owners_credential_when_one_
     db_url, conn, env, world, monkeypatch, capsys
 ):
     posting_id = seed(conn)
+    give_role_family(conn, posting_id, ROLE_FAMILY)
     monkeypatch.setattr(sys, "argv", ["jsa", "track", "--id", str(posting_id)])
     try:
         cli.main()
@@ -825,6 +890,7 @@ def test_with_no_owner_credential_gws_keeps_its_own_login(
 ):
     monkeypatch.delenv("JSA_GWS_CREDENTIALS")
     posting_id = seed(conn)
+    give_role_family(conn, posting_id, ROLE_FAMILY)
     monkeypatch.setattr(sys, "argv", ["jsa", "track", "--id", str(posting_id)])
     try:
         cli.main()

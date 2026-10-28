@@ -8,7 +8,7 @@ from itertools import count
 import httpx
 import pytest
 from conftest import REPO_ROOT, drop_all_tables, unique_url, venv_script
-from profile_helpers import ROLE_FAMILIES, use_role_families
+from profile_helpers import ROLE_FAMILIES, use_role_families, write_role_families
 
 from jsa import cli, db
 from jsa.review import parse_feedback
@@ -1436,3 +1436,367 @@ def test_revise_makes_no_model_call_and_no_http(rdb, web, monkeypatch, capsys):
     )
     assert code == 0
     assert web.requests == []
+
+
+# --- role families (PRD 03 "Review loop → Role family") --------------------------------
+
+ANALYTICS, DATA = ROLE_FAMILIES  # numbered 1 and 2 in name order
+
+
+@pytest.fixture
+def two_families(profile):
+    """Two role families, so the role-family prompt is asked."""
+    write_role_families(profile)
+
+
+def role_family(conn, url):
+    return conn.execute(
+        "SELECT role_family FROM postings WHERE canonical_url = ?",
+        (canonicalize_url(url),),
+    ).fetchone()[0]
+
+
+def set_family(conn, url, family):
+    conn.execute(
+        "UPDATE postings SET role_family = ? WHERE canonical_url = ?",
+        (family, canonicalize_url(url)),
+    )
+
+
+def state(conn, url):
+    return (*row(conn, url).values(), role_family(conn, url))
+
+
+def test_pressing_a_lists_every_role_family_numbered_in_name_order(
+    rdb, two_families, monkeypatch, capsys
+):
+    seed(rdb, name(), order=1)
+    _, output = jsa_review(monkeypatch, capsys, ["a", "1", "", "q"])
+    assert re.search(rf"1\D.*{ANALYTICS}", output)
+    assert re.search(rf"2\D.*{DATA}", output)
+    assert output.index(ANALYTICS) < output.index(DATA)
+
+
+def test_the_role_family_prompt_comes_after_the_decision_and_before_feedback(
+    rdb, two_families, monkeypatch, capsys
+):
+    seed(rdb, name(), order=1)
+    _, output = jsa_review(monkeypatch, capsys, ["a", "2", "", "q"])
+    assert output.index(DATA) < output.index(FEEDBACK_PROMPT)
+
+
+@pytest.mark.parametrize(("key", "family"), [("1", ANALYTICS), ("2", DATA)])
+def test_a_number_stores_that_role_family_with_the_apply(
+    rdb, two_families, monkeypatch, capsys, key, family
+):
+    url = seed(rdb, name(), order=1)
+    jsa_review(monkeypatch, capsys, ["a", key, "strong match", "q"])
+    assert row(rdb, url)["decision"] == "Apply"
+    assert row(rdb, url)["feedback"] == "strong match"
+    assert role_family(rdb, url) == family
+
+
+def test_n_stores_the_apply_with_no_role_family(rdb, two_families, monkeypatch, capsys):
+    url = seed(rdb, name(), order=1)
+    jsa_review(monkeypatch, capsys, ["a", "n", "needs a new resume", "q"])
+    assert row(rdb, url)["decision"] == "Apply"
+    assert row(rdb, url)["feedback"] == "needs a new resume"
+    assert role_family(rdb, url) is None
+
+
+def test_b_returns_to_the_decision_prompt_for_the_same_posting_and_writes_nothing(
+    rdb, two_families, monkeypatch, capsys
+):
+    first = seed(rdb, name(), order=1)
+    second = seed(rdb, name(), order=2)
+    snapshots = []
+    jsa_review(
+        monkeypatch,
+        capsys,
+        ["a", "b", "s", "", "q"],
+        hooks={2: lambda: snapshots.append(state(db.connect(), first))},
+    )
+    assert snapshots == [(None, None, None, None)]
+    assert row(rdb, first)["decision"] == "Skip"
+    assert role_family(rdb, first) is None
+    assert row(rdb, second)["decision"] is None
+
+
+def test_b_then_a_new_choice_stores_the_new_role_family(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    jsa_review(monkeypatch, capsys, ["a", "b", "a", "1", "", "q"])
+    assert (row(rdb, url)["decision"], role_family(rdb, url)) == ("Apply", ANALYTICS)
+
+
+@pytest.mark.parametrize("bad", ["3", "0", "x", "apply", "12", "-1"])
+def test_invalid_role_family_input_reprompts_and_bare_enter_is_not_a_choice(
+    rdb, two_families, monkeypatch, capsys, bad
+):
+    url = seed(rdb, name(), order=1)
+    code, output = jsa_review(monkeypatch, capsys, ["a", bad, "", "2", "", "q"])
+    assert code == 0
+    assert "Traceback" not in output
+    assert (row(rdb, url)["decision"], role_family(rdb, url)) == ("Apply", DATA)
+
+
+def test_input_that_never_becomes_a_valid_role_family_decides_nothing(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    jsa_review(monkeypatch, capsys, ["a", "", "3", "x"])
+    assert state(rdb, url) == (None, None, None, None)
+
+
+def test_with_one_role_family_nobody_is_asked_and_the_apply_stores_it(
+    rdb, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    # The line after `a` can only be the feedback answer.
+    _, output = jsa_review(monkeypatch, capsys, ["a", "remote only", "q"])
+    assert "none fits" not in output
+    assert row(rdb, url)["feedback"] == "remote only"
+    assert role_family(rdb, url) == ANALYTICS
+
+
+@pytest.mark.parametrize("key", ["s", ":s"])
+def test_a_skip_leaves_no_role_family(rdb, two_families, monkeypatch, capsys, key):
+    url = seed(rdb, name(), order=1)
+    lines = ["s", "", "q"] if key == "s" else ["a", "1", ":s too junior", "q"]
+    jsa_review(monkeypatch, capsys, lines)
+    assert row(rdb, url)["decision"] == "Skip"
+    assert role_family(rdb, url) is None
+
+
+def test_deciding_skip_never_shows_the_role_family_prompt(
+    rdb, two_families, monkeypatch, capsys
+):
+    seed(rdb, name(), order=1)
+    _, output = jsa_review(monkeypatch, capsys, ["s", "", "q"])
+    assert ANALYTICS not in output and DATA not in output
+
+
+def test_flipping_to_skip_with_s_clears_the_role_family_an_apply_had(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    seed(rdb, name(), order=2)
+    # Apply with a role family; then `b` returns to the first posting and flips it.
+    jsa_review(monkeypatch, capsys, ["a", "2", "good", "b", "s", "", "q"])
+    assert (row(rdb, url)["decision"], role_family(rdb, url)) == ("Skip", None)
+
+
+def test_flipping_from_skip_to_apply_asks_the_role_family_before_anything_is_written(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    before_the_answer = []
+    _, output = jsa_review(
+        monkeypatch,
+        capsys,
+        ["s", ":a on second thought", "2", "q"],
+        hooks={2: lambda: before_the_answer.append(state(db.connect(), url))},
+    )
+    assert before_the_answer == [(None, None, None, None)]
+    assert ANALYTICS in output and DATA in output
+    assert row(rdb, url)["decision"] == "Apply"
+    assert row(rdb, url)["feedback"] == "on second thought"
+    assert role_family(rdb, url) == DATA
+
+
+def test_flipping_to_apply_then_none_fits_stores_the_apply_with_none(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    jsa_review(monkeypatch, capsys, ["s", ":a", "n", "q"])
+    assert (row(rdb, url)["decision"], role_family(rdb, url)) == ("Apply", None)
+
+
+@pytest.mark.parametrize("ending", ["ctrl-c", "ctrl-d"])
+def test_quitting_at_the_role_family_prompt_leaves_the_posting_as_it_was(
+    rdb, two_families, monkeypatch, capsys, ending
+):
+    url = seed(rdb, name(), order=1)
+    add_finding(rdb, url)
+    code, output = jsa_review(
+        monkeypatch, capsys, ["a", *([INTERRUPT] if ending == "ctrl-c" else [])]
+    )
+    assert code == 0
+    assert "Traceback" not in output
+    assert state(rdb, url) == (None, None, None, None)
+    assert finding_decisions(rdb, url) == [None]
+
+
+@pytest.mark.parametrize("ending", ["ctrl-c", "ctrl-d"])
+def test_quitting_at_the_feedback_prompt_after_a_role_family_writes_nothing(
+    rdb, two_families, monkeypatch, capsys, ending
+):
+    url = seed(rdb, name(), order=1)
+    code, _ = jsa_review(
+        monkeypatch, capsys, ["a", "1", *([INTERRUPT] if ending == "ctrl-c" else [])]
+    )
+    assert code == 0
+    assert state(rdb, url) == (None, None, None, None)
+
+
+def test_decision_role_family_and_feedback_are_written_together_after_the_last_prompt(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    seen = []
+    # Read 2 is the feedback prompt: the decision and role family are not yet stored.
+    jsa_review(
+        monkeypatch,
+        capsys,
+        ["a", "1", "note", "q"],
+        hooks={2: lambda: seen.append(state(db.connect(), url))},
+    )
+    assert seen == [(None, None, None, None)]
+    assert state(rdb, url)[0] == "Apply"
+    assert state(rdb, url)[1] == "note"
+    assert state(rdb, url)[3] == ANALYTICS
+
+
+def test_a_decision_that_is_flipped_from_a_prior_role_family_shows_enter_keeps_it(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = seed(rdb, name(), order=1)
+    seed(rdb, name(), order=2)
+    # The second pass over the first posting offers Enter, which keeps its role family.
+    _, output = jsa_review(monkeypatch, capsys, ["a", "2", "", "b", "a", "", "", "q"])
+    assert f"Enter keeps {DATA}" in output
+    assert (row(rdb, url)["decision"], role_family(rdb, url)) == ("Apply", DATA)
+
+
+# --- jsa revise ----------------------------------------------------------------------
+
+
+def revise_args(conn, url):
+    return ["--id", str(posting_id(conn, url))]
+
+
+def decided_with(conn, family, decision="Apply"):
+    url = seed(conn, name(), order=1)
+    decide(conn, url, decision, "original note")
+    if family:
+        set_family(conn, url, family)
+    return url
+
+
+def test_revise_asks_the_role_family_of_an_apply_with_enter_keeping_the_current(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = decided_with(rdb, DATA)
+    code, output, _ = jsa_revise(
+        monkeypatch, capsys, revise_args(rdb, url), ["", "", ""]
+    )
+    assert code == 0
+    assert re.search(rf"1\D.*{ANALYTICS}", output)
+    assert re.search(rf"2\D.*{DATA}", output)
+    assert f"Enter keeps {DATA}" in output
+    assert (row(rdb, url)["decision"], role_family(rdb, url)) == ("Apply", DATA)
+
+
+def test_revise_changes_the_role_family_and_the_note_together(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = decided_with(rdb, DATA)
+    jsa_revise(monkeypatch, capsys, revise_args(rdb, url), ["", "1", "better fit"])
+    assert row(rdb, url)["feedback"] == "better fit"
+    assert role_family(rdb, url) == ANALYTICS
+    assert row(rdb, url)["decided_at"] > LONG_AGO
+
+
+def test_revise_n_clears_the_role_family_of_an_apply(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = decided_with(rdb, DATA)
+    jsa_revise(monkeypatch, capsys, revise_args(rdb, url), ["", "n", ""])
+    assert (row(rdb, url)["decision"], role_family(rdb, url)) == ("Apply", None)
+
+
+def test_revise_offers_no_enter_for_an_apply_that_has_no_role_family(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = decided_with(rdb, None)
+    _, output, _ = jsa_revise(
+        monkeypatch, capsys, revise_args(rdb, url), ["", "", "", "2", ""]
+    )
+    assert "Enter keeps" not in output.split("Role famil", 1)[1]
+    assert role_family(rdb, url) == DATA
+
+
+def test_revise_gives_a_role_family_to_an_apply_that_fits_none(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = decided_with(rdb, None)
+    jsa_revise(monkeypatch, capsys, revise_args(rdb, url), ["", "1", ""])
+    assert role_family(rdb, url) == ANALYTICS
+
+
+def test_revise_to_skip_clears_the_role_family_and_asks_none(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = decided_with(rdb, DATA)
+    _, output, _ = jsa_revise(monkeypatch, capsys, revise_args(rdb, url), ["s", ""])
+    assert ANALYTICS not in output
+    assert (row(rdb, url)["decision"], role_family(rdb, url)) == ("Skip", None)
+
+
+def test_revise_from_skip_to_apply_asks_the_role_family(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = decided_with(rdb, None, decision="Skip")
+    jsa_revise(monkeypatch, capsys, revise_args(rdb, url), ["a", "2", "now apply"])
+    assert row(rdb, url)["decision"] == "Apply"
+    assert row(rdb, url)["feedback"] == "now apply"
+    assert role_family(rdb, url) == DATA
+
+
+def test_revise_flipping_to_skip_at_the_feedback_prompt_clears_the_role_family(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = decided_with(rdb, DATA)
+    jsa_revise(monkeypatch, capsys, revise_args(rdb, url), ["", "", ":s nope"])
+    assert (row(rdb, url)["decision"], role_family(rdb, url)) == ("Skip", None)
+
+
+def test_revise_b_at_the_role_family_prompt_returns_to_the_decision_prompt(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = decided_with(rdb, DATA)
+    jsa_revise(monkeypatch, capsys, revise_args(rdb, url), ["", "b", "s", ""])
+    assert (row(rdb, url)["decision"], role_family(rdb, url)) == ("Skip", None)
+
+
+@pytest.mark.parametrize("ending", ["ctrl-c", "ctrl-d"])
+def test_revise_quitting_at_the_role_family_prompt_keeps_decision_family_and_time(
+    rdb, two_families, monkeypatch, capsys, ending
+):
+    url = decided_with(rdb, DATA)
+    jsa_revise(
+        monkeypatch,
+        capsys,
+        revise_args(rdb, url),
+        ["", *([INTERRUPT] if ending == "ctrl-c" else [])],
+    )
+    assert state(rdb, url) == ("Apply", "original note", LONG_AGO, DATA)
+
+
+def test_revise_reprompts_on_an_invalid_role_family(
+    rdb, two_families, monkeypatch, capsys
+):
+    url = decided_with(rdb, DATA)
+    jsa_revise(monkeypatch, capsys, revise_args(rdb, url), ["", "9", "x", "1", ""])
+    assert role_family(rdb, url) == ANALYTICS
+
+
+def test_revise_with_one_role_family_asks_nothing_and_stores_it(
+    rdb, monkeypatch, capsys
+):
+    url = decided_with(rdb, None)
+    # The line after the decision can only be the feedback answer.
+    jsa_revise(monkeypatch, capsys, revise_args(rdb, url), ["", "new note"])
+    assert row(rdb, url)["feedback"] == "new note"
+    assert role_family(rdb, url) == ANALYTICS
