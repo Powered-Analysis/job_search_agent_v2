@@ -8,6 +8,7 @@ temporary directory.
 import base64
 import json
 import logging
+import shutil
 import sys
 from email.message import EmailMessage
 from pathlib import Path
@@ -15,7 +16,7 @@ from pathlib import Path
 import httpx
 import pytest
 from conftest import REPO_ROOT
-from profile_helpers import copy_example
+from profile_helpers import ROLE_FAMILIES, copy_example
 from test_add import (
     LONG_AGO,
     count,
@@ -27,11 +28,12 @@ from test_add import (
     page_key,
     posting,
     seed_decided,
+    stored_role_family,
 )
 from test_generate import Agent
 
 from jsa import agent_loop, cli, db
-from jsa.inbox import parse_posting, sender_allowed
+from jsa.inbox import addressed_role_family, parse_posting, sender_allowed
 from jsa.urls import canonicalize_url
 
 LOCAL_DATABASE_HOSTS = {"127.0.0.1", "localhost"}
@@ -169,11 +171,14 @@ class FakeGmail:
         html: str | None = None,
         sender: str = f"Jordan Example <{SENDER}>",
         to: str = PLAIN_ADDRESS,
+        cc: str | None = None,
         results: list[str] | str | None = GOOD_RESULTS,
     ) -> None:
         mime = EmailMessage()
         mime["From"] = sender
         mime["To"] = to
+        if cc is not None:
+            mime["Cc"] = cc
         mime["Subject"] = "a job"
         if text is not None:
             mime.set_content(text)
@@ -1014,3 +1019,236 @@ def test_an_emailed_url_matching_an_included_row_leaves_its_setting_alone(
     assert run_inbox(monkeypatch) == 0
     assert setting(conn, url) == 1
     assert posting(conn, url)["decided_at"] == LONG_AGO
+
+
+# --- the address names the role family (issue #196; PRD 03 "The address names the role family") ---
+
+ANALYTICS_ADDRESS = "jobs.mailbox+analytics-engineering@example.net"
+ANALYTICS, DATA_ANALYSIS = ROLE_FAMILIES
+
+
+@pytest.mark.parametrize(
+    ("addresses", "expected"),
+    [
+        (["jobs+data-analysis@example.net"], DATA_ANALYSIS),
+        (["jobs+DATA-Analysis@example.net"], DATA_ANALYSIS),
+        (["jobs@example.net"], None),
+        (["jobs+nonsense@example.net"], None),
+        (["jobs+data@example.net"], None),
+        (["data-analysis@example.net"], None),
+        ([], None),
+        (
+            [
+                "jobs+analytics-engineering@example.net",
+                "jobs+data-analysis@example.net",
+            ],
+            ANALYTICS,
+        ),
+        (
+            ["jobs+nonsense@example.net", "jobs+data-analysis@example.net"],
+            DATA_ANALYSIS,
+        ),
+        (["jobs@example.net", "jobs+data-analysis@example.net"], DATA_ANALYSIS),
+    ],
+    ids=[
+        "tag",
+        "ignoring-case",
+        "plain-address",
+        "unknown-tag",
+        "prefix-of-a-tag",
+        "tag-without-plus",
+        "no-addresses",
+        "first-match-wins",
+        "unmatched-address-skipped",
+        "plain-address-skipped",
+    ],
+)
+def test_the_addressed_role_family_is_the_first_address_with_a_matching_tag(
+    addresses, expected
+):
+    assert addressed_role_family(addresses, ROLE_FAMILIES) == expected
+
+
+def test_the_tag_rule_is_the_one_prd_03_defines():
+    names = ["Customer Enablement", "Data Science"]
+    assert (
+        addressed_role_family(["jobs+customer-enablement@example.net"], names)
+        == "Customer Enablement"
+    )
+    assert addressed_role_family(["jobs+data_science@example.net"], names) is None
+
+
+def keep_only(profile, name):
+    for family in ROLE_FAMILIES:
+        if family != name:
+            shutil.rmtree(profile / "role_families" / family)
+
+
+def role_family_of(conn, url):
+    return stored_role_family(conn, url)
+
+
+@pytest.mark.parametrize(
+    "text", [None, DESCRIPTION], ids=["no-description", "description"]
+)
+@pytest.mark.parametrize(
+    "address",
+    [PLAIN_ADDRESS, "jobs.mailbox+no-such-family@example.net"],
+    ids=["plain-address", "unmatched-tag"],
+)
+def test_without_a_matching_tag_and_with_two_role_families_the_posting_is_added_with_none_and_labeled_needs_family(
+    db_url, conn, gmail, web, agent, monkeypatch, address, text
+):
+    url = bare_posting(web)
+    body = f"{url}\n" if text is None else f"{url}\n\n{text}\n"
+    gmail.add("m1", 1000, body, to=address)
+    assert run_inbox(monkeypatch) == 0
+    row = posting(conn, url)
+    assert row["decision"] == "Apply"
+    assert row["search_agent"] == "manual"
+    assert role_family_of(conn, url) is None
+    assert row["jd_markdown"] == text
+    assert gmail.outcome_labels("m1") == ["jsa/needs-family"]
+    assert "jsa/needs-family" in gmail.label_ids()
+    assert not gmail.in_inbox("m1")
+    assert agent.calls == []
+
+
+@pytest.mark.parametrize(
+    ("to", "cc", "expected"),
+    [
+        (DATA_ANALYSIS_ADDRESS, None, DATA_ANALYSIS),
+        ("jobs.mailbox+Data-Analysis@example.net", None, DATA_ANALYSIS),
+        (PLAIN_ADDRESS, DATA_ANALYSIS_ADDRESS, DATA_ANALYSIS),
+        (f"other@example.org, {ANALYTICS_ADDRESS}", None, ANALYTICS),
+        (ANALYTICS_ADDRESS, DATA_ANALYSIS_ADDRESS, ANALYTICS),
+        (PLAIN_ADDRESS, f"x@example.org, {DATA_ANALYSIS_ADDRESS}", DATA_ANALYSIS),
+    ],
+    ids=["to", "to-ignoring-case", "cc", "second-to", "to-before-cc", "second-cc"],
+)
+def test_a_matching_tag_in_to_or_cc_sets_the_role_family_of_a_new_row(
+    db_url, conn, gmail, web, monkeypatch, to, cc, expected
+):
+    url = bare_posting(web)
+    gmail.add("m1", 1000, f"{url}\n", to=to, cc=cc)
+    assert run_inbox(monkeypatch) == 0
+    assert role_family_of(conn, url) == expected
+    assert gmail.outcome_labels("m1") == ["jsa/needs-jd"]
+
+
+def test_a_tagged_message_with_no_description_is_needs_jd_not_needs_family(
+    db_url, conn, gmail, web, monkeypatch
+):
+    url = bare_posting(web)
+    gmail.add("m1", 1000, f"{url}\n", to=DATA_ANALYSIS_ADDRESS)
+    assert run_inbox(monkeypatch) == 0
+    assert gmail.outcome_labels("m1") == ["jsa/needs-jd"]
+    assert posting(conn, url)["jd_markdown"] is None
+
+
+@pytest.mark.parametrize("name", ROLE_FAMILIES)
+@pytest.mark.parametrize(
+    "address",
+    [PLAIN_ADDRESS, "jobs.mailbox+no-such-family@example.net"],
+    ids=["plain-address", "unmatched-tag"],
+)
+def test_with_exactly_one_role_family_a_message_without_a_matching_tag_uses_it(
+    db_url, conn, gmail, web, profile, monkeypatch, name, address
+):
+    keep_only(profile, name)
+    url = bare_posting(web)
+    gmail.add("m1", 1000, f"{url}\n", to=address)
+    assert run_inbox(monkeypatch) == 0
+    assert role_family_of(conn, url) == name
+    assert gmail.outcome_labels("m1") == ["jsa/needs-jd"]
+
+
+def test_a_matching_tag_is_used_even_when_it_is_not_the_only_role_family(
+    db_url, conn, gmail, web, monkeypatch
+):
+    url = bare_posting(web)
+    gmail.add("m1", 1000, f"{url}\n", to=ANALYTICS_ADDRESS)
+    assert run_inbox(monkeypatch) == 0
+    assert role_family_of(conn, url) == ANALYTICS
+
+
+@pytest.mark.parametrize(
+    "address",
+    [DATA_ANALYSIS_ADDRESS, ANALYTICS_ADDRESS, PLAIN_ADDRESS],
+    ids=["other-tag", "same-tag", "plain-address"],
+)
+def test_email_never_changes_a_role_family_an_existing_row_has(
+    db_url, conn, gmail, web, monkeypatch, address
+):
+    url = bare_posting(web)
+    seed_decided(conn, url, "Apply", role_family=ANALYTICS)
+    gmail.add("m1", 1000, f"{url}\n", to=address)
+    assert run_inbox(monkeypatch) == 0
+    assert role_family_of(conn, url) == ANALYTICS
+    assert gmail.outcome_labels("m1") != ["jsa/needs-family"]
+
+
+def test_an_existing_apply_row_with_no_role_family_takes_the_tags(
+    db_url, conn, gmail, web, monkeypatch
+):
+    url = bare_posting(web)
+    seed_decided(conn, url, "Apply")
+    gmail.add("m1", 1000, f"{url}\n", to=DATA_ANALYSIS_ADDRESS)
+    assert run_inbox(monkeypatch) == 0
+    assert role_family_of(conn, url) == DATA_ANALYSIS
+    assert count(conn, "postings", url) == 1
+    assert gmail.outcome_labels("m1") == ["jsa/needs-jd"]
+
+
+def test_an_existing_apply_row_with_no_role_family_stays_without_one_on_the_plain_address(
+    db_url, conn, gmail, web, monkeypatch
+):
+    url = bare_posting(web)
+    seed_decided(conn, url, "Apply")
+    gmail.add("m1", 1000, f"{url}\n")
+    assert run_inbox(monkeypatch) == 0
+    assert role_family_of(conn, url) is None
+    assert gmail.outcome_labels("m1") == ["jsa/needs-family"]
+
+
+def test_a_skipped_posting_emailed_to_a_tag_is_promoted_with_the_tags_role_family(
+    db_url, conn, gmail, web, monkeypatch
+):
+    url = bare_posting(web)
+    seed_decided(conn, url, "Skip", feedback="too junior")
+    gmail.add("m1", 1000, f"{url}\n", to=ANALYTICS_ADDRESS)
+    assert run_inbox(monkeypatch) == 0
+    row = posting(conn, url)
+    assert row["decision"] == "Apply"
+    assert row["fit_feedback"] == "too junior"
+    assert role_family_of(conn, url) == ANALYTICS
+
+
+def test_a_skipped_posting_emailed_to_the_plain_address_is_promoted_with_no_role_family(
+    db_url, conn, gmail, web, monkeypatch
+):
+    url = bare_posting(web)
+    seed_decided(conn, url, "Skip")
+    gmail.add("m1", 1000, f"{url}\n")
+    assert run_inbox(monkeypatch) == 0
+    row = posting(conn, url)
+    assert row["decision"] == "Apply"
+    assert role_family_of(conn, url) is None
+    assert gmail.outcome_labels("m1") == ["jsa/needs-family"]
+
+
+def test_a_needs_family_message_requeued_after_the_row_gets_a_role_family_keeps_it(
+    db_url, conn, gmail, web, monkeypatch
+):
+    url = bare_posting(web)
+    gmail.add("m1", 1000, f"{url}\n")
+    run_inbox(monkeypatch)
+    assert gmail.outcome_labels("m1") == ["jsa/needs-family"]
+    conn.execute(
+        "UPDATE postings SET role_family = ? WHERE canonical_url = ?",
+        (ANALYTICS, canonicalize_url(url)),
+    )
+    gmail.requeue("m1")
+    assert run_inbox(monkeypatch) == 0
+    assert role_family_of(conn, url) == ANALYTICS
+    assert count(conn, "postings", url) == 1

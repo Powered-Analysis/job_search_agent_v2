@@ -176,6 +176,17 @@ nothing else. It lives in its own Fly app, so the search machine never holds a G
      | fly secrets import --stage -a <inbox app>
    ```
 
+7. Save one phone contact per role family, so you pick the role family from your contact list. Gmail
+   delivers `jobs+<tag>@gmail.com` to the jobs mailbox, where `<tag>` is the role family's name in
+   lowercase with each run of other characters turned into one `-` (`Data Analysis` becomes
+   `jobs+data-analysis@gmail.com`). Email a posting's link, and optionally its pasted description,
+   to that contact. The first To or Cc address with a matching tag sets the role family of a new
+   posting, or of an existing Apply posting that has none; email never changes a role family a
+   posting already has. With no matching tag, a profile with one role family uses it. With more, the
+   posting is added as Apply with no role family and the message is labeled `jsa/needs-family`;
+   `jsa revise --id <id>` gives it one. A role family with no description in the posting or the
+   email is labeled `jsa/needs-jd` instead; a message missing both gets `jsa/needs-family`.
+
 ### 8. Deploy
 
 From the project root:
