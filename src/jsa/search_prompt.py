@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from jsa.assemble import Slot, app_template, assemble
-from jsa.profile import SearchConfig, profile_dir
+from jsa.profile import RESUME_SKILLS, SearchConfig, profile_dir, resume_skills
 
 SEARCH_DIR = "search"
 # Slot name -> (fragment file, required); the one definition of the fragments' homes.
@@ -87,4 +87,10 @@ def assemble_search_prompt_for(
             else None
         )
         slots[name] = _read_fragment(name, filename, replacement)
+    skills = resume_skills()
+    slots["RESUME_SKILLS"] = Slot(
+        skills.read_text(encoding="utf-8") if skills else None,
+        str(profile_dir() / RESUME_SKILLS),
+        required=False,
+    )
     return assemble(app_template("search.md"), slots)
