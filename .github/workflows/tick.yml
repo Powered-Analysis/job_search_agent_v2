@@ -33,6 +33,9 @@ concurrency:
 env:
   BASH_DEFAULT_TIMEOUT_MS: "600000"
   BASH_MAX_TIMEOUT_MS: "1800000"
+  # A memory note is lost with the runner, yet the agent believes it will be
+  # read; GitHub is the team's only state (Orchestration).
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1"
 
 jobs:
   pm:
