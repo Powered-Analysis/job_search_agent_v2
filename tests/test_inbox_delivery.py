@@ -550,14 +550,17 @@ def test_the_packet_is_built_from_the_postings_role_family_and_tracked_on_its_ta
 
 
 @pytest.mark.parametrize(
-    "role_family", [None, "Retired Family"], ids=["none", "unknown"]
+    ("role_family", "label"),
+    [(None, "jsa/needs-family"), ("Retired Family", "jsa/failed")],
+    ids=["none", "unknown"],
 )
-def test_a_posting_whose_role_family_the_profile_lacks_is_labeled_failed_and_stays_untracked(
-    db_url, conn, env, gmail, world, agent, requests, monkeypatch, role_family
+def test_a_posting_without_a_usable_role_family_is_labeled_and_stays_untracked(
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch, role_family, label
 ):
+    """PRD 03: no role family (plain address, several families) is `needs-family`; one the profile lacks is `failed`."""
     posting_id = email(gmail, conn, role_family=role_family)
     run_inbox(monkeypatch)
-    assert gmail.outcome_labels("m1") == ["jsa/failed"]
+    assert gmail.outcome_labels("m1") == [label]
     assert not gmail.in_inbox("m1")
     assert agent.calls == []
     assert world.drive_calls("create") == [] and world.sheet_calls() == []
