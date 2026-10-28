@@ -1,0 +1,2 @@
+- Postings where the work is only to build dashboards on request.
+- Roles on a team that exists to serve one narrow function, such as finance reporting.

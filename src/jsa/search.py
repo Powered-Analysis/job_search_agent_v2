@@ -51,6 +51,7 @@ RUNNERS: dict[str, Callable[[httpx.Client, SearchConfig], Runner]] = {
 class Summary:
     """The run summary, in the order PRD 01 lists it."""
 
+    search_family: str
     agent: str
     model: str | None = None
     effort: str | None = None
@@ -103,13 +104,19 @@ def _process(
     conn: db.Connection,
     client: httpx.Client,
     config: SearchConfig,
+    search_family: str,
     agent: str,
     window_hours: int,
     now: datetime,
     result: RunnerResult,
 ) -> tuple[Summary, list[str]]:
     summary = Summary(
-        agent, result.model, result.effort, config.verification.mode, result.cost
+        search_family,
+        agent,
+        result.model,
+        result.effort,
+        config.verification.mode,
+        result.cost,
     )
     parsed = parse_search_output(result.text)
     summary.malformed = parsed.malformed
@@ -132,6 +139,7 @@ def _process(
         db.record_finding(
             conn,
             run_date=run_date,
+            search_family=search_family,
             agent=agent,
             canonical_url=canonical,
             window_hours=window_hours,
@@ -187,6 +195,7 @@ def _process(
 
 def search(
     client: httpx.Client,
+    search_family: str,
     agent: str,
     window_hours: int,
     *,
@@ -204,6 +213,7 @@ def search(
         conn,
         trigger=trigger,
         run_date=now.astimezone(config.tz).date().isoformat(),
+        search_family=search_family,
         agent=agent,
         window_hours=window_hours,
         mode=config.verification.mode,
@@ -212,13 +222,13 @@ def search(
     result: RunnerResult | None = None
     try:
         # Setup failures (e.g. a missing API key) fall inside the try so the run row records them (PRD 01).
-        prompt = assemble_search_prompt(config, window_hours, now)
+        prompt = assemble_search_prompt(config, search_family, window_hours, now)
         runner = RUNNERS[agent](client, config)
         result = runner.run(prompt)
         # The runner takes minutes, long enough for the server to drop an idle connection.
         conn = db.connect()
         summary, warnings = _process(
-            conn, client, config, agent, window_hours, now, result
+            conn, client, config, search_family, agent, window_hours, now, result
         )
     except Exception as error:
         conn = db.connect()

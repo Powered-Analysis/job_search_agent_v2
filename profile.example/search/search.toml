@@ -11,16 +11,17 @@ run_at = "07:00"
 results_per_run = 10
 
 # Each weekday lists its searches in run order. A day left out runs nothing.
+# search_family names a folder under search/ (not "shared"), whose fragments the search uses.
 # agent is "perplexity", "claude", or "gemini"; window_hours looks back from the run.
 [schedule]
 monday    = [
-  { agent = "perplexity", window_hours = 72 },
-  { agent = "claude", window_hours = 72 },
+  { search_family = "analytics", agent = "perplexity", window_hours = 72 },
+  { search_family = "charter", agent = "claude", window_hours = 72 },
 ]
-tuesday   = [{ agent = "perplexity", window_hours = 24 }]
-wednesday = [{ agent = "claude", window_hours = 24 }]
-thursday  = [{ agent = "perplexity", window_hours = 24 }]
-friday    = [{ agent = "gemini", window_hours = 24 }]
+tuesday   = [{ search_family = "analytics", agent = "perplexity", window_hours = 24 }]
+wednesday = [{ search_family = "charter", agent = "claude", window_hours = 24 }]
+thursday  = [{ search_family = "analytics", agent = "perplexity", window_hours = 24 }]
+friday    = [{ search_family = "charter", agent = "gemini", window_hours = 24 }]
 
 [runners.claude]
 # Any Claude model that accepts an effort setting will run: the pipeline checks every posting's

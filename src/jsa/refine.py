@@ -14,11 +14,14 @@ from jsa import agent_loop, db
 from jsa.assemble import Slot, app_template, assemble
 from jsa.errors import JsaError
 from jsa.profile import (
+    SEARCH_DIR,
+    SHARED_FAMILY,
     SearchConfig,
     load_config,
     load_search_config,
     profile_dir,
     refine_settings,
+    search_families,
 )
 from jsa.search_prompt import (
     FRAGMENTS,
@@ -88,6 +91,14 @@ def render_ground_truth(rows: Sequence[db.DecidedPosting]) -> str:
     return "\n\n".join(blocks)
 
 
+def _context_family() -> str:
+    """The search family whose prompt the refiner is shown, and whose fragments it edits live in `shared/`."""
+    families = search_families()
+    if not families:
+        raise JsaError(f"{profile_dir() / SEARCH_DIR} holds no search family.")
+    return families[0]
+
+
 def assemble_refine_prompt(
     ground_truth: str, history: str, search_config: SearchConfig
 ) -> str:
@@ -95,7 +106,7 @@ def assemble_refine_prompt(
         "GROUND_TRUTH": Slot(ground_truth, "the decisions in scope"),
         "HISTORY": Slot(history, "the decided history"),
         "SEARCH_PROMPT": Slot(
-            assemble_search_prompt_for(search_config, WINDOW_NOTE),
+            assemble_search_prompt_for(search_config, _context_family(), WINDOW_NOTE),
             "the assembled search prompt",
         ),
     }
@@ -212,7 +223,7 @@ def refine(*, dry_run: bool) -> None:
     prompt = assemble_refine_prompt(
         render_ground_truth(scope), render_history(decided), load_search_config()
     )
-    live = {name: read_fragment(name) for name in REFINABLE}
+    live = {name: read_fragment(SHARED_FAMILY, name) for name in REFINABLE}
     print(f"Refining from {len(scope)} decided postings.")
     rationale, proposed = _run_in_scratch(prompt, live)
     views = {
@@ -258,7 +269,11 @@ def _check_resolved(resolved: Mapping[str, str], directory: Path) -> None:
         )
     try:
         assemble_search_prompt_for(
-            load_search_config(), WINDOW_NOTE, directory, replaceable=REFINABLE
+            load_search_config(),
+            _context_family(),
+            WINDOW_NOTE,
+            directory,
+            replaceable=REFINABLE,
         )
     except JsaError as error:
         raise JsaError(
@@ -277,7 +292,7 @@ def _check_unedited(directory: Path) -> None:
     edited = [
         name
         for name, hashed in built_from.items()
-        if _hash(read_fragment(name)) != hashed
+        if _hash(read_fragment(SHARED_FAMILY, name)) != hashed
     ]
     if edited:
         raise JsaError(
@@ -296,7 +311,7 @@ def accept() -> None:
     _check_resolved(resolved, directory)
     _check_unedited(directory)
     for name, text in resolved.items():
-        live = read_fragment(name) or ""
+        live = read_fragment(SHARED_FAMILY, name) or ""
         diff = list(
             difflib.unified_diff(
                 live.splitlines(),
@@ -307,7 +322,7 @@ def accept() -> None:
             )
         )
         print("\n".join(diff) if diff else f"{name}: no change")
-        fragment_path(name).write_text(text, encoding="utf-8")
+        fragment_path(SHARED_FAMILY, name).write_text(text, encoding="utf-8")
     shutil.rmtree(directory)
     print("Proposal accepted. Run `jsa deploy` to ship the change to the cloud.")
 
