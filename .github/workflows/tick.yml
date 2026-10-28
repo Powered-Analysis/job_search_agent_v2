@@ -410,6 +410,7 @@ jobs:
       - name: SDET commits stay inside tests/
         if: needs.sdet.outputs.work == 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           BEFORE: ${{ needs.sdet.outputs.before }}
         run: bash scripts/sdet_scope.sh "$BEFORE"
       - name: Reconcile, discharge check, invariants
