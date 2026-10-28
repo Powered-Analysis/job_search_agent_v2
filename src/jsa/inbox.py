@@ -30,6 +30,7 @@ from jsa.profile import (
     packet_sources,
     redline_settings,
     role_family_names,
+    role_family_tag,
     tracker_spreadsheet_id,
     with_role_family,
 )
@@ -38,6 +39,7 @@ from jsa.tracker import today
 log = logging.getLogger(__name__)
 
 TRACKED = "jsa/tracked"
+NEEDS_FAMILY = "jsa/needs-family"
 NEEDS_JD = "jsa/needs-jd"
 NEEDS_FIELDS = "jsa/needs-fields"
 REFUSED = "jsa/refused"
@@ -106,6 +108,29 @@ def parse_posting(raw: bytes) -> Posting:
     url = found[0].rstrip(_URL_TRAILING)
     rest = (text[: found.start()] + text[found.start() + len(url) :]).strip()
     return Posting(url, rest if len(rest) >= MIN_DESCRIPTION_CHARS else None)
+
+
+def recipient_addresses(raw: bytes) -> list[str]:
+    """The message's To addresses, then its Cc addresses, in order. Pure (XC-9)."""
+    message = email.message_from_bytes(raw, policy=email.policy.default)
+    return [
+        address
+        for header in ("To", "Cc")
+        for _, address in email.utils.getaddresses(
+            [str(value) for value in message.get_all(header, [])]
+        )
+    ]
+
+
+def addressed_role_family(addresses: Sequence[str], names: Sequence[str]) -> str | None:
+    """The role family named by the first address whose `+tag` is a role family's tag, ignoring case, else None. Pure (XC-9)."""
+    tags = {role_family_tag(name): name for name in names}
+    for address in addresses:
+        local, _, _ = address.rpartition("@")
+        _, plus, tag = local.partition("+")
+        if plus and (name := tags.get(tag.lower())):
+            return name
+    return None
 
 
 class Mailbox:
@@ -220,18 +245,36 @@ def _process(
         raise JsaError("could not read the message's headers")
     if not sender_allowed(headers, senders):
         return IGNORED
-    posting = parse_posting(mailbox.raw(message_id))
+    raw = mailbox.raw(message_id)
+    posting = parse_posting(raw)
     if posting.url is None:
         return REFUSED
+    names = role_family_names()
+    addressed = addressed_role_family(recipient_addresses(raw), names)
+
+    def role_family(current: str | None) -> str | None:
+        """Email never changes a role family a row has; with no tag, the only role family, else none."""
+        if current is not None:
+            return current
+        if addressed is not None:
+            return addressed
+        return names[0] if len(names) == 1 else None
+
     try:
         outcome = add_posting(
-            client, posting.url, date_posted=None, description=posting.description
+            client,
+            posting.url,
+            date_posted=None,
+            description=posting.description,
+            role_family=role_family,
         )
     except AggregatorUrlError:
         return REFUSED
     except MissingFieldsError:
         return NEEDS_FIELDS
     log.info("message %s: posting %s is Apply", message_id, outcome.posting_id)
+    if outcome.role_family is None:
+        return NEEDS_FAMILY
     return _deliver(outcome.posting_id, has_jd=outcome.has_jd)
 
 
