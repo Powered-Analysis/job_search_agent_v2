@@ -1,6 +1,7 @@
 """PRD 01 "Search prompt contract" (XC-13): the one prompt every runner sends."""
 
 import re
+import shutil
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -454,3 +455,55 @@ def test_a_live_required_fragment_that_is_missing_is_still_named_by_its_live_pat
     with pytest.raises(JsaError) as raised:
         assembled_with(replacements)
     assert str(profile / "search" / f"{name}.md") in str(raised.value)
+
+
+# --- the image's layout (issue #198; PRD 06 Fly image) -------------------------
+
+
+def skills_section(prompt):
+    """The text under the prompt's Skills heading, up to the next heading."""
+    return prompt.split("\n## Skills\n", 1)[1].split("\n## ", 1)[0]
+
+
+@pytest.fixture
+def image_profile(profile):
+    """The profile as the image carries it: only `search/` and `resume_skills.md`."""
+    for entry in profile.iterdir():
+        if entry.name not in ("search", "resume_skills.md"):
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+    return profile
+
+
+def test_a_profile_holding_only_search_and_the_skills_list_puts_the_list_under_skills(
+    image_profile,
+):
+    (image_profile / "resume_skills.md").write_text(
+        "UNIQUE-SKILL-ALPHA\nUNIQUE-SKILL-BETA\n", encoding="utf-8"
+    )
+    assert {p.name for p in image_profile.iterdir()} == {"search", "resume_skills.md"}
+    prompt = assembled()
+    section = skills_section(prompt)
+    assert "UNIQUE-SKILL-ALPHA\nUNIQUE-SKILL-BETA" in section
+    assert OPTIONAL_PLACEHOLDER not in section
+    assert "{{" not in prompt
+
+
+def test_the_image_layout_prompt_is_the_one_a_local_run_sends(profile):
+    local = assembled()
+    for entry in profile.iterdir():
+        if entry.name not in ("search", "resume_skills.md"):
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+    assert assembled() == local
+
+
+def test_without_the_skills_list_the_skills_section_gets_the_placeholder_note(
+    image_profile,
+):
+    (image_profile / "resume_skills.md").unlink()
+    assert OPTIONAL_PLACEHOLDER in skills_section(assembled())

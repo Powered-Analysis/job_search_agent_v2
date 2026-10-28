@@ -509,6 +509,24 @@ def test_the_build_makes_one_model_call_the_redline(
     assert BASE_LINE in agent.prompts[0]
 
 
+def test_the_redline_on_the_inbox_machine_reads_the_skills_list_from_the_image(
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
+):
+    """The machine's profile holds the image's `search/` and skills list plus the machine files, and nothing else."""
+    profile, _ = env
+    (profile / "resume_skills.md").write_text(
+        "INBOX-SKILL-ALPHA\nINBOX-SKILL-BETA\n", encoding="utf-8"
+    )
+    machine = {"search", "resume_skills.md", "config.toml", "role_families"}
+    for entry in profile.iterdir():
+        if entry.name not in machine:
+            shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+    email(gmail, conn)
+    run_inbox(monkeypatch)
+    (prompt,) = agent.prompts
+    assert {"INBOX-SKILL-ALPHA", "INBOX-SKILL-BETA"} <= set(prompt.splitlines())
+
+
 def test_the_delivered_packet_is_what_jsa_generate_id_builds_locally(
     db_url, conn, env, gmail, world, agent, requests, monkeypatch, capsys
 ):
