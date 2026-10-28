@@ -2080,6 +2080,38 @@ def test_dry_run_lists_the_cover_letter_among_the_inbox_machine_files(
     assert output.index("cover_letter.docx") > last_image_file
 
 
+def test_dry_run_lists_config_and_every_role_familys_resume_and_cover_letter(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    for family in ROLE_FAMILIES:
+        (family_dir(profile, family) / "cover_letter.docx").write_bytes(b"A LETTER")
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert launched_nothing(calls(log))
+    last_image_file = max(output.index(path) for path in shipped_search_files(profile))
+    for name in ("config.toml", "resume.docx", "cover_letter.docx"):
+        for family in ROLE_FAMILIES:
+            path = family_file(name, family) if name != "config.toml" else name
+            assert output.index(path) > last_image_file
+
+
+def test_a_resume_and_cover_letter_at_the_top_of_the_profile_never_ship(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    (profile / "resume.docx").write_bytes(b"TOP LEVEL RESUME")
+    (profile / "cover_letter.docx").write_bytes(b"TOP LEVEL LETTER")
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert str(profile / "resume.docx") not in output
+    assert str(profile / "cover_letter.docx") not in output
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    (launch,) = pick_machine(on_app(calls(log), INBOX_APP), "run")
+    assert shipped(launch) == inbox_machine_files(profile)
+
+
 def test_dry_run_without_a_cover_letter_lists_none(inbox, monkeypatch, capsys):
     _, _ = inbox
     code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")

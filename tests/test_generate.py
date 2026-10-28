@@ -1173,6 +1173,106 @@ def test_each_packet_starts_from_its_own_role_familys_files_and_tracks_on_its_ta
     assert ids_to_tabs == {a: f"'{first}'", b: f"'{second}'"}
 
 
+def test_a_missing_tab_fails_that_row_naming_the_tab_and_the_others_continue(
+    gdb, env, gws, monkeypatch, capsys
+):
+    absent = ROLE_FAMILIES[1]
+    monkeypatch.setenv("STUB_MISSING_TABS", absent)
+    stranded = seed(gdb, company="Stranded Labs", role_family=absent)
+    served = seed(gdb, company="Served Labs")
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert f"failed: posting {stranded}:" in output
+    assert absent in output
+    assert column(gdb, stranded, "added_to_tracker") == 0
+    assert column(gdb, served, "added_to_tracker") == 1
+
+
+def test_a_row_is_marked_tracked_only_after_a_confirmed_append(
+    gdb, env, gws, monkeypatch, capsys
+):
+    posting_id = seed(gdb)
+    monkeypatch.setenv("STUB_FAIL_IDS", str(posting_id))
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert column(gdb, posting_id, "added_to_tracker") == 0
+    monkeypatch.delenv("STUB_FAIL_IDS")
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert column(gdb, posting_id, "added_to_tracker") == 1
+
+
+def test_a_resume_and_cover_letter_at_the_top_of_the_profile_are_never_read(
+    gdb, env, gws, monkeypatch, capsys
+):
+    profile, packets = env
+    (profile / "resume.docx").write_bytes(b"TOP LEVEL RESUME")
+    (profile / "cover_letter.docx").write_bytes(b"TOP LEVEL LETTER")
+    seed(gdb)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    assert (packets / PLAIN / RESUME_COPY).read_bytes() == (
+        family_dir(profile) / "resume.docx"
+    ).read_bytes()
+    assert not [name for name in entries(packets / PLAIN) if "CoverLetter" in name]
+
+
+# --- a changed role family never adds files to an existing packet (PRD 04 "Edge cases") ---
+
+OLD_FAMILY, NEW_FAMILY = ROLE_FAMILIES
+LETTER_COPY_PDF = COVER_LETTER_COPY.replace(".docx", ".pdf")
+
+
+def packet_of_the_old_family(profile, packets, *, letter=None):
+    """A packet as the old role family left it, with the user's own edit in the resume copy."""
+    folder = packets / PLAIN
+    folder.mkdir(parents=True)
+    (folder / "job_posting.md").write_text(JD, encoding="utf-8")
+    shutil.copy(family_dir(profile, OLD_FAMILY) / "resume.docx", folder / RESUME_COPY)
+    edit_copy(folder / RESUME_COPY, "MY OWN EDIT")
+    if letter:
+        (folder / letter).write_bytes(b"THE OLD FAMILYS LETTER")
+    return folder
+
+
+@pytest.mark.parametrize(
+    "old_letter, new_letter",
+    [
+        (None, "cover_letter.docx"),
+        (LETTER_COPY_PDF, "cover_letter.docx"),
+        (None, "cover_letter.pdf"),
+    ],
+    ids=["old-had-none", "old-was-a-pdf-new-is-a-docx", "old-had-none-new-is-a-pdf"],
+)
+@pytest.mark.parametrize("by_id", [False, True], ids=["queue", "id"])
+def test_a_changed_role_family_adds_neither_its_resume_nor_its_cover_letter_to_an_existing_packet(
+    gdb, env, by_id, old_letter, new_letter, monkeypatch, capsys
+):
+    profile, packets = env
+    (family_dir(profile, NEW_FAMILY) / new_letter).write_bytes(b"NEW FAMILY LETTER")
+    document = docx.Document()
+    document.add_paragraph("NEW FAMILY BASE LINE")
+    document.save(family_dir(profile, NEW_FAMILY) / "resume.docx")
+    posting_id = seed(gdb, role_family=NEW_FAMILY)
+    folder = packet_of_the_old_family(profile, packets, letter=old_letter)
+    before = {name: (folder / name).read_bytes() for name in entries(folder)}
+    code, _ = jsa_generate(
+        monkeypatch, capsys, *(["--id", posting_id] if by_id else [])
+    )
+    assert code == 0
+    after = entries(folder)
+    assert after - set(before) <= {RESUME_PDF, REDLINE_EDITS}
+    assert {name for name in after if "CoverLetter" in name} == (
+        {old_letter} if old_letter else set()
+    )
+    assert (folder / RESUME_COPY).read_bytes() == before[RESUME_COPY]
+    for name in after:
+        assert b"NEW FAMILY LETTER" not in (folder / name).read_bytes()
+        assert b"NEW FAMILY BASE LINE" not in (folder / name).read_bytes()
+    if old_letter:
+        assert (folder / old_letter).read_bytes() == before[old_letter]
+
+
 def test_the_command_is_registered_with_id_and_dry_run(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["jsa", "generate", "--help"])
     with pytest.raises(SystemExit) as stopped:
