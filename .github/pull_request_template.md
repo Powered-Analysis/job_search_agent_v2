@@ -23,3 +23,7 @@ Closes #<issue-number>
 ## Workarounds
 
 <!-- Each with why the root cause can't be fixed in this issue, or "none". -->
+
+## Findings outside this issue
+
+<!-- One line each, not investigated in this run (Staying in scope), or "none". -->

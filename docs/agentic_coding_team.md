@@ -115,6 +115,15 @@ The SA never escalates directly. A standoff with the FSE reaches the owner throu
 
 A `needs-human` issue that has an open PR keeps that PR open, so invariant 1 stops new feature work until the owner answers. That's deliberate: the team never builds on top of an unresolved question. The [alert check](#alerts) makes the wait visible. The team picks up the owner's answer at the next tick, at most one idle wait after the label is removed.
 
+#### Staying in scope
+
+A run investigates only what its work items need. A finding outside them, such as a slow test, a stale cache, or a doc line that no longer matches the code, gets one line where the team will see it, and the run moves on:
+- the FSE lists it under **Findings outside this issue** in its PR description;
+- the SA raises it, or an FSE finding worth keeping, as a `levelup`, which the PM files as a `follow-up` issue at merge;
+- the SDET and the PM note it in a comment on the issue they're working.
+
+A finding that blocks a work item isn't outside it, and the run deals with it. Every other finding waits for the owner to promote its `follow-up` issue.
+
 #### Completion
 
 The team is done when all three of these hold:
@@ -157,7 +166,8 @@ The FSE notes in each PR description which checks it couldn't run. The final rep
   - **Live checks**: what ran against live services and what came back, plus any check that needs the owner's machine;
   - **New dependencies**, each with a one-line justification ([convention 2](conventions.md#2-no-library-bloat)), or "none";
   - **Mechanical test fixes**, or "none";
-  - **Workarounds**, each with why the root cause can't be fixed in this issue, or "none".
+  - **Workarounds**, each with why the root cause can't be fixed in this issue, or "none";
+  - **Findings outside this issue**, one line each (see [Staying in scope](#staying-in-scope)), or "none".
 - **Feature branches** are named `feat/<issue-number>-<slug>`.
 
 #### Running agents unattended
