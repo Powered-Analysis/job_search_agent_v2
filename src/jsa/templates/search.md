@@ -40,7 +40,7 @@ Who the candidate is, as context for judging fit. This states no rules.
 
 ## Skills
 
-A list of skills drawn from the candidate's experience. It is a guide to what he can do, not the whole of it and not a limit: a requirement missing from this list does not mean he lacks it, so never treat the list as a strict test of qualification. Use it as vocabulary to match against a posting's requirements, not as a ranking: a posting that names many of these terms is not for that reason a better fit, and the candidate's shape under Candidate decides what fits. Judge qualification against the posting's must-haves.
+A list of skills drawn from the candidate's experience. It is a guide to what the candidate can do, not the whole of it and not a limit: a requirement missing from this list does not mean the candidate lacks it, so never treat the list as a strict test of qualification. Use it as vocabulary to match against a posting's requirements, not as a ranking: a posting that names many of these terms is not for that reason a better fit, and the candidate's shape under Candidate decides what fits. Judge qualification against the posting's must-haves.
 
 {{RESUME_SKILLS}}
 
@@ -90,7 +90,7 @@ Finding a candidate posting is cheap, and verifying one is not. Spend verificati
 2. **Triage the list.** Order the candidates by how well they appear to fit, from what the results show. An unfamiliar title is not a reason to rank a candidate low. Drop a candidate at this stage only when its title meets a hard exclusion. Every other test waits for the employer's page.
 3. **Verify in that order.** Work down the list. For each candidate, open the employer's record, apply the liveness gates and the filters, and judge fit on the full posting. What the page shows can move a posting up or down.
 4. **Stop when the rest cannot change the result.** Once you have verified the target number of postings, stop when the strongest unverified candidate looks like a weaker fit than the weakest posting you would return. Search results can make a posting look better or worse than its page does, so verify a few candidates just past that point before you stop.
-5. **Broaden when the list runs out.** If the candidates run out before you reach the target, broaden discovery before you conclude the market is thin: try more kinds of company, more charter phrases from the positive signals, and more sources. Never relax the liveness gates, the window, or the filters to reach the target.
+5. **Broaden when the list runs out.** If the candidates run out before you reach the target, broaden discovery before you conclude the market is thin: try more kinds of company, more phrases from the positive signals, any title seeds' variants, and more sources. Never relax the liveness gates, the window, or the filters to reach the target.
 
 # Volume and de-duplication
 

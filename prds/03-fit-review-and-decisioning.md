@@ -52,13 +52,13 @@ The human-in-the-loop stage where captured postings become decisions. `jsa revie
 
 **Review loop (Priority: P0)**
 - **Search health line (P1):** before the backlog, review prints what the unattended search did, read from `search_runs`, `cron_runs` (PRD 02), and the schedule in `search.toml`. Failures surface where the user already looks rather than only in `fly logs`. It reports:
-  - for each agent the schedule uses, its latest search: date, outcome, postings inserted, and cost;
+  - for each search family and agent pair the schedule uses, its latest search: date, outcome, postings inserted, and cost;
   - every failed search in the last 7 days, with its one-line error;
   - every warning those runs logged (a platform returning no dates, `reachable_no_date` and `malformed` counts);
   - every search still without an outcome 90 minutes after it started, reported as dead (the runner ceiling is an hour, PRD 01);
   - every scheduled day in the last 7 days, before today, with no `cron_runs` row, reported as missed.
 
-  With nothing to flag, it is one line: the latest run per agent. It makes no model call. A missing or invalid `search.toml` is reported in the line rather than stopping review.
+  With nothing to flag, it is one line: the latest run per search family and agent. It makes no model call. A missing or invalid `search.toml` is reported in the line rather than stopping review.
 - **Liveness re-check (P0, `XC-5`):** the backlog is captured, then re-checked with PRD 01's re-check before the first posting is shown. A posting found closed is marked closed (PRD 02) and leaves the backlog with no decision; the session opens by saying how many closed. A posting the re-check couldn't reach (`unverifiable`) is shown as usual, marked as not re-checked.
 - **Backlog:** the review backlog (PRD 02) is undecided, unclosed rows, oldest first; it is captured once at session start so step-back navigation is stable.
 - **Open in browser:** each posting opens in Google Chrome through macOS `open`. A failure to open (e.g. Chrome not installed) is ignored rather than aborting the loop, since the URL is also printed.

@@ -66,22 +66,22 @@ One hosted libSQL (Turso) database is the single source of truth for job-posting
 - **Packet queue:** `Apply`, by default also `added_to_tracker = 0 AND closed_at IS NULL`; targeting one posting by id waives the tracker and closed conditions, never `Apply` — the Step 4 queue (PRD 04).
 - **Refetch scope:** `Apply` by default; every row, or one row by id, when widened (PRD 04).
 - **Mark tracked:** set `added_to_tracker = 1` (Step 5 tail).
-- **Refinement scope:** decided rows with `in_refinement = 1` after the cutoff, the compact history of every decided row with `in_refinement = 1`, the count of excluded decided rows after the cutoff, and the cutoff itself (PRD 05).
+- **Refinement scope:** decided rows with `in_refinement = 1` after the cutoff, each with the search families whose findings name its canonical URL (from `search_findings`), the compact history of every decided row with `in_refinement = 1`, the count of excluded decided rows after the cutoff, and the cutoff itself (PRD 05).
 - **Search-run log:** open and close a search's run row; read recent runs for review's health line (below; PRD 01, PRD 03).
 - **Cron claim:** the once-per-day claim (below; PRD 01).
 
 **Search-telemetry table `search_findings` (Priority: P1)**
-- **Append-only per-agent coverage telemetry** (coverage / cross-agent overlap / Apply-precision): one row per `(run_date, agent, canonical_url)` — its composite primary key — for *every* posting an agent returns, whether or not the idempotent `postings` insert no-ops, so both agents get credit for a shared find (the overlap a `postings`-only view hides). `agent CHECK IN ('claude','perplexity','gemini')`; carries `window_hours`, `rank`, `found_at`, a denormalized `decision`, and:
+- **Append-only per-search coverage telemetry** (coverage / cross-agent and cross-family overlap / Apply-precision): one row per `(run_date, search_family, agent, canonical_url)` — its composite primary key — for *every* posting a search returns, whether or not the idempotent `postings` insert no-ops, so every search gets credit for a shared find (the overlap a `postings`-only view hides). `search_family` is the search family's name (PRD 01), NULL on findings recorded before search families existed. The search families a posting's findings name are also what tells refine which searches found it (PRD 05). `agent CHECK IN ('claude','perplexity','gemini')`; carries `window_hours`, `rank`, `found_at`, a denormalized `decision`, and:
   - `verification` (`CHECK IN ('verified','verified_no_date','reachable','reachable_no_date','aggregator','unsupported','unverifiable','not_on_index','page_closed','out_of_window')`) — the pipeline's liveness and recency outcome (PRD 01). `NOT NULL`. Every emitted posting is recorded, not only inserted ones, so each agent's dead-link and out-of-window rates are computable.
   - `ats_date`, `ats_date_kind` (`CHECK IN ('updated','created','published')`) — the timestamp the recency check used (the ATS's, or an off-four page's `datePosted` as `published`) and what it measures; NULL when the platform returned none or verification stopped before reaching it.
   - `model`, `effort` — what actually ran (the Perplexity model as reported by the API; `effort` NULL where the runner has none), so coverage, dead-link rate, and Apply-precision can be compared per model/effort choice, not just per runner (`XC-14`).
-- **Written before the insert** (`ON CONFLICT DO NOTHING`) so a no-op'd req still credits the finding agent (PRD 01). A second find of the same URL by the same agent on the same `run_date` — a second scheduled search, a hand run, a smoke run — is the same fact and no-ops; the first row stands.
+- **Written before the insert** (`ON CONFLICT DO NOTHING`) so a no-op'd req still credits the finding agent (PRD 01). A second find of the same URL by the same search family and agent on the same `run_date` — a hand run, a smoke run — is the same fact and no-ops; the first row stands.
 - **Denormalized `decision` (P0 invariant):** kept current on every decision write (matched on `canonical_url`, not a posting id — there is deliberately no FK), **never** on clearing a decision (un-deciding is not a new decision; the last real call stays as the historical record). The column is retained as raw evaluation telemetry — per-agent coverage, overlap, and Apply-precision can be computed straight off `search_findings`, and survive a `postings` row being deleted or reset — but the pipeline deliberately ships **no built-in report** over it; external analyses query it directly, which is why its column names and stored values are a stable contract. **Never** delete or bulk-rewrite `search_findings` outside this sync path.
 
 **Search-run log `search_runs` (Priority: P1)**
 - One row per search attempt, whether scheduled, hand, or smoke:
   - an AUTOINCREMENT `id`, `run_date`, and `trigger` (`CHECK IN ('scheduled','hand','smoke')`);
-  - what ran: `agent`, `window_hours`, `mode`, `model`, `effort`;
+  - what ran: `search_family` (NULL on runs before search families existed), `agent`, `window_hours`, `mode`, `model`, `effort`;
   - `started_at`, `finished_at`;
   - `outcome` (`CHECK IN ('ok','failed')`, NULL until the search ends) and `error` (one line, on failure);
   - `summary` (the run summary's counts and cost as JSON, PRD 01) and `warnings` (its closing warnings, NULL when none).
@@ -98,7 +98,7 @@ One hosted libSQL (Turso) database is the single source of truth for job-posting
 
 **Schema creation and change (Priority: P0)**
 - **Schema creation** — `postings`, `search_findings`, `search_runs`, `cron_runs`, `prompt_refinement_runs` — uses `CREATE TABLE IF NOT EXISTS` from the single-source column lists. It is idempotent and every command runs it on connect, so there is no separate setup step to forget. The schema holds only tables the application reads or writes.
-- **How a future schema change ships:** as a migration that runs on open, *before* the creates (a rebuild briefly parks data under another table name, and a create run first would fill that window with an empty table, orphaning the real rows). An additive column uses plain `ALTER TABLE ADD COLUMN`; a CHECK change uses the rebuild (create → copy by name → rename → rename → drop), because SQLite cannot ALTER a CHECK constraint.
+- **How a future schema change ships:** as a migration that runs on open, *before* the creates (a rebuild briefly parks data under another table name, and a create run first would fill that window with an empty table, orphaning the real rows). An additive column uses plain `ALTER TABLE ADD COLUMN`; a CHECK or primary-key change uses the rebuild (create → copy by name → rename → rename → drop), because SQLite can ALTER neither.
 - **Ordered and self-healing, because hosted Turso is not atomic across statements** (each is its own round-trip): every migration is ordered so no step leaves the data absent from its named table, ships with a recovery routine that finishes a half-done swap on the next open, and is a no-op once applied (one `sqlite_master` read).
 
 -----

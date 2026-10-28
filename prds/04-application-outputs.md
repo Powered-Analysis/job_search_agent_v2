@@ -218,7 +218,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Unresolved tracked changes in the resume copy:** the redline is skipped for that row, with a warning, and the row continues to its tracker append. The copy's paragraph text is ambiguous until the user accepts or rejects those changes, and that is the user's state to fix, not a failure.
 - **Text in scope:** the body paragraphs. Text in tables, headers, footers, and text boxes isn't redlined, so a headline or summary kept there is out of reach.
 - **Skills section (Priority: P1):** the one place the redline may change what the resume lists, not only how it words it.
-  - **The skills list:** `profile/resume_skills.md`, optional (`XC-11`), holds the skills the user has. Items are separated by line breaks, by commas, or by both in one file:
+  - **The skills list:** `profile/resume_skills.md`, optional (`XC-11`), holds the skills the user has. The search prompt reads it too (PRD 01). Items are separated by line breaks, by commas, or by both in one file:
 
     ```
     Python
@@ -253,7 +253,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Projection reads and writes:** rewriting a row's Title cell (`C{row}` on the tab the index found it on, used by refetch); reading the tracker index (`postings.id → {tab, row number, Date Applied}`, across every role family's tab, skipping non-integer ID cells); authority never flows Sheet→DB (`XC-4`).
 
 **Packets built on the inbox machine (Priority: P0)** — the email side door's continuation (PRD 03), for one posting that has a role family and a description.
-- **The same build, for one posting:** exactly what `jsa generate --id` does for it — packet head with its filled placeholders, redline, PDF copies — through the same implementation, into a temporary directory on the machine. The inbox machine has the role families and the skills list as machine files (PRD 06), so its packet is identical to a local one. There is no liveness re-check, because the user vouched for the posting by sending it, as with `--id` (`XC-5`).
+- **The same build, for one posting:** exactly what `jsa generate --id` does for it — packet head with its filled placeholders, redline, PDF copies — through the same implementation, into a temporary directory on the machine. The inbox machine has the role families as machine files and the skills list in its image (PRD 06), so its packet is identical to a local one. There is no liveness re-check, because the user vouched for the posting by sending it, as with `--id` (`XC-5`).
 - **Delivered to Drive before tracking (P0):** the packet folder is uploaded through `gws`, with the owner's credential, into the Drive packets folder (`[inbox] drive_folder_id`), under the folder and file names a local build would use ("Packet directory" above). Files are uploaded as they are and never converted to Google Docs format, so the resume copy stays the exact `.docx` file, tracked changes and comments included. The tracker row is appended only after every file is confirmed uploaded, so a tracked row always has its packet. Upload planning (which file goes to which folder, under which name) is pure (`XC-9`).
 - **An upload never clobbers (P0):** a retry finds the posting's folder if an earlier attempt created it, uploads only the files missing from it, and never replaces or deletes a file there, because the user may already have opened it.
 - **Never rebuilt:** a posting already tracked gets nothing built or uploaded (`XC-10`). Refreshing a tracked packet stays local: `jsa generate --id` or refetch.
@@ -326,7 +326,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 
 -----
 #### Technical Considerations
-- **Where it runs (`XC-1`):** `packet`, `generate`, `track`, and `refetch` run locally, on the local disk, the local profile, and the local `gws` login. The inbox machine runs one emailed posting's build and track, with `config.toml`, the role families, and the skills list (if any) as machine files and its own `gws` credential (PRD 06).
+- **Where it runs (`XC-1`):** `packet`, `generate`, `track`, and `refetch` run locally, on the local disk, the local profile, and the local `gws` login. The inbox machine runs one emailed posting's build and track, with `config.toml` and the role families as machine files, the skills list (if any) in its image, and its own `gws` credential (PRD 06).
 - **Deterministic core, agentic shell (`XC-9`):** resume rendering, resume file naming, and tracker row building are pure; the redline is one agentic call whose proposals are validated in code and reviewed by the user, so a non-reproducible redline never makes the packet itself non-reproducible.
 - **The redline's guarantees live in code, not in the agent (`XC-9`):** validation of every kind of proposal, bullet detection, skills-list parsing, locating the skills section, the indexed paragraph rendering, and the tracked-change, paragraph-move, and comment writing are pure and tested without a model. The proposals themselves are judged by the owner on real packets.
 - **Completion guard is `added_to_tracker`, not directory-exists (`XC-10`):** `jsa generate` must re-enter a bare directory.
