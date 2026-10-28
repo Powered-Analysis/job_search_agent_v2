@@ -60,10 +60,10 @@ class PacketCopy(NamedTuple):
 def packet_copies(
     config: Config, job: db.PacketJob, sources: PacketSources
 ) -> list[PacketCopy]:
-    """The copies of the job's role family's files; the caller has checked the profile has the role family."""
+    """The copies of the job's role family's files, the resume copy last; the caller has checked the profile has the role family."""
     directory, resume_copy = packet_paths(config, job)
     family = sources.role_families[job.role_family]
-    copies = [PacketCopy(resume_copy, family.resume, cover_letter=False)]
+    copies = []
     if family.cover_letter is not None:
         # The copy keeps the source's extension, whatever it is (`.docx`, `.pdf`, ...).
         extension = family.cover_letter.name.removeprefix(COVER_LETTER_PREFIX)
@@ -74,6 +74,8 @@ def packet_copies(
                 cover_letter=True,
             )
         )
+    # Last, so the resume copy's existence marks the head as complete (see `ensure_head`).
+    copies.append(PacketCopy(resume_copy, family.resume, cover_letter=False))
     return copies
 
 
@@ -123,16 +125,26 @@ def ensure_head(
     A `.docx` cover letter copy also gets its PDF. The copies, their PDFs, and a hand-filled job
     description are never replaced. The row's description replaces an existing `job_posting.md`
     only when `refresh_posting` is set.
+
+    The copies are made only while the resume copy (made last) is missing, so a run that died
+    part-way through a new head completes it, and a posting whose role family changed after its
+    head was built gets nothing from the new role family (PRD 04, Edge cases).
     """
     directory.mkdir(parents=True, exist_ok=True)
     posting = directory / JOB_POSTING
     if job.jd_markdown is not None and (refresh_posting or not posting.exists()):
         posting.write_text(job.jd_markdown, encoding="utf-8")
-    # A copy is the user's working file, so an existing one is never replaced.
+    if not copies[-1].path.exists():
+        for copy in copies:
+            # A copy is the user's working file, so an existing one is never replaced.
+            if not copy.path.exists():
+                _copy_filled(copy.source, copy.path, job)
     for copy in copies:
-        if not copy.path.exists():
-            _copy_filled(copy.source, copy.path, job)
-        if copy.cover_letter and copy.path.suffix.lower() == ".docx":
+        if (
+            copy.cover_letter
+            and copy.path.exists()
+            and copy.path.suffix.lower() == ".docx"
+        ):
             ensure_pdf(copy.path)
 
 
