@@ -180,6 +180,7 @@ Every agent job invokes `claude-code-action` with these settings. Each one close
 - **Never `track_progress`.** It switches the action into tag mode, which runs its own branch checkout and ignores the one the workflow made.
 - **uv and the project's dependencies are installed in a step before the agent runs**, so the agent doesn't spend turns installing them. The workflow pins uv's version and Python 3.14, the version of PRD 06's image, so CI tests what ships. The pins also keep the dependency cache valid: its key covers the lockfile and the Python version but not uv's version, so a floating uv or Python leaves every job restoring a cache it can't use.
 - **`BASH_DEFAULT_TIMEOUT_MS` (10 minutes) and `BASH_MAX_TIMEOUT_MS` (30 minutes)** in the workflow's `env`. Claude Code's own defaults, 2 and 10 minutes, kill a full-suite run or a live search partway through, and the agent then retries it without knowing how long it needs.
+- **`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`** in the workflow's `env`. A memory note an agent saves is deleted with its runner, but the agent believes its next run will read it, and so it leaves undone what it meant to record. Anything a later run needs goes on GitHub, the team's only state: a comment on the issue, or a `Closes #N` line in the PR.
 - **WOZCODE in every tick agent (PM, FSE, SA, SDET).**
   - The action installs it with `plugin_marketplaces: https://github.com/WithWoz/wozcode-plugin.git` and `plugins: woz@wozcode-marketplace`.
   - `WOZCODE_API_KEY` in the `settings` env logs the plugin in without a browser.
