@@ -20,9 +20,12 @@ import pytest
 from conftest import REPO_ROOT
 from profile_helpers import (
     FRAGMENTS,
+    ROLE_FAMILIES,
+    ROLE_FAMILY,
     SEARCH_TOML,
     WEEKDAYS,
     copy_example,
+    family_dir,
     schedule_toml,
     write_config_toml,
     write_search_toml,
@@ -1172,6 +1175,8 @@ def test_build_context_includes_profile_search(path):
     [
         "profile/config.toml",
         "profile/resume.docx",
+        "profile/role_families/Data Analysis/resume.docx",
+        "profile/role_families/Data Analysis/cover_letter.docx",
         "profile/refine/rationale.md",
         "profile/refine/candidate.md",
         "profile/notes.md",
@@ -1652,11 +1657,32 @@ def test_image_adds_gws_at_a_pinned_version():
     assert "latest" not in text.lower()
 
 
-def inbox_machine_files(profile: Path, *cover_letter: str) -> dict[str, str]:
-    """The machine files a deploy ships: `config.toml` and `resume.docx`, plus the skills list and the
-    cover letter when the profile has them (PRD 06 `jsa deploy` step 4)."""
-    names = ("config.toml", "resume.docx", "resume_skills.md", *cover_letter)
+MACHINE_PROFILE_DIR = "/app/profile/"
+
+
+def inbox_machine_files(profile: Path, *cover_letters: str) -> dict[str, str]:
+    """The machine files a deploy ships, by path under the profile: `config.toml` and every role family's
+    `resume.docx`, plus the skills list and the given cover letters (PRD 06 `jsa deploy` step 4)."""
+    names = (
+        "config.toml",
+        *(f"role_families/{name}/resume.docx" for name in ROLE_FAMILIES),
+        "resume_skills.md",
+        *cover_letters,
+    )
     return {name: str(profile / name) for name in names if (profile / name).exists()}
+
+
+def family_file(name: str, family: str = ROLE_FAMILY) -> str:
+    """A role family's file as a path under the profile, which is also its path under `/app/profile/`."""
+    return f"role_families/{family}/{name}"
+
+
+def shipped(launch: list[str]) -> dict[str, str]:
+    """Profile-relative path -> local source of each machine file a launch sets; an empty source removes it."""
+    return {
+        target.removeprefix(MACHINE_PROFILE_DIR): source
+        for target, source in machine_files(launch).items()
+    }
 
 
 @pytest.mark.parametrize("existing", [(), ("hourly",)], ids=["create", "update"])
@@ -1676,12 +1702,10 @@ def test_inbox_machine_runs_jsa_inbox_with_its_files_in_the_inbox_app(
     assert has_flag(launch, "--vm-memory", "1024")
     assert "--rm" not in launch
     assert any(label_of(build) in arg for arg in launch)
-    files = machine_files(launch)
-    assert {
-        Path(target).name: source for target, source in files.items()
-    } == inbox_machine_files(profile)
-    assert all(Path(target).is_absolute() for target in files)
-    assert all(Path(target).parent.name == "profile" for target in files)
+    assert shipped(launch) == inbox_machine_files(profile)
+    assert all(
+        target.startswith(MACHINE_PROFILE_DIR) for target in machine_files(launch)
+    )
     # The search machine is swapped as before: no entrypoint override, no machine files.
     (search,) = pick_machine(on_app(all_calls, "jsa-example"), verb)
     assert "--entrypoint" not in search
@@ -1780,12 +1804,16 @@ def test_config_and_resume_never_enter_the_build_context(
     assert code == 0
     staged = tree(snapshot)
     assert staged
-    resume = (profile / "resume.docx").read_bytes()
+    resumes = [
+        (family_dir(profile, name) / "resume.docx").read_bytes()
+        for name in ROLE_FAMILIES
+    ]
     config = (profile / "config.toml").read_bytes()
     assert not [
         name for name in staged if Path(name).name in ("resume.docx", "config.toml")
     ]
-    assert resume not in staged.values()
+    for resume in resumes:
+        assert resume not in staged.values()
     assert config not in staged.values()
 
 
@@ -1814,25 +1842,41 @@ def test_a_cover_letter_ships_to_the_inbox_machine_as_a_machine_file(
     inbox, monkeypatch, capsys, existing, name
 ):
     profile, log = inbox
-    (profile / name).write_bytes(b"THE COVER LETTER")
+    (family_dir(profile) / name).write_bytes(b"THE COVER LETTER")
     monkeypatch.setenv("STUB_MACHINES", machines(*existing))
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code == 0
     verb = "update" if existing else "run"
     (launch,) = pick_machine(on_app(calls(log), INBOX_APP), verb)
-    files = {
-        Path(target).name: source
-        for target, source in machine_files(launch).items()
-        if source
-    }
-    assert files == inbox_machine_files(profile, name)
-    target = next(t for t in machine_files(launch) if Path(t).name == name)
-    assert Path(target).is_absolute() and Path(target).parent.name == "profile"
+    files = {path: source for path, source in shipped(launch).items() if source}
+    assert files == inbox_machine_files(profile, family_file(name))
+    # It lands at the path it has in the profile, not beside config.toml.
+    assert f"{MACHINE_PROFILE_DIR}{family_file(name)}" in machine_files(launch)
+
+
+@pytest.mark.parametrize("existing", [(), ("hourly",)], ids=["create", "update"])
+def test_every_role_familys_resume_and_cover_letter_ship_at_their_own_paths(
+    inbox, monkeypatch, capsys, existing
+):
+    profile, log = inbox
+    for family in ROLE_FAMILIES:
+        (family_dir(profile, family) / "cover_letter.docx").write_bytes(
+            f"LETTER OF {family}".encode()
+        )
+    monkeypatch.setenv("STUB_MACHINES", machines(*existing))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    verb = "update" if existing else "run"
+    (launch,) = pick_machine(on_app(calls(log), INBOX_APP), verb)
+    letters = [family_file("cover_letter.docx", family) for family in ROLE_FAMILIES]
+    assert shipped(launch) == inbox_machine_files(profile, *letters)
+    for family in ROLE_FAMILIES:
+        assert family_file("resume.docx", family) in shipped(launch)
 
 
 def test_the_search_machine_never_gets_the_cover_letter(inbox, monkeypatch, capsys):
     profile, log = inbox
-    (profile / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
+    (family_dir(profile) / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
     monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code == 0
@@ -1845,7 +1889,9 @@ def test_the_cover_letter_never_enters_the_build_context(
     inbox, monkeypatch, capsys, tmp_path, existing
 ):
     profile, _ = inbox
-    (profile / "cover_letter.docx").write_bytes(b"A DISTINCTIVE COVER LETTER")
+    (family_dir(profile) / "cover_letter.docx").write_bytes(
+        b"A DISTINCTIVE COVER LETTER"
+    )
     snapshot = tmp_path / "context"
     monkeypatch.setenv("STUB_SNAPSHOT", str(snapshot))
     monkeypatch.setenv("STUB_MACHINES", machines(*existing))
@@ -1859,7 +1905,12 @@ def test_the_cover_letter_never_enters_the_build_context(
 
 @pytest.mark.parametrize(
     "path",
-    ["profile/cover_letter.docx", "profile/cover_letter.pdf"],
+    [
+        "profile/cover_letter.docx",
+        "profile/cover_letter.pdf",
+        "profile/role_families/Data Analysis/cover_letter.docx",
+        "profile/role_families/Data Analysis/cover_letter.pdf",
+    ],
 )
 def test_build_context_excludes_the_cover_letter(path):
     assert not in_build_context(path)
@@ -1873,9 +1924,8 @@ def test_without_a_cover_letter_the_inbox_machine_gets_only_the_profiles_other_m
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code == 0
     (launch,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
-    assert sorted(Path(target).name for target in machine_files(launch)) == sorted(
-        inbox_machine_files(profile)
-    )
+    assert sorted(shipped(launch)) == sorted(inbox_machine_files(profile))
+    assert not [path for path in shipped(launch) if "cover_letter" in path]
 
 
 @pytest.mark.parametrize("existing", [(), ("hourly",)], ids=["create", "update"])
@@ -1921,57 +1971,86 @@ def test_a_cover_letter_removed_from_the_profile_leaves_the_inbox_machine(
         held(
             "m0",
             "/app/profile/config.toml",
-            "/app/profile/resume.docx",
-            "/app/profile/cover_letter.docx",
+            f"/app/profile/{family_file('resume.docx')}",
+            f"/app/profile/{family_file('cover_letter.docx')}",
         ),
     )
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code == 0
     (update,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
-    files = machine_files(update)
+    files = shipped(update)
     # Fly removes a machine file that is set to an empty source.
-    assert files["/app/profile/cover_letter.docx"] == ""
-    assert files["/app/profile/config.toml"]
-    assert files["/app/profile/resume.docx"]
+    assert files[family_file("cover_letter.docx")] == ""
+    assert files["config.toml"]
+    assert files[family_file("resume.docx")]
+
+
+def test_a_role_family_removed_from_the_profile_leaves_the_inbox_machine(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    shutil.rmtree(family_dir(profile, ROLE_FAMILIES[1]))
+    gone = [
+        family_file(name, ROLE_FAMILIES[1])
+        for name in ("resume.docx", "cover_letter.pdf")
+    ]
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    monkeypatch.setenv(
+        "STUB_INBOX_MACHINES",
+        held(
+            "m0",
+            f"/app/profile/{family_file('resume.docx')}",
+            *(f"/app/profile/{g}" for g in gone),
+        ),
+    )
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    (update,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
+    files = shipped(update)
+    assert all(files[path] == "" for path in gone)
+    assert files[family_file("resume.docx")]
 
 
 def test_a_renamed_cover_letter_replaces_the_old_one_on_the_inbox_machine(
     inbox, monkeypatch, capsys
 ):
     profile, log = inbox
-    (profile / "cover_letter.pdf").write_bytes(b"THE COVER LETTER")
+    (family_dir(profile) / "cover_letter.pdf").write_bytes(b"THE COVER LETTER")
     monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
     monkeypatch.setenv(
         "STUB_INBOX_MACHINES",
         held(
             "m0",
             "/app/profile/config.toml",
-            "/app/profile/resume.docx",
-            "/app/profile/cover_letter.docx",
+            f"/app/profile/{family_file('resume.docx')}",
+            f"/app/profile/{family_file('cover_letter.docx')}",
         ),
     )
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code == 0
     (update,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
-    files = machine_files(update)
-    assert files["/app/profile/cover_letter.pdf"] == str(profile / "cover_letter.pdf")
-    assert files["/app/profile/cover_letter.docx"] == ""
+    files = shipped(update)
+    assert files[family_file("cover_letter.pdf")] == str(
+        family_dir(profile) / "cover_letter.pdf"
+    )
+    assert files[family_file("cover_letter.docx")] == ""
 
 
 def test_a_kept_cover_letter_is_not_cleared_from_the_inbox_machine(
     inbox, monkeypatch, capsys
 ):
     profile, log = inbox
-    (profile / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
+    (family_dir(profile) / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
     monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
     monkeypatch.setenv(
-        "STUB_INBOX_MACHINES", held("m0", "/app/profile/cover_letter.docx")
+        "STUB_INBOX_MACHINES",
+        held("m0", f"/app/profile/{family_file('cover_letter.docx')}"),
     )
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code == 0
     (update,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
-    assert machine_files(update)["/app/profile/cover_letter.docx"] == str(
-        profile / "cover_letter.docx"
+    assert shipped(update)[family_file("cover_letter.docx")] == str(
+        family_dir(profile) / "cover_letter.docx"
     )
 
 
@@ -1980,18 +2059,20 @@ def test_more_than_one_cover_letter_aborts_the_deploy_before_building_naming_bot
     inbox, monkeypatch, capsys, flags
 ):
     profile, log = inbox
-    (profile / "cover_letter.docx").write_bytes(b"ONE")
-    (profile / "cover_letter.pdf").write_bytes(b"TWO")
+    folder = family_dir(profile, ROLE_FAMILIES[1])
+    (folder / "cover_letter.docx").write_bytes(b"ONE")
+    (folder / "cover_letter.pdf").write_bytes(b"TWO")
     code, output = jsa_deploy(monkeypatch, capsys, *flags)
     assert_aborted_before_building(code, calls(log))
     assert "cover_letter.docx" in output and "cover_letter.pdf" in output
+    assert str(folder) in output
 
 
 def test_dry_run_lists_the_cover_letter_among_the_inbox_machine_files(
     inbox, monkeypatch, capsys
 ):
     profile, log = inbox
-    (profile / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
+    (family_dir(profile) / "cover_letter.docx").write_bytes(b"THE COVER LETTER")
     code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
     assert code == 0
     assert launched_nothing(calls(log))
@@ -2019,18 +2100,44 @@ def assert_aborted_before_building(code: int, all_calls: list[list[str]]) -> Non
 )
 def test_a_missing_resume_aborts_before_building(inbox, monkeypatch, capsys, flags):
     profile, log = inbox
-    (profile / "resume.docx").unlink()
+    # The last role family: every folder is checked, not just the first.
+    folder = family_dir(profile, ROLE_FAMILIES[-1])
+    (folder / "resume.docx").unlink()
     code, output = jsa_deploy(monkeypatch, capsys, *flags)
     assert_aborted_before_building(code, calls(log))
     assert "resume.docx" in output
+    assert str(folder) in output
 
 
 def test_an_empty_resume_aborts_before_building(inbox, monkeypatch, capsys):
     profile, log = inbox
-    (profile / "resume.docx").write_bytes(b"")
+    folder = family_dir(profile)
+    (folder / "resume.docx").write_bytes(b"")
     code, output = jsa_deploy(monkeypatch, capsys)
     assert_aborted_before_building(code, calls(log))
     assert "resume.docx" in output
+    assert str(folder) in output
+
+
+def test_a_profile_with_no_role_family_aborts_the_inbox_deploy_before_building(
+    inbox, monkeypatch, capsys
+):
+    profile, log = inbox
+    shutil.rmtree(profile / "role_families")
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert_aborted_before_building(code, calls(log))
+    assert "role_families" in output
+
+
+def test_without_the_inbox_a_broken_role_family_does_not_stop_the_deploy(
+    fly, monkeypatch, capsys
+):
+    profile, log = fly
+    (family_dir(profile) / "resume.docx").unlink()
+    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    assert pick(calls(log), "deploy")
 
 
 INBOX_PROFILE_BREAKS = {
@@ -2643,7 +2750,7 @@ def test_a_skills_list_removed_from_the_profile_leaves_the_inbox_machine(
         held(
             "m0",
             "/app/profile/config.toml",
-            "/app/profile/resume.docx",
+            f"/app/profile/{family_file('resume.docx')}",
             "/app/profile/resume_skills.md",
         ),
     )
@@ -2654,7 +2761,7 @@ def test_a_skills_list_removed_from_the_profile_leaves_the_inbox_machine(
     # Fly removes a machine file that is set to an empty source.
     assert files["/app/profile/resume_skills.md"] == ""
     assert files["/app/profile/config.toml"]
-    assert files["/app/profile/resume.docx"]
+    assert files[f"/app/profile/{family_file('resume.docx')}"]
 
 
 def test_a_kept_skills_list_is_not_cleared_from_the_inbox_machine(

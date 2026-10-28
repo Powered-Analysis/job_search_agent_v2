@@ -16,7 +16,13 @@ import docx
 import httpx
 import pytest
 from conftest import drop_all_tables
-from profile_helpers import copy_example, write_config_toml
+from profile_helpers import (
+    ROLE_FAMILIES,
+    ROLE_FAMILY,
+    copy_example,
+    family_dir,
+    write_config_toml,
+)
 from soffice_helpers import rendered
 from test_generate import (
     BASE_LINE,
@@ -43,13 +49,26 @@ import json, os, sys
 argv = sys.argv[1:]
 with open(os.environ["STUB_LOG"], "a") as log:
     log.write(json.dumps(argv) + "\\n")
+params = {{}}
+for item in argv:
+    try:
+        parsed = json.loads(item)
+    except ValueError:
+        continue
+    if isinstance(parsed, dict):
+        params.update(parsed)
+tab = params["range"].rsplit("!", 1)[0].strip("'")
 method = next(word for word in argv if word in ("get", "update", "append"))
 if method == "get":
     if os.environ.get("STUB_GET_FAIL"):
         print("boom", file=sys.stderr)
         sys.exit(1)
     with open(os.environ["STUB_SHEET"]) as sheet:
-        print(json.dumps({{"values": json.load(sheet)}}))
+        tabs = json.load(sheet)
+    if tab not in tabs:
+        print("Unable to parse range: " + params["range"], file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({{"values": tabs[tab]}}))
 elif method == "update":
     if os.environ.get("STUB_UPDATE_FAIL"):
         print("boom", file=sys.stderr)
@@ -95,14 +114,14 @@ def web(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def env(tmp_path, monkeypatch):
-    """A profile with a distinctive base resume, and its packets directory."""
+    """A profile whose first role family has a distinctive base resume, and its packets directory."""
     profile = copy_example(tmp_path / "profile")
     packets = tmp_path / "packets"
     write_config_toml(profile, CONFIG.format(packets=packets))
     document = docx.Document()
     document.add_paragraph().add_run("Riley Resumeperson").bold = True
     document.add_paragraph(BASE_LINE)
-    document.save(profile / "resume.docx")
+    document.save(family_dir(profile) / "resume.docx")
     monkeypatch.setenv("JSA_PROFILE_DIR", str(profile))
     monkeypatch.delenv("JSA_GENERATE_WORKERS", raising=False)
     return profile, packets
@@ -116,7 +135,7 @@ def gws(tmp_path, monkeypatch):
     stub.chmod(0o755)
     log = tmp_path / "gws.log"
     sheet = tmp_path / "sheet.json"
-    sheet.write_text("[]", encoding="utf-8")
+    sheet.write_text(json.dumps({name: [] for name in ROLE_FAMILIES}), encoding="utf-8")
     monkeypatch.setenv("JSA_GWS_BIN", str(stub))
     monkeypatch.setenv("STUB_LOG", str(log))
     monkeypatch.setenv("STUB_SHEET", str(sheet))
@@ -134,15 +153,28 @@ def rdb(db_url):
     connection.close()
 
 
-def set_sheet(gws, *rows):
-    """The Sheet as `gws` returns it: a header, then one row per `(posting id, Date Applied)`."""
+def sheet_cells(*rows):
+    """One tab as `gws` returns it: a header, then one row per `(posting id, Date Applied)`."""
     cells = [["ID", "Company", "Title", "URL", "Posted", "Added", "Applied", "Status"]]
     for posting_id, applied in rows:
         cells.append(
             [str(posting_id), "Acme Widgets", OLD_TITLE, "u", "", "2026-10-01"]
             + ([applied] if applied else [])
         )
-    gws.with_name("sheet.json").write_text(json.dumps(cells), encoding="utf-8")
+    return cells
+
+
+def write_tabs(gws, tabs):
+    gws.with_name("sheet.json").write_text(json.dumps(tabs), encoding="utf-8")
+
+
+def set_sheet(gws, *rows, tab=ROLE_FAMILY, elsewhere=None):
+    """The Sheet: every role family's tab, with `rows` on `tab` and `elsewhere` (tab -> rows) on others."""
+    tabs = {name: [] for name in ROLE_FAMILIES}
+    tabs[tab] = sheet_cells(*rows)
+    for name, other_rows in (elsewhere or {}).items():
+        tabs[name] = sheet_cells(*other_rows)
+    write_tabs(gws, tabs)
 
 
 def seed(
@@ -154,6 +186,7 @@ def seed(
     jd=OLD_JD,
     location=OLD_LOCATION,
     company="Acme Widgets, Inc.",
+    role_family=ROLE_FAMILY,
 ):
     job_id = next(JOB_IDS)
     posting_id = db.insert_posting(
@@ -164,9 +197,16 @@ def seed(
         search_agent=search_agent,
     )
     conn.execute(
-        "UPDATE postings SET decision = ?, decided_at = ?, jd_markdown = ?, location = ? "
-        "WHERE id = ?",
-        (decision, LONG_AGO if decision else None, jd, location, posting_id),
+        "UPDATE postings SET decision = ?, decided_at = ?, jd_markdown = ?, location = ?, "
+        "role_family = ? WHERE id = ?",
+        (
+            decision,
+            LONG_AGO if decision else None,
+            jd,
+            location,
+            role_family,
+            posting_id,
+        ),
     )
     return posting_id
 
@@ -253,11 +293,38 @@ def flagged(code, output, posting_id) -> bool:
 # --- the tracker index --------------------------------------------------------
 
 
-def test_the_index_maps_posting_ids_to_row_numbers_and_date_applied(gws):
+def test_the_index_maps_posting_ids_to_tab_row_number_and_date_applied(gws):
     set_sheet(gws, (7, ""), (12, APPLIED))
-    index = tracker.sheet_index("sheet-123")
+    index = tracker.sheet_index("sheet-123", ROLE_FAMILIES)
+    assert index[7].tab == ROLE_FAMILY
     assert index[7].number == 2 and index[7].date_applied == ""
+    assert index[12].tab == ROLE_FAMILY
     assert index[12].number == 3 and index[12].date_applied == APPLIED
+
+
+def test_the_index_covers_every_role_familys_tab(gws):
+    first, second = ROLE_FAMILIES
+    set_sheet(gws, (7, ""), tab=first, elsewhere={second: [(8, APPLIED), (9, "")]})
+    index = tracker.sheet_index("sheet-123", ROLE_FAMILIES)
+    assert (index[7].tab, index[7].number, index[7].date_applied) == (first, 2, "")
+    assert (index[8].tab, index[8].number, index[8].date_applied) == (
+        second,
+        2,
+        APPLIED,
+    )
+    assert (index[9].tab, index[9].number) == (second, 3)
+
+
+def test_the_index_reads_only_the_tabs_it_is_given(gws):
+    first, second = ROLE_FAMILIES
+    set_sheet(gws, (7, ""), tab=first, elsewhere={second: [(8, "")]})
+    assert list(tracker.sheet_index("sheet-123", [second])) == [8]
+
+
+def test_the_index_read_fails_naming_a_tab_the_sheet_lacks(gws):
+    write_tabs(gws, {ROLE_FAMILIES[0]: sheet_cells((7, ""))})
+    with pytest.raises(Exception, match=ROLE_FAMILIES[1]):
+        tracker.sheet_index("sheet-123", ROLE_FAMILIES)
 
 
 def test_the_index_skips_rows_whose_id_cell_is_not_an_integer(gws):
@@ -269,21 +336,24 @@ def test_the_index_skips_rows_whose_id_cell_is_not_an_integer(gws):
         ["4.5", "Acme"],
         ["21", "Acme", "Role", "u", "", "2026-10-01", APPLIED],
     ]
-    gws.with_name("sheet.json").write_text(json.dumps(cells), encoding="utf-8")
-    index = tracker.sheet_index("sheet-123")
+    write_tabs(
+        gws, {name: cells if name == ROLE_FAMILY else [] for name in ROLE_FAMILIES}
+    )
+    index = tracker.sheet_index("sheet-123", ROLE_FAMILIES)
     assert list(index) == [21]
     assert index[21].number == 6
 
 
-def test_a_title_is_written_to_the_title_cell_of_the_rows_number(gws):
-    tracker.set_title("sheet-123", 9, "Principal Engineer")
-    assert title_updates(gws) == [(f"{tracker.TAB}!C9", "Principal Engineer")]
+@pytest.mark.parametrize("tab", ROLE_FAMILIES)
+def test_a_title_is_written_to_the_title_cell_of_the_rows_number_on_its_tab(gws, tab):
+    tracker.set_title("sheet-123", tab, 9, "Principal Engineer")
+    assert title_updates(gws) == [(f"'{tab}'!C9", "Principal Engineer")]
 
 
 @pytest.mark.parametrize("lead", ["=", "+", "-", "@"])
 def test_a_title_that_looks_like_a_formula_is_written_as_literal_text(gws, lead):
     text = f"{lead}HYPERLINK(1,2)"
-    tracker.set_title("sheet-123", 3, text)
+    tracker.set_title("sheet-123", ROLE_FAMILY, 3, text)
     [(_, value)] = title_updates(gws)
     assert value != text and value.startswith("'") and text in value
 
@@ -291,7 +361,7 @@ def test_a_title_that_looks_like_a_formula_is_written_as_literal_text(gws, lead)
 def test_a_failed_title_write_raises(gws, monkeypatch):
     monkeypatch.setenv("STUB_UPDATE_FAIL", "1")
     with pytest.raises(Exception, match="gws"):
-        tracker.set_title("sheet-123", 3, "Principal Engineer")
+        tracker.set_title("sheet-123", ROLE_FAMILY, 3, "Principal Engineer")
 
 
 # --- scope --------------------------------------------------------------------
@@ -469,7 +539,41 @@ def test_a_retitled_unapplied_tracked_row_gets_its_title_cell_rewritten(
     set_sheet(gws, (posting_id - 1, APPLIED), (posting_id, ""))
     code, _ = refetch(monkeypatch, capsys, "--id", posting_id)
     assert code == 0
-    assert title_updates(gws) == [(f"{tracker.TAB}!C3", NEW_TITLE)]
+    assert title_updates(gws) == [(f"'{ROLE_FAMILY}'!C3", NEW_TITLE)]
+
+
+def test_a_retitled_row_is_rewritten_on_the_tab_the_index_found_it_on(
+    rdb, web, gws, monkeypatch, capsys
+):
+    first, second = ROLE_FAMILIES
+    on_first = seed(rdb, role_family=first)
+    on_second = seed(rdb, role_family=second)
+    for posting_id in (on_first, on_second):
+        employer(web, rdb, posting_id)
+    set_sheet(
+        gws,
+        (on_first, ""),
+        tab=first,
+        elsewhere={second: [(on_first + 1000, APPLIED), (on_second, "")]},
+    )
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert sorted(title_updates(gws)) == sorted(
+        [(f"'{first}'!C2", NEW_TITLE), (f"'{second}'!C3", NEW_TITLE)]
+    )
+
+
+def test_the_title_goes_where_the_index_found_the_row_not_where_the_role_family_says(
+    rdb, web, gws, monkeypatch, capsys
+):
+    """A posting whose role family changed after it was tracked still sits on its old tab (PRD 04)."""
+    first, second = ROLE_FAMILIES
+    posting_id = seed(rdb, role_family=second)
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""), tab=first)
+    code, _ = refetch(monkeypatch, capsys, "--id", posting_id)
+    assert code == 0
+    assert title_updates(gws) == [(f"'{first}'!C2", NEW_TITLE)]
 
 
 def test_a_retitle_to_formula_text_is_written_to_the_sheet_as_literal_text(
@@ -480,7 +584,7 @@ def test_a_retitle_to_formula_text_is_written_to_the_sheet_as_literal_text(
     set_sheet(gws, (posting_id, ""))
     refetch(monkeypatch, capsys, "--id", posting_id)
     [(cell, value)] = title_updates(gws)
-    assert cell.endswith("C2") and value.startswith("'=HYPERLINK")
+    assert cell == f"'{ROLE_FAMILY}'!C2" and value.startswith("'=HYPERLINK")
 
 
 def test_a_retitled_row_with_a_date_applied_keeps_its_title_cell(
@@ -858,6 +962,24 @@ OLD_PDF = OLD_COPY.replace(".docx", ".pdf")
 NEW_PDF = NEW_COPY.replace(".docx", ".pdf")
 
 
+@pytest.mark.parametrize("role_family", [None, "Quantum Basket Weaving"])
+def test_a_retitled_row_whose_role_family_the_profile_lacks_is_renamed_but_not_regenerated_and_flagged(
+    rdb, web, gws, env, agent, monkeypatch, capsys, role_family
+):
+    _, packets = env
+    posting_id = seed(rdb, role_family=role_family)
+    folder = make_packet(rdb, packets, posting_id)
+    revised = (folder / OLD_COPY).read_bytes()
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys, "--id", posting_id)
+    assert flagged(code, output, posting_id)
+    assert f"jsa revise --id {posting_id}" in output
+    assert column(rdb, posting_id, "title") == NEW_TITLE
+    assert (packets / NEW_DIR / NEW_COPY).read_bytes() == revised
+    assert agent.calls == []
+
+
 def test_a_retitle_renames_the_resume_pdf_with_the_copy_and_leaves_it_untouched(
     rdb, web, gws, env, agent, soffice, monkeypatch, capsys
 ):
@@ -976,7 +1098,7 @@ def test_a_retitle_renames_the_cover_letter_copy_with_the_resume_copy_and_never_
     rdb, web, gws, env, monkeypatch, capsys, extension
 ):
     profile, packets = env
-    (profile / f"cover_letter.{extension}").write_bytes(b"THE BASE LETTER")
+    (family_dir(profile) / f"cover_letter.{extension}").write_bytes(b"THE BASE LETTER")
     posting_id = seed(rdb)
     folder = make_packet(rdb, packets, posting_id)
     old = OLD_LETTER.replace(".docx", f".{extension}")
@@ -996,7 +1118,7 @@ def test_a_retitle_renames_the_cover_letter_pdf_with_its_docx_copy_and_renders_n
     rdb, web, gws, env, soffice, monkeypatch, capsys
 ):
     profile, packets = env
-    (profile / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
+    (family_dir(profile) / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
     posting_id = seed(rdb)
     folder = make_packet(rdb, packets, posting_id)
     (folder / OLD_LETTER).write_bytes(b"MY REVISED LETTER")
@@ -1050,7 +1172,7 @@ def test_a_description_only_change_leaves_the_cover_letter_copy_alone(
     rdb, web, gws, env, monkeypatch, capsys
 ):
     profile, packets = env
-    (profile / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
+    (family_dir(profile) / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
     posting_id = seed(rdb)
     folder = make_packet(rdb, packets, posting_id)
     (folder / OLD_LETTER).write_bytes(b"MY REVISED LETTER")
@@ -1086,7 +1208,7 @@ def test_a_retitle_regeneration_adds_no_second_cover_letter_copy(
     rdb, web, gws, env, monkeypatch, capsys
 ):
     profile, packets = env
-    (profile / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
+    (family_dir(profile) / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
     posting_id = seed(rdb)
     folder = make_packet(rdb, packets, posting_id)
     (folder / OLD_LETTER).write_bytes(b"MY REVISED LETTER")
@@ -1103,7 +1225,7 @@ def test_refetch_never_creates_a_packet_or_cover_letter_where_none_existed(
     rdb, web, gws, env, monkeypatch, capsys
 ):
     profile, packets = env
-    (profile / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
+    (family_dir(profile) / "cover_letter.docx").write_bytes(b"THE BASE LETTER")
     posting_id = seed(rdb)
     employer(web, rdb, posting_id)
     set_sheet(gws, (posting_id, ""))
@@ -1443,7 +1565,7 @@ def test_a_retitle_flags_the_row_when_the_profile_holds_the_title_placeholder(
         env,
         monkeypatch,
         capsys,
-        lambda profile: save_with_tokens(profile / name, "Role: [TITLE]"),
+        lambda profile: save_with_tokens(family_dir(profile) / name, "Role: [TITLE]"),
     )
     assert code != 0
     assert "by hand" in output
@@ -1454,9 +1576,11 @@ def test_a_retitle_flags_the_row_when_the_profile_holds_the_title_placeholder(
     [
         lambda profile: None,
         lambda profile: save_with_tokens(
-            profile / "resume.docx", "[COMPANY] on [DATE], [Title]"
+            family_dir(profile) / "resume.docx", "[COMPANY] on [DATE], [Title]"
         ),
-        lambda profile: (profile / "cover_letter.pdf").write_bytes(b"Role: [TITLE]"),
+        lambda profile: (family_dir(profile) / "cover_letter.pdf").write_bytes(
+            b"Role: [TITLE]"
+        ),
     ],
     ids=["no-tokens", "other-tokens-only", "pdf-cover-letter"],
 )
@@ -1470,11 +1594,42 @@ def test_a_retitle_does_not_flag_the_row_without_a_title_placeholder_in_a_docx(
     assert "by hand" not in output
 
 
+def test_a_placeholder_in_another_role_familys_files_does_not_flag_the_row(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    profile, packets = env
+    other = family_dir(profile, ROLE_FAMILIES[1])
+    save_with_tokens(other / "resume.docx", "Role: [TITLE]")
+    save_with_tokens(other / "cover_letter.docx", "Role: [TITLE]")
+    posting_id = seed(rdb, role_family=ROLE_FAMILY)
+    make_packet(rdb, packets, posting_id)
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert "by hand" not in output
+
+
+def test_the_placeholder_check_reads_the_postings_own_role_family(
+    rdb, web, gws, env, monkeypatch, capsys
+):
+    profile, packets = env
+    own = ROLE_FAMILIES[1]
+    save_with_tokens(family_dir(profile, own) / "resume.docx", "Role: [TITLE]")
+    posting_id = seed(rdb, role_family=own)
+    make_packet(rdb, packets, posting_id)
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""), tab=own)
+    code, output = refetch(monkeypatch, capsys)
+    assert code != 0
+    assert "by hand" in output
+
+
 def test_a_description_only_change_does_not_flag_a_title_placeholder(
     rdb, web, gws, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx", "Role: [TITLE]")
+    save_with_tokens(family_dir(profile) / "resume.docx", "Role: [TITLE]")
     posting_id = seed(rdb)
     make_packet(rdb, packets, posting_id)
     employer(web, rdb, posting_id, title=OLD_TITLE)
@@ -1488,8 +1643,8 @@ def test_a_retitle_never_refills_the_renamed_copy_or_changes_the_profile(
     rdb, web, gws, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_tokens(profile / "resume.docx", "Role: [TITLE] at [COMPANY]")
-    base = (profile / "resume.docx").read_bytes()
+    save_with_tokens(family_dir(profile) / "resume.docx", "Role: [TITLE] at [COMPANY]")
+    base = (family_dir(profile) / "resume.docx").read_bytes()
     posting_id = seed(rdb)
     folder = make_packet(rdb, packets, posting_id)
     edit_copy(folder / OLD_COPY, "Role: [TITLE] typed by me")
@@ -1498,7 +1653,7 @@ def test_a_retitle_never_refills_the_renamed_copy_or_changes_the_profile(
     set_sheet(gws, (posting_id, ""))
     refetch(monkeypatch, capsys)
     assert (packets / NEW_DIR / NEW_COPY).read_bytes() == revised
-    assert (profile / "resume.docx").read_bytes() == base
+    assert (family_dir(profile) / "resume.docx").read_bytes() == base
 
 
 def test_a_posting_kept_out_of_refinement_is_refetched_like_any_other(

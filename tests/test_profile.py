@@ -14,6 +14,7 @@ from profile_helpers import (
     CONFIG_TOML,
     EXAMPLE_DIR,
     FRAGMENTS,
+    ROLE_FAMILIES,
     SEARCH_TOML,
     copy_example,
     write_config_toml,
@@ -612,8 +613,18 @@ def test_the_example_skills_list_uses_both_line_breaks_and_commas():
     assert "," in text and len(text.strip().splitlines()) > 1
 
 
-def test_the_example_resume_has_a_single_skills_paragraph_for_the_live_check():
-    section = skills_section(docx.Document(str(EXAMPLE_DIR / "resume.docx")))
+def example_resume(family: str) -> docx.document.Document:
+    """A role family's base resume in the example profile (PRD 04: the top-level `resume.docx` is gone)."""
+    return docx.Document(str(EXAMPLE_DIR / "role_families" / family / "resume.docx"))
+
+
+def test_the_example_profile_has_no_top_level_resume():
+    assert not (EXAMPLE_DIR / "resume.docx").exists()
+
+
+@pytest.mark.parametrize("family", ROLE_FAMILIES)
+def test_the_example_resume_has_a_single_skills_paragraph_for_the_live_check(family):
+    section = skills_section(example_resume(family))
     assert section is not None and len(section) > 0
 
 
@@ -640,25 +651,33 @@ EXAMPLE_RESUME_TEXT_WITHOUT_THE_HEADLINE = [
 ]
 
 
-def test_the_example_resume_gains_a_one_line_headline_under_the_contact_line():
-    document = docx.Document(str(EXAMPLE_DIR / "resume.docx"))
-    texts = [paragraph.text for paragraph in document.paragraphs]
-    assert len(texts) == len(EXAMPLE_RESUME_TEXT_WITHOUT_THE_HEADLINE) + 1
+@pytest.mark.parametrize("family", ROLE_FAMILIES)
+def test_the_example_resume_gains_a_one_line_headline_under_the_contact_line(family):
+    texts = [paragraph.text for paragraph in example_resume(family).paragraphs]
     headline = texts[2]
     assert headline.strip() and "\n" not in headline and headline not in texts[:2]
     assert texts[:2] == EXAMPLE_RESUME_TEXT_WITHOUT_THE_HEADLINE[:2]
-    # Everything else keeps its text and its order.
+    assert texts[3] == "Summary"
+
+
+def test_the_example_resume_of_the_first_family_keeps_its_text_and_order_around_the_headline():
+    texts = [
+        paragraph.text for paragraph in example_resume(ROLE_FAMILIES[0]).paragraphs
+    ]
+    assert len(texts) == len(EXAMPLE_RESUME_TEXT_WITHOUT_THE_HEADLINE) + 1
     assert texts[:2] + texts[3:] == EXAMPLE_RESUME_TEXT_WITHOUT_THE_HEADLINE
 
 
-def test_the_example_headline_is_plain_text_not_a_bold_section_label():
-    paragraph = docx.Document(str(EXAMPLE_DIR / "resume.docx")).paragraphs[2]
+@pytest.mark.parametrize("family", ROLE_FAMILIES)
+def test_the_example_headline_is_plain_text_not_a_bold_section_label(family):
+    paragraph = example_resume(family).paragraphs[2]
     assert not all(run.bold for run in paragraph.runs if run.text.strip())
     assert not paragraph.style.name.startswith("Heading")
 
 
-def test_the_example_resume_still_has_one_skills_section_after_the_headline():
-    section = skills_section(docx.Document(str(EXAMPLE_DIR / "resume.docx")))
+@pytest.mark.parametrize("family", ROLE_FAMILIES)
+def test_the_example_resume_still_has_one_skills_section_after_the_headline(family):
+    section = skills_section(example_resume(family))
     assert section is not None and len(section) > 0
 
 

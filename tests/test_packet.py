@@ -1,9 +1,10 @@
-"""`jsa packet` (issue #11; PRD 04 "Base resume" and "Packet directory"; PRD 02 "Packet queue"; XC-9, XC-11).
+"""`jsa packet` (issue #11; PRD 04 "Role families", "Base resume" and "Packet directory"; PRD 02 "Packet queue"; XC-9, XC-11).
 
 The database is the libSQL container; the packets directory and the profile are
 temporary directories, so nothing outside the test's own paths is touched.
 """
 
+import shutil
 import socket
 import sqlite3
 import sys
@@ -12,7 +13,14 @@ from pathlib import Path
 import docx
 import pytest
 from conftest import drop_all_tables, unique_url
-from profile_helpers import EXAMPLE_DIR, copy_example, write_config_toml
+from profile_helpers import (
+    EXAMPLE_DIR,
+    ROLE_FAMILIES,
+    ROLE_FAMILY,
+    copy_example,
+    family_dir,
+    write_config_toml,
+)
 from soffice_helpers import rendered
 
 from jsa import cli, db
@@ -41,7 +49,7 @@ def pdb(db_url):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """A profile with a distinctive base resume and `candidate_name`, and its packets directory."""
+    """A profile whose `ROLE_FAMILY` has a distinctive base resume, with `candidate_name`, and its packets directory."""
     profile = copy_example(tmp_path / "profile")
     packets = tmp_path / "packets"
     write_config_toml(
@@ -49,7 +57,7 @@ def env(tmp_path, monkeypatch):
     )
     document = docx.Document()
     document.add_paragraph("Pat Example, a fictional candidate")
-    document.save(profile / "resume.docx")
+    document.save(family_dir(profile) / "resume.docx")
     monkeypatch.setenv("JSA_PROFILE_DIR", str(profile))
     return profile, packets
 
@@ -63,19 +71,21 @@ def seed(
     tracked=False,
     closed=False,
     jd=JD,
+    role_family=ROLE_FAMILY,
 ):
     posting_id = db.insert_posting(
         conn, company=company, title=title, url=unique_url(), search_agent="claude"
     )
     conn.execute(
         "UPDATE postings SET decision = ?, decided_at = ?, added_to_tracker = ?, "
-        "closed_at = ?, jd_markdown = ? WHERE id = ?",
+        "closed_at = ?, jd_markdown = ?, role_family = ? WHERE id = ?",
         (
             decision,
             LONG_AGO if decision else None,
             int(tracked),
             LONG_AGO if closed else None,
             jd,
+            role_family,
             posting_id,
         ),
     )
@@ -104,8 +114,11 @@ def snapshot(directory: Path) -> dict[str, bytes]:
 # --- the example profile's resume ---------------------------------------------
 
 
-def test_the_example_resume_opens_and_describes_the_fictional_candidate():
-    document = docx.Document(str(EXAMPLE_DIR / "resume.docx"))
+@pytest.mark.parametrize("family", ROLE_FAMILIES)
+def test_the_example_resume_opens_and_describes_the_fictional_candidate(family):
+    document = docx.Document(
+        str(EXAMPLE_DIR / "role_families" / family / "resume.docx")
+    )
     text = "\n".join(p.text for p in document.paragraphs)
     assert text.strip()
     assert "Jordan Example" in text
@@ -115,18 +128,22 @@ def test_the_example_resume_opens_and_describes_the_fictional_candidate():
 # --- the base resume ----------------------------------------------------------
 
 
+@pytest.mark.parametrize("family", ROLE_FAMILIES)
 @pytest.mark.parametrize("state", ["missing", "empty"])
 def test_a_missing_or_empty_base_resume_fails_before_any_row_is_processed(
-    pdb, env, monkeypatch, capsys, state
+    pdb, env, monkeypatch, capsys, state, family
 ):
     profile, packets = env
     seed(pdb)
+    resume = family_dir(profile, family) / "resume.docx"
     if state == "missing":
-        (profile / "resume.docx").unlink()
+        resume.unlink()
     else:
-        (profile / "resume.docx").write_bytes(b"")
+        resume.write_bytes(b"")
     code, output = jsa_packet(monkeypatch, capsys)
     assert code != 0
+    # The check covers every role family's folder, not only the posting's, and names the folder.
+    assert str(family_dir(profile, family)) in output
     assert "profile.example" in output
     assert entries(packets) == set()
 
@@ -135,10 +152,112 @@ def test_the_resume_requirement_applies_even_when_the_queue_is_empty(
     pdb, env, monkeypatch, capsys
 ):
     profile, _ = env
-    (profile / "resume.docx").unlink()
+    (family_dir(profile) / "resume.docx").unlink()
+    code, output = jsa_packet(monkeypatch, capsys)
+    assert code != 0
+    assert str(family_dir(profile)) in output
+    assert "profile.example" in output
+
+
+def test_a_profile_with_no_role_family_fails_before_any_row_is_processed(
+    pdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    shutil.rmtree(profile / "role_families")
+    seed(pdb)
     code, output = jsa_packet(monkeypatch, capsys)
     assert code != 0
     assert "profile.example" in output
+    assert entries(packets) == set()
+
+
+def test_a_resume_at_the_top_of_the_profile_is_not_a_base_resume(
+    pdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    shutil.copy(family_dir(profile) / "resume.docx", profile / "resume.docx")
+    shutil.rmtree(profile / "role_families")
+    seed(pdb)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code != 0
+    assert entries(packets) == set()
+
+
+# --- a posting's role family ----------------------------------------------------
+
+
+@pytest.mark.parametrize("family", ROLE_FAMILIES)
+def test_the_resume_copy_is_the_postings_own_role_familys_base_resume(
+    pdb, env, monkeypatch, capsys, family
+):
+    profile, packets = env
+    seed(pdb, role_family=family)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    copy = packets / PLAIN / RESUME_COPY
+    assert (
+        copy.read_bytes() == (family_dir(profile, family) / "resume.docx").read_bytes()
+    )
+
+
+def test_postings_of_different_role_families_each_get_their_own_families_resume(
+    pdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    seed(pdb, company="Beta Labs", role_family=ROLE_FAMILIES[0])
+    seed(pdb, company="Gamma Labs", role_family=ROLE_FAMILIES[1])
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    for company, family in (
+        ("Beta Labs", ROLE_FAMILIES[0]),
+        ("Gamma Labs", ROLE_FAMILIES[1]),
+    ):
+        [copy] = (packets / f"{company} - Staff Engineer").glob("*_Resume_*.docx")
+        expected = family_dir(profile, family) / "resume.docx"
+        assert copy.read_bytes() == expected.read_bytes()
+    assert (family_dir(profile, ROLE_FAMILIES[0]) / "resume.docx").read_bytes() != (
+        family_dir(profile, ROLE_FAMILIES[1]) / "resume.docx"
+    ).read_bytes()
+
+
+@pytest.mark.parametrize(
+    "role_family", [None, "Quantum Basket Weaving"], ids=["none", "unknown"]
+)
+def test_a_posting_with_no_or_an_unknown_role_family_is_flagged_and_gets_nothing(
+    pdb, env, monkeypatch, capsys, role_family
+):
+    _, packets = env
+    posting_id = seed(pdb, role_family=role_family)
+    code, output = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert str(posting_id) in output
+    assert f"jsa revise --id {posting_id}" in output
+    assert entries(packets) == set()
+    # It stays in the queue for the run after the user gives it a role family.
+    assert [job.id for job in db.packet_queue(pdb)] == [posting_id]
+
+
+def test_a_posting_without_a_role_family_does_not_stop_the_others(
+    pdb, env, monkeypatch, capsys
+):
+    _, packets = env
+    blind = seed(pdb, company="Beta Labs", role_family=None)
+    seed(pdb, company="Gamma Labs")
+    code, output = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert f"jsa revise --id {blind}" in output
+    assert entries(packets) == {"Gamma Labs - Staff Engineer"}
+
+
+def test_id_on_a_posting_without_a_role_family_builds_nothing(
+    pdb, env, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(pdb, role_family=None)
+    code, output = jsa_packet(monkeypatch, capsys, "--id", posting_id)
+    assert code == 0
+    assert f"jsa revise --id {posting_id}" in output
+    assert entries(packets) == set()
 
 
 # --- building a packet --------------------------------------------------------
@@ -154,7 +273,9 @@ def test_an_apply_untracked_open_posting_gets_a_folder_with_jd_and_resume_copy(
     folder = packets / PLAIN
     assert entries(folder) == {"job_posting.md", RESUME_COPY}
     assert (folder / "job_posting.md").read_text(encoding="utf-8") == JD
-    assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_COPY).read_bytes() == (
+        family_dir(profile) / "resume.docx"
+    ).read_bytes()
 
 
 def test_no_checklist_or_redline_file_is_written(pdb, env, monkeypatch, capsys):
@@ -572,8 +693,10 @@ COVER_LETTER_COPY = RESUME_COPY.replace("_Resume_", "_CoverLetter_")
 COVER_LETTER_PDF = COVER_LETTER_COPY.replace(".docx", ".pdf")
 
 
-def write_cover_letter(profile: Path, name: str = "cover_letter.docx") -> Path:
-    path = profile / name
+def write_cover_letter(
+    profile: Path, name: str = "cover_letter.docx", family: str = ROLE_FAMILY
+) -> Path:
+    path = family_dir(profile, family) / name
     path.write_bytes(f"COVER LETTER {name}".encode())
     return path
 
@@ -774,20 +897,75 @@ def test_an_existing_folder_is_skipped_so_its_cover_letter_is_never_touched(
     assert snapshot(folder) == {COVER_LETTER_COPY: b"MY EDITED COVER LETTER"}
 
 
+@pytest.mark.parametrize("family", ROLE_FAMILIES)
 @pytest.mark.parametrize("queue", ["a posting", "no posting"])
 def test_more_than_one_cover_letter_fails_before_any_row_naming_the_files(
-    pdb, env, monkeypatch, capsys, queue
+    pdb, env, monkeypatch, capsys, queue, family
 ):
     profile, packets = env
-    write_cover_letter(profile, "cover_letter.docx")
-    write_cover_letter(profile, "cover_letter.pdf")
+    write_cover_letter(profile, "cover_letter.docx", family)
+    write_cover_letter(profile, "cover_letter.pdf", family)
     if queue == "a posting":
         seed(pdb)
     code, output = jsa_packet(monkeypatch, capsys)
     assert code != 0
+    assert str(family_dir(profile, family)) in output
     assert "cover_letter.docx" in output
     assert "cover_letter.pdf" in output
     assert entries(packets) == set()
+
+
+def test_a_cover_letter_is_the_postings_own_role_familys_and_is_not_shared(
+    pdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    first, second = ROLE_FAMILIES
+    # One family has a letter and the other none, so a letter would reach the wrong packet if shared.
+    letter = write_cover_letter(profile, "cover_letter.txt", first)
+    seed(pdb, company="Beta Labs", role_family=first)
+    seed(pdb, company="Gamma Labs", role_family=second)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    copy = packets / "Beta Labs - Staff Engineer"
+    copy /= "PatExample_CoverLetter_StaffEngineer_BetaLabs.txt"
+    assert copy.read_bytes() == letter.read_bytes()
+    assert not [
+        n
+        for n in entries(packets / "Gamma Labs - Staff Engineer")
+        if "CoverLetter" in n
+    ]
+
+
+def test_each_role_family_gets_its_own_cover_letter(pdb, env, monkeypatch, capsys):
+    profile, packets = env
+    letters = {
+        family: write_cover_letter(profile, "cover_letter.txt", family)
+        for family in ROLE_FAMILIES
+    }
+    for family, letter in letters.items():
+        letter.write_bytes(f"LETTER FOR {family}".encode())
+    seed(pdb, company="Beta Labs", role_family=ROLE_FAMILIES[0])
+    seed(pdb, company="Gamma Labs", role_family=ROLE_FAMILIES[1])
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    for company, family in (("Beta", ROLE_FAMILIES[0]), ("Gamma", ROLE_FAMILIES[1])):
+        copy = (
+            packets
+            / f"{company} Labs - Staff Engineer"
+            / f"PatExample_CoverLetter_StaffEngineer_{company}Labs.txt"
+        )
+        assert copy.read_bytes() == f"LETTER FOR {family}".encode()
+
+
+def test_a_cover_letter_at_the_top_of_the_profile_is_not_copied(
+    pdb, env, monkeypatch, capsys
+):
+    profile, packets = env
+    (profile / "cover_letter.docx").write_bytes(b"TOP LEVEL LETTER")
+    seed(pdb)
+    code, _ = jsa_packet(monkeypatch, capsys)
+    assert code == 0
+    assert entries(packets / PLAIN) == {"job_posting.md", RESUME_COPY}
 
 
 @pytest.mark.parametrize(

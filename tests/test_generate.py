@@ -23,11 +23,17 @@ import pytest
 from claude_agent_sdk import ResultMessage
 from conftest import drop_all_tables
 from docx.oxml import parse_xml
-from profile_helpers import copy_example, write_config_toml
+from profile_helpers import (
+    ROLE_FAMILIES,
+    ROLE_FAMILY,
+    copy_example,
+    family_dir,
+    write_config_toml,
+)
 from soffice_helpers import rendered
 from test_claude_runner import result_message
 from test_review import Web
-from test_tracker import STUB, appended_rows, calls
+from test_tracker import STUB, appended_rows, calls, params_of
 
 from jsa import agent_loop, cli, db
 
@@ -139,7 +145,7 @@ def env(tmp_path, monkeypatch):
     document = docx.Document()
     document.add_paragraph().add_run("Riley Resumeperson").bold = True
     document.add_paragraph(BASE_LINE)
-    document.save(profile / "resume.docx")
+    document.save(family_dir(profile) / "resume.docx")
     monkeypatch.setenv("JSA_PROFILE_DIR", str(profile))
     monkeypatch.delenv("JSA_GENERATE_WORKERS", raising=False)
     return profile, packets
@@ -177,6 +183,7 @@ def seed(
     tracked=False,
     closed=False,
     jd=JD,
+    role_family=ROLE_FAMILY,
 ):
     posting_id = db.insert_posting(
         conn,
@@ -187,13 +194,14 @@ def seed(
     )
     conn.execute(
         "UPDATE postings SET decision = ?, decided_at = ?, added_to_tracker = ?, "
-        "closed_at = ?, jd_markdown = ? WHERE id = ?",
+        "closed_at = ?, jd_markdown = ?, role_family = ? WHERE id = ?",
         (
             decision,
             LONG_AGO if decision else None,
             int(tracked),
             LONG_AGO if closed else None,
             jd,
+            role_family if decision == "Apply" else None,
             posting_id,
         ),
     )
@@ -259,7 +267,9 @@ def test_an_open_apply_posting_gets_a_full_packet_and_a_tracker_row(
         REDLINE_EDITS,
     }
     assert (folder / "job_posting.md").read_text(encoding="utf-8") == JD
-    assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_COPY).read_bytes() == (
+        family_dir(profile) / "resume.docx"
+    ).read_bytes()
     assert [row[0] for row in appended_rows(gws)] == [posting_id]
     assert column(gdb, posting_id, "added_to_tracker") == 1
 
@@ -591,7 +601,7 @@ def test_the_base_resume_changing_later_does_not_reach_an_existing_copys_redline
     (packets / PLAIN / REDLINE_EDITS).unlink()
     document = docx.Document()
     document.add_paragraph("BASE ONLY: a different base resume entirely")
-    document.save(profile / "resume.docx")
+    document.save(family_dir(profile) / "resume.docx")
     agent.calls.clear()
     jsa_generate(monkeypatch, capsys, "--id", posting_id)
     (prompt,) = agent.prompts
@@ -622,7 +632,9 @@ def test_a_deleted_resume_copy_is_restored_from_the_base_before_the_redline(
     (folder / "job_posting.md").write_text(JD, encoding="utf-8")
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
-    assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_COPY).read_bytes() == (
+        family_dir(profile) / "resume.docx"
+    ).read_bytes()
     assert BASE_LINE in agent.prompts[0]
 
 
@@ -637,7 +649,7 @@ def test_generate_puts_the_cover_letter_copy_in_the_packet_head(
     gdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    (profile / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
+    (family_dir(profile) / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
     seed(gdb)
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
@@ -656,7 +668,7 @@ def test_a_docx_cover_letter_copy_gets_its_pdf_only_when_it_has_none(
     gdb, env, soffice, monkeypatch, capsys
 ):
     profile, packets = env
-    (profile / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
+    (family_dir(profile) / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
     posting_id = seed(gdb)
     folder = packets / PLAIN
     folder.mkdir(parents=True)
@@ -679,7 +691,7 @@ def test_generate_without_a_cover_letter_makes_none(gdb, env, monkeypatch, capsy
 
 def test_an_existing_cover_letter_copy_is_never_modified(gdb, env, monkeypatch, capsys):
     profile, packets = env
-    (profile / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
+    (family_dir(profile) / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
     posting_id = seed(gdb)
     folder = packets / PLAIN
     folder.mkdir(parents=True)
@@ -693,7 +705,7 @@ def test_a_deleted_cover_letter_copy_is_restored_from_the_profile(
     gdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    (profile / "cover_letter.pdf").write_bytes(COVER_LETTER_TEXT)
+    (family_dir(profile) / "cover_letter.pdf").write_bytes(COVER_LETTER_TEXT)
     seed(gdb)
     folder = packets / PLAIN
     folder.mkdir(parents=True)
@@ -709,7 +721,7 @@ def test_the_redline_does_not_see_the_cover_letter(
     profile, _ = env
     document = docx.Document()
     document.add_paragraph("ZEBRAQUILL-MARKER")
-    document.save(profile / "cover_letter.docx")
+    document.save(family_dir(profile) / "cover_letter.docx")
     seed(gdb)
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
@@ -721,8 +733,8 @@ def test_more_than_one_cover_letter_fails_before_any_row_is_processed(
     gdb, env, agent, gws, monkeypatch, capsys
 ):
     profile, packets = env
-    (profile / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
-    (profile / "cover_letter.pdf").write_bytes(COVER_LETTER_TEXT)
+    (family_dir(profile) / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
+    (family_dir(profile) / "cover_letter.pdf").write_bytes(COVER_LETTER_TEXT)
     seed(gdb)
     code, output = jsa_generate(monkeypatch, capsys)
     assert code != 0
@@ -954,9 +966,9 @@ def test_a_dry_run_with_an_id_writes_nothing_even_to_an_existing_packet(
 
 def _break_resume(profile, state):
     if state == "missing":
-        (profile / "resume.docx").unlink()
+        (family_dir(profile) / "resume.docx").unlink()
     else:
-        (profile / "resume.docx").write_bytes(b"")
+        (family_dir(profile) / "resume.docx").write_bytes(b"")
 
 
 def _break_tracker_id(profile, state):
@@ -1014,10 +1026,151 @@ def test_the_requirements_apply_even_when_the_queue_is_empty(
     gdb, env, monkeypatch, capsys
 ):
     profile, _ = env
-    (profile / "resume.docx").unlink()
+    (family_dir(profile) / "resume.docx").unlink()
     code, output = jsa_generate(monkeypatch, capsys)
     assert code != 0
     assert "profile.example" in output
+
+
+@pytest.mark.parametrize("family", ROLE_FAMILIES)
+@pytest.mark.parametrize("state", ["missing", "empty"])
+def test_a_bad_resume_in_any_role_family_fails_before_any_row_is_processed_naming_its_folder(
+    gdb, env, agent, gws, family, state, monkeypatch, capsys
+):
+    profile, packets = env
+    seed(gdb)
+    resume = family_dir(profile, family) / "resume.docx"
+    if state == "missing":
+        resume.unlink()
+    else:
+        resume.write_bytes(b"")
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert str(family_dir(profile, family)) in output
+    assert "profile.example" in output
+    assert entries(packets) == set()
+    assert agent.calls == [] and not gws.exists()
+
+
+def test_a_profile_without_role_families_fails_before_any_row_is_processed(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    profile, packets = env
+    seed(gdb)
+    shutil.rmtree(profile / "role_families")
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert "profile.example" in output
+    assert entries(packets) == set()
+    assert agent.calls == [] and not gws.exists()
+
+
+def test_two_cover_letters_in_any_role_family_fail_the_run_naming_its_folder(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    profile, packets = env
+    other = family_dir(profile, ROLE_FAMILIES[1])
+    seed(gdb)
+    (other / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
+    (other / "cover_letter.pdf").write_bytes(COVER_LETTER_TEXT)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code != 0
+    assert str(other) in output
+    assert entries(packets) == set()
+    assert agent.calls == [] and not gws.exists()
+
+
+# --- role families (PRD 04 "Role families") -----------------------------------
+
+
+def tabs_appended_to(gws) -> list[str]:
+    return [params_of(argv)["range"].split("!")[0] for argv in calls(gws)]
+
+
+@pytest.mark.parametrize(
+    "family", [None, "Retired Role"], ids=["none", "not-in-the-profile"]
+)
+def test_a_row_without_a_usable_role_family_is_flagged_and_nothing_is_built_or_tracked(
+    gdb, env, agent, gws, family, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb, role_family=family)
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert str(posting_id) in output
+    assert f"jsa revise --id {posting_id}" in output
+    assert entries(packets) == set()
+    assert agent.calls == [] and not gws.exists()
+    assert column(gdb, posting_id, "added_to_tracker") == 0
+    again, _ = jsa_generate(monkeypatch, capsys)
+    assert agent.calls == [] and not gws.exists()
+    assert code == again
+    assert [
+        row[0]
+        for row in gdb.execute(
+            "SELECT id FROM postings WHERE decision = 'Apply' AND added_to_tracker = 0"
+        ).fetchall()
+    ] == [posting_id]
+
+
+def test_a_row_without_a_role_family_does_not_stop_the_others(
+    gdb, env, gws, monkeypatch, capsys
+):
+    _, packets = env
+    orphan = seed(gdb, company="Orphan Labs", role_family=None)
+    served = seed(gdb, company="Served Labs")
+    jsa_generate(monkeypatch, capsys)
+    assert entries(packets) == {"Served Labs - Staff Engineer"}
+    assert [row[0] for row in appended_rows(gws)] == [served]
+    assert column(gdb, orphan, "added_to_tracker") == 0
+    assert column(gdb, served, "added_to_tracker") == 1
+
+
+def test_an_id_for_a_row_without_a_role_family_builds_nothing(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    _, packets = env
+    posting_id = seed(gdb, role_family=None)
+    _, output = jsa_generate(monkeypatch, capsys, "--id", posting_id)
+    assert f"jsa revise --id {posting_id}" in output
+    assert entries(packets) == set()
+    assert agent.calls == [] and not gws.exists()
+
+
+def test_each_packet_starts_from_its_own_role_familys_files_and_tracks_on_its_tab(
+    gdb, env, agent, gws, monkeypatch, capsys
+):
+    profile, packets = env
+    first, second = ROLE_FAMILIES
+    document = docx.Document()
+    document.add_paragraph("SECOND FAMILY BASE LINE")
+    document.save(family_dir(profile, second) / "resume.docx")
+    (family_dir(profile, second) / "cover_letter.docx").write_bytes(COVER_LETTER_TEXT)
+    a = seed(gdb, company="Alpha Labs", role_family=first)
+    b = seed(gdb, company="Beta Labs", role_family=second)
+    code, _ = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    alpha, beta = (
+        packets / "Alpha Labs - Staff Engineer",
+        packets / "Beta Labs - Staff Engineer",
+    )
+    assert (alpha / "PatExample_Resume_StaffEngineer_AlphaLabs.docx").read_bytes() == (
+        family_dir(profile, first) / "resume.docx"
+    ).read_bytes()
+    assert (beta / "PatExample_Resume_StaffEngineer_BetaLabs.docx").read_bytes() == (
+        family_dir(profile, second) / "resume.docx"
+    ).read_bytes()
+    assert not any("CoverLetter" in name for name in entries(alpha))
+    assert any("CoverLetter" in name for name in entries(beta))
+    # The redline reads each posting's own packet copy, so each family's base line reaches exactly one prompt.
+    assert sum(BASE_LINE in prompt for prompt in agent.prompts) == 1
+    assert any(
+        "SECOND FAMILY BASE LINE" in prompt and BASE_LINE not in prompt
+        for prompt in agent.prompts
+    )
+    ids_to_tabs = dict(
+        zip([row[0] for row in appended_rows(gws)], tabs_appended_to(gws))
+    )
+    assert ids_to_tabs == {a: f"'{first}'", b: f"'{second}'"}
 
 
 def test_the_command_is_registered_with_id_and_dry_run(monkeypatch, capsys):
@@ -1127,7 +1280,7 @@ def test_every_proposed_edit_is_recorded_with_its_validation_result(
     assert len(record["edits"]) == 2
     assert all(edit["validation"] for edit in record["edits"])
     assert (packets / PLAIN / RESUME_COPY).read_bytes() == (
-        profile / "resume.docx"
+        family_dir(profile) / "resume.docx"
     ).read_bytes()
 
 
@@ -1141,7 +1294,9 @@ def test_a_run_with_no_valid_edit_writes_the_record_leaves_the_copy_and_renders_
     folder = packets / PLAIN
     assert REDLINE_EDITS in entries(folder)
     assert proposed(folder)["explanation"] is None
-    assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_COPY).read_bytes() == (
+        family_dir(profile) / "resume.docx"
+    ).read_bytes()
     assert (folder / RESUME_PDF).is_file()
     assert rendered(soffice) == [RESUME_COPY]
     assert column(gdb, posting_id, "added_to_tracker") == 1
@@ -1163,7 +1318,9 @@ def test_a_run_where_the_agent_proposes_no_edits_records_why_and_renders_the_res
         "flags": [],
     }
     folder = packets / PLAIN
-    assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_COPY).read_bytes() == (
+        family_dir(profile) / "resume.docx"
+    ).read_bytes()
     assert (folder / RESUME_PDF).is_file()
     assert column(gdb, posting_id, "added_to_tracker") == 1
 
@@ -1209,7 +1366,9 @@ def test_a_flag_becomes_a_comment_without_a_change_and_the_resume_gets_no_pdf(
     assert record["explanation"] is None and record["edits"] == []
     (flag,) = record["flags"]
     assert flag["validation"] is None
-    assert (folder / RESUME_COPY).read_bytes() != (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_COPY).read_bytes() != (
+        family_dir(profile) / "resume.docx"
+    ).read_bytes()
     with zipfile.ZipFile(folder / RESUME_COPY) as archive:
         body = archive.read("word/document.xml").decode("utf-8")
         comments = archive.read("word/comments.xml").decode("utf-8")
@@ -1246,7 +1405,9 @@ def test_a_run_where_every_proposal_is_dropped_leaves_the_copy_and_renders_its_p
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
     folder = packets / PLAIN
-    assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_COPY).read_bytes() == (
+        family_dir(profile) / "resume.docx"
+    ).read_bytes()
     assert (folder / RESUME_PDF).is_file()
     assert rendered(soffice) == [RESUME_COPY]
 
@@ -1255,13 +1416,13 @@ def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_bas
     gdb, env, agent, monkeypatch, capsys
 ):
     profile, packets = env
-    base = (profile / "resume.docx").read_bytes()
+    base = (family_dir(profile) / "resume.docx").read_bytes()
     seed(gdb, jd=QUUX_JD)
     agent.respond = redline_reply(QUUX_EDIT)
     jsa_generate(monkeypatch, capsys)
     folder = packets / PLAIN
     assert (folder / RESUME_COPY).read_bytes() != base
-    assert (profile / "resume.docx").read_bytes() == base
+    assert (family_dir(profile) / "resume.docx").read_bytes() == base
     assert not [name for name in entries(folder) if name.endswith("_redline.docx")]
 
 
@@ -1455,7 +1616,7 @@ def test_an_id_leaves_a_redlined_copy_and_its_record_alone_but_refreshes_the_pos
     folder = packets / PLAIN
     folder.mkdir(parents=True)
     copy = folder / RESUME_COPY
-    shutil.copy(profile / "resume.docx", copy)
+    shutil.copy(family_dir(profile) / "resume.docx", copy)
     edit_copy(copy, "MY REVIEW IN PROGRESS")
     reviewed = copy.read_bytes()
     (folder / REDLINE_EDITS).write_text(applied_record(), encoding="utf-8")
@@ -1477,7 +1638,7 @@ def test_a_record_whose_only_applied_proposal_is_a_flag_gets_no_resume_pdf(
     posting_id = seed(gdb)
     folder = packets / PLAIN
     folder.mkdir(parents=True)
-    shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
+    shutil.copy(family_dir(profile) / "resume.docx", folder / RESUME_COPY)
     record = json.dumps(
         {
             "explanation": None,
@@ -1519,7 +1680,7 @@ def test_a_record_in_the_previous_shape_is_not_read_and_flags_the_row(
     posting_id = seed(gdb)
     folder = packets / PLAIN
     folder.mkdir(parents=True)
-    shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
+    shutil.copy(family_dir(profile) / "resume.docx", folder / RESUME_COPY)
     record = json.dumps(PREVIOUS_RECORDS[shape])
     (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
     extra = ("--id", posting_id) if args == "id" else ()
@@ -1540,7 +1701,7 @@ def test_a_record_with_no_applied_edit_and_no_resume_pdf_gets_the_pdf_without_a_
     posting_id = seed(gdb)
     folder = packets / PLAIN
     folder.mkdir(parents=True)
-    shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
+    shutil.copy(family_dir(profile) / "resume.docx", folder / RESUME_COPY)
     record = NO_EDITS_RECORD
     (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
     extra = ("--id", posting_id) if args == "id" else ()
@@ -1560,7 +1721,7 @@ def test_an_existing_resume_pdf_is_never_replaced_or_refreshed(
     posting_id = seed(gdb)
     folder = packets / PLAIN
     folder.mkdir(parents=True)
-    shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
+    shutil.copy(family_dir(profile) / "resume.docx", folder / RESUME_COPY)
     (folder / RESUME_PDF).write_bytes(b"MY OWN EXPORT")
     (folder / REDLINE_EDITS).write_text(
         NO_EDITS_RECORD,
@@ -1775,7 +1936,7 @@ def save_with_company_token(path: Path) -> None:
 
 def test_the_redline_reads_the_filled_copy(gdb, env, agent, monkeypatch, capsys):
     profile, packets = env
-    save_with_company_token(profile / "resume.docx")
+    save_with_company_token(family_dir(profile) / "resume.docx")
     seed(gdb)
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
@@ -1791,8 +1952,8 @@ def test_generate_fills_a_docx_cover_letter_copy_and_leaves_the_profiles_alone(
     gdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_company_token(profile / "cover_letter.docx")
-    base = (profile / "cover_letter.docx").read_bytes()
+    save_with_company_token(family_dir(profile) / "cover_letter.docx")
+    base = (family_dir(profile) / "cover_letter.docx").read_bytes()
     seed(gdb)
     code, _ = jsa_generate(monkeypatch, capsys)
     assert code == 0
@@ -1800,15 +1961,15 @@ def test_generate_fills_a_docx_cover_letter_copy_and_leaves_the_profiles_alone(
     assert (
         letter.paragraphs[1].text == "Keen on Acme Widgets and the Staff Engineer role."
     )
-    assert (profile / "cover_letter.docx").read_bytes() == base
+    assert (family_dir(profile) / "cover_letter.docx").read_bytes() == base
 
 
 def test_generate_never_fills_an_existing_copy_a_second_time(
     gdb, env, monkeypatch, capsys
 ):
     profile, packets = env
-    save_with_company_token(profile / "resume.docx")
-    save_with_company_token(profile / "cover_letter.docx")
+    save_with_company_token(family_dir(profile) / "resume.docx")
+    save_with_company_token(family_dir(profile) / "cover_letter.docx")
     posting_id = seed(gdb)
     folder = packets / PLAIN
     folder.mkdir(parents=True)
@@ -1858,7 +2019,7 @@ def write_resume_with(profile: Path, *blocks: str) -> None:
     document.add_paragraph(BASE_LINE)
     for text in blocks:
         document.add_paragraph(text)
-    document.save(profile / "resume.docx")
+    document.save(family_dir(profile) / "resume.docx")
 
 
 def skills_warnings(output: str) -> list[str]:
@@ -1916,7 +2077,9 @@ def test_without_a_skills_list_the_prompt_carries_none_and_a_skills_edit_is_drop
     folder = packets / PLAIN
     (entry,) = proposed(folder)["edits"]
     assert isinstance(entry["validation"], str) and entry["validation"]
-    assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_COPY).read_bytes() == (
+        family_dir(profile) / "resume.docx"
+    ).read_bytes()
     assert (folder / RESUME_PDF).is_file()
 
 
@@ -1967,7 +2130,9 @@ def test_a_skills_edit_that_fails_validation_leaves_the_copy_and_renders_its_pdf
     agent.respond = redline_reply({**SK_EDIT, "replace": "Looker, Rust"})
     jsa_generate(monkeypatch, capsys)
     folder = packets / PLAIN
-    assert (folder / RESUME_COPY).read_bytes() == (profile / "resume.docx").read_bytes()
+    assert (folder / RESUME_COPY).read_bytes() == (
+        family_dir(profile) / "resume.docx"
+    ).read_bytes()
     assert (folder / RESUME_PDF).is_file()
 
 
@@ -2035,7 +2200,7 @@ def write_bulleted_resume(profile: Path) -> None:
     document.add_paragraph().add_run("Riley Resumeperson").bold = True
     for text in BULLET_LINES:
         document.add_paragraph(text, style="List Bullet")
-    document.save(profile / "resume.docx")
+    document.save(family_dir(profile) / "resume.docx")
 
 
 def structural_reply(removals=(), reorders=()):
@@ -2094,7 +2259,7 @@ def test_a_record_whose_only_applied_proposal_is_a_removal_gets_no_resume_pdf(
     posting_id = seed(gdb)
     folder = packets / PLAIN
     folder.mkdir(parents=True)
-    shutil.copy(profile / "resume.docx", folder / RESUME_COPY)
+    shutil.copy(family_dir(profile) / "resume.docx", folder / RESUME_COPY)
     record = json.dumps(
         {
             "explanation": None,
