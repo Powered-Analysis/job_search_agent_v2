@@ -572,4 +572,6 @@ The SDET never reads the PR description, review comments, or the reasoning behin
 
    This step also catches failures caused by a crash between push and filing, or by a merge that broke an existing test.
 
-**A new test that fails against current `main` is a spec-vs-code finding, full stop.** Never weaken, delete, or adjust a test to match observed behavior; that is the exact failure mode this role exists to prevent. The PM decides whether the code or the test is wrong. Until then, the failing test stays on `main`. The test gate keeps it from blocking unrelated PRs.
+   **One exception: a requirement still being built.** A test fails on `main` only because its requirement is still being built when it asserts an acceptance criterion of the issue that the open feature PR closes. File no `discrepancy` issue for it. Instead, comment the test IDs on that issue, because the PR's merge is what makes them pass. If a test still fails once that PR has merged, this step files it at the next SDET run, like any other failure.
+
+**A new test that fails against current `main` is a spec-vs-code finding, full stop,** filed as step 6 says. Never weaken, delete, or adjust a test to match observed behavior; that is the exact failure mode this role exists to prevent. The PM decides whether the code or the test is wrong. Until then, the failing test stays on `main`. The test gate keeps it from blocking unrelated PRs.
