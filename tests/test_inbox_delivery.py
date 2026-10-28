@@ -9,6 +9,7 @@ import base64
 import io
 import json
 import re
+import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -39,6 +40,8 @@ from test_generate import (
     seed,
 )
 from test_inbox import (
+    ANALYTICS_ADDRESS,
+    DATA_ANALYSIS_ADDRESS,
     DESCRIPTION,
     OWNER_CREDENTIAL,
     SENDER,
@@ -567,6 +570,91 @@ def test_a_posting_without_a_usable_role_family_is_labeled_and_stays_untracked(
     assert not tracked(conn, posting_id)
     assert column(conn, posting_id, "decision") == "Apply"
     assert column(conn, posting_id, "role_family") == role_family
+
+
+# --- the address names the role family (issue #196; PRD 03, PRD 04) -------------
+
+
+def test_a_tagged_message_with_a_description_builds_from_that_role_family_and_tracks_on_its_tab(
+    db_url, conn, env, gmail, world, agent, web, monkeypatch
+):
+    url = bare_posting(web)
+    gmail.add("m1", 1000, f"{url}\n\n{DESCRIPTION}\n", to=DATA_ANALYSIS_ADDRESS)
+    assert run_inbox(monkeypatch) == 0
+    assert gmail.outcome_labels("m1") == ["jsa/tracked"]
+    row = conn.execute(
+        "SELECT id, role_family, added_to_tracker FROM postings WHERE url = ?", (url,)
+    ).fetchone()
+    assert row[1:] == (OTHER_FAMILY, 1)
+    assert OTHER_BASE_LINE in agent.prompts[0]
+    assert BASE_LINE not in agent.prompts[0]
+    [call] = world.sheet_calls()
+    assert call["params"]["range"] == f"'{OTHER_FAMILY}'!A:H"
+    [appended] = world.rows()
+    assert appended[0] == row[0]
+
+
+def test_the_other_roles_tag_builds_from_the_other_role_family(
+    db_url, conn, env, gmail, world, agent, web, monkeypatch
+):
+    url = bare_posting(web)
+    gmail.add("m1", 1000, f"{url}\n\n{DESCRIPTION}\n", to=ANALYTICS_ADDRESS)
+    assert run_inbox(monkeypatch) == 0
+    assert gmail.outcome_labels("m1") == ["jsa/tracked"]
+    assert BASE_LINE in agent.prompts[0]
+    assert OTHER_BASE_LINE not in agent.prompts[0]
+    [call] = world.sheet_calls()
+    assert call["params"]["range"] == f"'{ROLE_FAMILY}'!A:H"
+
+
+@pytest.mark.parametrize(
+    "address",
+    ["jobs.mailbox@example.net", "jobs.mailbox+no-such-family@example.net"],
+    ids=["plain-address", "unmatched-tag"],
+)
+def test_with_two_role_families_no_matching_tag_builds_nothing_even_with_a_description(
+    db_url, conn, env, gmail, world, agent, web, monkeypatch, address
+):
+    url = bare_posting(web)
+    gmail.add("m1", 1000, f"{url}\n\n{DESCRIPTION}\n", to=address)
+    assert run_inbox(monkeypatch) == 0
+    assert gmail.outcome_labels("m1") == ["jsa/needs-family"]
+    assert agent.calls == []
+    assert world.drive_calls("create") == [] and world.sheet_calls() == []
+    row = conn.execute(
+        "SELECT role_family, decision, added_to_tracker, jd_markdown FROM postings WHERE url = ?",
+        (url,),
+    ).fetchone()
+    assert row == (None, "Apply", 0, DESCRIPTION)
+
+
+@pytest.mark.parametrize("name", ROLE_FAMILIES)
+def test_with_one_role_family_the_plain_address_builds_from_it(
+    db_url, conn, env, gmail, world, agent, web, monkeypatch, name
+):
+    profile, _ = env
+    shutil.rmtree(family_dir(profile, next(f for f in ROLE_FAMILIES if f != name)))
+    url = bare_posting(web)
+    gmail.add("m1", 1000, f"{url}\n\n{DESCRIPTION}\n")
+    assert run_inbox(monkeypatch) == 0
+    assert gmail.outcome_labels("m1") == ["jsa/tracked"]
+    [call] = world.sheet_calls()
+    assert call["params"]["range"] == f"'{name}'!A:H"
+
+
+def test_a_tag_does_not_change_the_role_family_an_existing_row_is_built_from(
+    db_url, conn, env, gmail, world, agent, requests, monkeypatch
+):
+    posting_id = email(gmail, conn, role_family=ROLE_FAMILY)
+    url = conn.execute(
+        "SELECT url FROM postings WHERE id = ?", (posting_id,)
+    ).fetchone()[0]
+    gmail.add("m2", 2000, f"{url}\n", to=DATA_ANALYSIS_ADDRESS)
+    assert run_inbox(monkeypatch) == 0
+    assert column(conn, posting_id, "role_family") == ROLE_FAMILY
+    assert gmail.outcome_labels("m2") == ["jsa/tracked"]
+    assert BASE_LINE in agent.prompts[0]
+    assert OTHER_BASE_LINE not in agent.prompts[0]
 
 
 # --- acceptance 1: no liveness re-check ----------------------------------------
