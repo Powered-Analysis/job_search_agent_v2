@@ -73,6 +73,28 @@ def copy_example(destination: Path) -> Path:
     return destination
 
 
+ROLE_FAMILIES = ("Analytics Engineering", "Data Analysis")
+
+
+def write_role_families(profile: Path, names: tuple[str, ...] = ROLE_FAMILIES) -> None:
+    """Make `names` the profile's role families (PRD 04), each with a non-empty `resume.docx`."""
+    folder = profile / "role_families"
+    shutil.rmtree(folder, ignore_errors=True)
+    for name in names:
+        (folder / name).mkdir(parents=True)
+        (folder / name / "resume.docx").write_bytes(b"base resume")
+
+
+def use_role_families(
+    tmp_path: Path, monkeypatch, names: tuple[str, ...] = ROLE_FAMILIES
+) -> Path:
+    """Point `JSA_PROFILE_DIR` at a copy of the example profile that keeps exactly `names`."""
+    profile = copy_example(tmp_path / "profile")
+    write_role_families(profile, names)
+    monkeypatch.setenv("JSA_PROFILE_DIR", str(profile))
+    return profile
+
+
 WEEKDAYS = (
     "monday",
     "tuesday",
