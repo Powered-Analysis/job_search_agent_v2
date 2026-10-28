@@ -29,7 +29,9 @@ from jsa.profile import (
     load_config,
     packet_sources,
     redline_settings,
+    role_family_names,
     tracker_spreadsheet_id,
+    with_role_family,
 )
 from jsa.tracker import today
 
@@ -194,6 +196,9 @@ def _deliver(posting_id: int, *, has_jd: bool) -> str:
     drive_folder_id = inbox_drive_folder(config)
     redline = redline_settings(config)
     sources = packet_sources()
+    # PRD 04: flagged like in any command; the posting stays an untracked Apply row for `jsa revise` and `jsa generate`.
+    if not with_role_family([job], sources.role_families):
+        return FAILED
     with tempfile.TemporaryDirectory() as scratch:
         built = config.model_copy(update={"packets_dir": Path(scratch)})
         if not build_packet(job, built, sources, redline, rewrite=True):
@@ -244,6 +249,8 @@ def _safe[Result](
 def inbox(client: httpx.Client) -> None:
     """Work through the jobs mailbox's Inbox, oldest first; one message's failure never stops the rest."""
     senders = inbox_settings(load_config()).senders
+    # PRD 06: a profile with unusable role families raises before any message is read.
+    role_family_names()
     mailbox = Mailbox(inbox_gws_credentials())
     # An unreadable message sorts first and is labeled failed below.
     queue = [

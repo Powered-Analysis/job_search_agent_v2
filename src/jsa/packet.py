@@ -19,8 +19,10 @@ from jsa.profile import (
     COVER_LETTER_PREFIX,
     Config,
     PacketSources,
+    RoleFamily,
     load_config,
     packet_sources,
+    with_role_family,
 )
 from jsa.resume import load_resume
 from jsa.tracker import today
@@ -58,18 +60,22 @@ class PacketCopy(NamedTuple):
 def packet_copies(
     config: Config, job: db.PacketJob, sources: PacketSources
 ) -> list[PacketCopy]:
+    """The copies of the job's role family's files, the resume copy last; the caller has checked the profile has the role family."""
     directory, resume_copy = packet_paths(config, job)
-    copies = [PacketCopy(resume_copy, sources.resume, cover_letter=False)]
-    if sources.cover_letter is not None:
+    family = sources.role_families[job.role_family]
+    copies = []
+    if family.cover_letter is not None:
         # The copy keeps the source's extension, whatever it is (`.docx`, `.pdf`, ...).
-        extension = sources.cover_letter.name.removeprefix(COVER_LETTER_PREFIX)
+        extension = family.cover_letter.name.removeprefix(COVER_LETTER_PREFIX)
         copies.append(
             PacketCopy(
                 directory / f"{cover_letter_stem(config, job)}{extension}",
-                sources.cover_letter,
+                family.cover_letter,
                 cover_letter=True,
             )
         )
+    # Last, so the resume copy's existence marks the head as complete (see `ensure_head`).
+    copies.append(PacketCopy(resume_copy, family.resume, cover_letter=False))
     return copies
 
 
@@ -94,11 +100,11 @@ def _copy_filled(source: Path, copy: Path, job: db.PacketJob) -> None:
         shutil.copyfile(source, copy)
 
 
-def holds_title_placeholder(sources: PacketSources) -> bool:
-    """Whether the profile's resume or `.docx` cover letter holds `[TITLE]`."""
+def holds_title_placeholder(family: RoleFamily) -> bool:
+    """Whether the role family's resume or `.docx` cover letter holds `[TITLE]`."""
     documents = (
         _placeholder_document(source)
-        for source in (sources.resume, sources.cover_letter)
+        for source in (family.resume, family.cover_letter)
         if source is not None
     )
     return any(
@@ -119,16 +125,26 @@ def ensure_head(
     A `.docx` cover letter copy also gets its PDF. The copies, their PDFs, and a hand-filled job
     description are never replaced. The row's description replaces an existing `job_posting.md`
     only when `refresh_posting` is set.
+
+    The copies are made only while the resume copy (made last) is missing, so a run that died
+    part-way through a new head completes it, and a posting whose role family changed after its
+    head was built gets nothing from the new role family (PRD 04, Edge cases).
     """
     directory.mkdir(parents=True, exist_ok=True)
     posting = directory / JOB_POSTING
     if job.jd_markdown is not None and (refresh_posting or not posting.exists()):
         posting.write_text(job.jd_markdown, encoding="utf-8")
-    # A copy is the user's working file, so an existing one is never replaced.
+    if not copies[-1].path.exists():
+        for copy in copies:
+            # A copy is the user's working file, so an existing one is never replaced.
+            if not copy.path.exists():
+                _copy_filled(copy.source, copy.path, job)
     for copy in copies:
-        if not copy.path.exists():
-            _copy_filled(copy.source, copy.path, job)
-        if copy.cover_letter and copy.path.suffix.lower() == ".docx":
+        if (
+            copy.cover_letter
+            and copy.path.exists()
+            and copy.path.suffix.lower() == ".docx"
+        ):
             ensure_pdf(copy.path)
 
 
@@ -140,11 +156,15 @@ def build_packets(posting_id: int | None, *, dry_run: bool) -> None:
     if not queue:
         print("No postings awaiting a packet.")
         return
-    for job in queue:
+    for job in with_role_family(queue, sources.role_families):
         directory = packet_paths(config, job)[0]
         if directory.exists():
             print(f"skipped (folder exists): {directory}")
             continue
+        copies = packet_copies(config, job, sources)
         print(f"{'would create' if dry_run else 'created'}: {directory}")
-        if not dry_run:
-            ensure_head(directory, job, packet_copies(config, job, sources))
+        if dry_run:
+            for copy in copies:
+                print(f"  {copy.path.name} from {copy.source}")
+        else:
+            ensure_head(directory, job, copies)

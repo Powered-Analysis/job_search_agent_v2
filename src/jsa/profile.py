@@ -3,9 +3,10 @@
 import os
 import re
 import tomllib
+from collections.abc import Collection
 from datetime import date, time
 from pathlib import Path
-from typing import Annotated, Literal, NamedTuple
+from typing import Annotated, Literal, NamedTuple, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -257,15 +258,6 @@ def _cover_letter_in(folder: Path, relative_path: str) -> Path | None:
     return matches[0] if matches else None
 
 
-def base_resume() -> Path:
-    """The single base resume (XC-11)."""
-    return _resume_in(profile_dir(), RESUME_DOCX)
-
-
-def cover_letter() -> Path | None:
-    return _cover_letter_in(profile_dir(), "cover_letter.docx")
-
-
 ROLE_FAMILIES_DIR = "role_families"
 _NOT_ALNUM = re.compile(r"[\W_]+")
 
@@ -327,15 +319,48 @@ def role_family_names() -> list[str]:
 
 
 class PacketSources(NamedTuple):
-    """The profile files each packet starts from, and the skills list the redline draws on."""
+    """The role families (by name) each packet starts from, and the skills list the redline draws on."""
 
-    resume: Path
-    cover_letter: Path | None
+    role_families: dict[str, RoleFamily]
     skills: Path | None
 
 
 def packet_sources() -> PacketSources:
-    return PacketSources(base_resume(), cover_letter(), resume_skills())
+    """Validates the role families, so a bad profile raises before any row is processed."""
+    families = {family.name: family for family in role_families()}
+    return PacketSources(families, resume_skills())
+
+
+class HasRoleFamily(Protocol):
+    id: int
+    role_family: str | None
+
+
+def unassigned_reason(
+    posting_id: int, role_family: str | None, known: Collection[str]
+) -> str | None:
+    """Why the profile can't serve a posting's role family, pointing to `jsa revise` (PRD 04); None when it can."""
+    if role_family in known:
+        return None
+    problem = (
+        "no role family"
+        if role_family is None
+        else f"role family {role_family!r} is not in the profile"
+    )
+    return f"{problem}; `jsa revise --id {posting_id}` gives it one"
+
+
+def with_role_family[Row: HasRoleFamily](
+    rows: list[Row], known: Collection[str]
+) -> list[Row]:
+    """The rows whose role family the profile has; each other row is flagged and dropped, so it stays queued (PRD 04)."""
+    kept = []
+    for row in rows:
+        if reason := unassigned_reason(row.id, row.role_family, known):
+            print(f"flagged: posting {row.id}: {reason}")
+        else:
+            kept.append(row)
+    return kept
 
 
 def _agent_settings[T: ModelSettings](settings: T | None, name: str) -> T:

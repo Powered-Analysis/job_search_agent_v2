@@ -17,8 +17,6 @@ from jsa.profile import (
     FlyConfig,
     Schedule,
     SearchConfig,
-    base_resume,
-    cover_letter,
     fly_settings,
     inbox_app,
     inbox_drive_folder,
@@ -27,6 +25,7 @@ from jsa.profile import (
     profile_dir,
     redline_settings,
     resume_skills,
+    role_families,
     tracker_spreadsheet_id,
 )
 from jsa.refine import proposal_pending, refine_dir
@@ -52,7 +51,6 @@ BUILD_INPUTS = (
 # The inbox machine's profile files, set as machine files so they never enter the image (XC-11).
 # The image's working directory is /app, where the app looks for `profile/`.
 MACHINE_PROFILE_DIR = "/app/profile"
-INBOX_FILES = (CONFIG_TOML, "resume.docx")
 INBOX_ENTRYPOINT = "jsa inbox"
 DATABASE_SECRETS = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN")
 INBOX_SECRETS = (
@@ -141,8 +139,7 @@ def _validate_inbox(config: Config) -> str:
     """The inbox app's name, once everything the inbox machine needs is in the profile."""
     app = inbox_app(config)
     inbox_drive_folder(config)
-    base_resume()
-    cover_letter()
+    role_families()
     tracker_spreadsheet_id()
     redline_settings(config)
     return app
@@ -367,10 +364,17 @@ def _swap_in(
 
 def inbox_machine_files() -> dict[str, Path]:
     """Where each inbox machine file lands in the machine, and the profile file it comes from."""
-    sources = [profile_dir() / name for name in INBOX_FILES]
-    optional = (cover_letter(), resume_skills())
-    sources.extend(path for path in optional if path is not None)
-    return {f"{MACHINE_PROFILE_DIR}/{source.name}": source for source in sources}
+    sources = [profile_dir() / CONFIG_TOML]
+    for family in role_families():
+        sources.append(family.resume)
+        if family.cover_letter is not None:
+            sources.append(family.cover_letter)
+    if (skills := resume_skills()) is not None:
+        sources.append(skills)
+    return {
+        f"{MACHINE_PROFILE_DIR}/{source.relative_to(profile_dir()).as_posix()}": source
+        for source in sources
+    }
 
 
 def _smoke(image: str, fly: FlyConfig) -> None:

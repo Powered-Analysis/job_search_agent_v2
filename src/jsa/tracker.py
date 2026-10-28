@@ -1,14 +1,20 @@
 """The Google Sheet tracker (PRD 04 "Tracker write"): build a row, append it through `gws`."""
 
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from datetime import date, datetime
 from typing import NamedTuple
 
 from jsa import db
 from jsa.errors import JsaError
 from jsa.gws import run_owner_gws
-from jsa.profile import load_search_config, tracker_spreadsheet_id
+from jsa.profile import (
+    load_search_config,
+    role_family_names,
+    tracker_spreadsheet_id,
+    with_role_family,
+)
 
-TAB = "Applications"
 _FORMULA_STARTS = ("=", "+", "-", "@")
 
 
@@ -43,71 +49,105 @@ def _gws(method: str, params: dict, body: dict | None = None) -> object:
     return run_owner_gws(("sheets", "spreadsheets", "values", method), params, body)
 
 
-def append_row(spreadsheet_id: str, row: list[str | int]) -> None:
-    """Append one row, raising on any ambiguity: a posting is marked tracked only after this returns."""
+def _range(tab: str, cells: str) -> str:
+    """An A1 range on one tab; the quotes keep a name with spaces whole, and a quote in it is doubled."""
+    quoted = tab.replace("'", "''")
+    return f"'{quoted}'!{cells}"
+
+
+@contextmanager
+def _on_tab(tab: str) -> Iterator[None]:
+    """A failure inside names the tab, since a role family's tab may not exist yet (PRD 04)."""
+    try:
+        yield
+    except JsaError as error:
+        raise JsaError(f"the {tab!r} tab: {error}") from None
+
+
+def append_row(spreadsheet_id: str, tab: str, row: list[str | int]) -> None:
+    """Append one row to a role family's tab, raising on any ambiguity: a posting is marked tracked only after this returns."""
     # OVERWRITE fills the sheet's pre-formatted blank rows; INSERT_ROWS would lose the Status dropdown (PRD 04).
     params = {
         "spreadsheetId": spreadsheet_id,
-        "range": f"{TAB}!A:H",
+        "range": _range(tab, "A:H"),
         "valueInputOption": "USER_ENTERED",
         "insertDataOption": "OVERWRITE",
     }
-    response = _gws("append", params, {"values": [row]})
-    try:
-        updated_rows = response["updates"]["updatedRows"]
-    except KeyError, TypeError:
-        raise JsaError("gws output was not an append response") from None
-    if not isinstance(updated_rows, int) or updated_rows < 1:
-        raise JsaError("gws reported no updated row")
+    with _on_tab(tab):
+        response = _gws("append", params, {"values": [row]})
+        try:
+            updated_rows = response["updates"]["updatedRows"]
+        except KeyError, TypeError:
+            raise JsaError("gws output was not an append response") from None
+        if not isinstance(updated_rows, int) or updated_rows < 1:
+            raise JsaError("gws reported no updated row")
 
 
 class SheetRow(NamedTuple):
+    tab: str
     number: int
     date_applied: str
 
 
-def sheet_index(spreadsheet_id: str) -> dict[int, SheetRow]:
-    """`postings.id` -> its Sheet row number and Date Applied; rows whose ID cell isn't an integer are skipped."""
-    # The range starts at row 1, so a value's position is its row number; blank rows come back empty.
-    response = _gws("get", {"spreadsheetId": spreadsheet_id, "range": f"{TAB}!A:G"})
-    rows = response.get("values", []) if isinstance(response, dict) else None
-    if not isinstance(rows, list):
-        raise JsaError("gws output was not a get response")
+def sheet_index(spreadsheet_id: str, tabs: Iterable[str]) -> dict[int, SheetRow]:
+    """`postings.id` -> its tab, row number and Date Applied, across the role families' tabs.
+
+    Rows whose ID cell isn't an integer are skipped; a posting on two tabs is found on the first listed.
+    """
     index: dict[int, SheetRow] = {}
-    for number, row in enumerate(rows, start=1):
-        cells = [str(cell).strip() for cell in row] if isinstance(row, list) else []
-        if cells and cells[0].isdecimal():
-            index.setdefault(
-                int(cells[0]), SheetRow(number, cells[6] if len(cells) > 6 else "")
+    for tab in tabs:
+        with _on_tab(tab):
+            # The range starts at row 1, so a value's position is its row number; blank rows come back empty.
+            response = _gws(
+                "get", {"spreadsheetId": spreadsheet_id, "range": _range(tab, "A:G")}
             )
+            rows = response.get("values", []) if isinstance(response, dict) else None
+            if not isinstance(rows, list):
+                raise JsaError("gws output was not a get response")
+        for number, row in enumerate(rows, start=1):
+            cells = [str(cell).strip() for cell in row] if isinstance(row, list) else []
+            if cells and cells[0].isdecimal():
+                index.setdefault(
+                    int(cells[0]),
+                    SheetRow(tab, number, cells[6] if len(cells) > 6 else ""),
+                )
     return index
 
 
-def set_title(spreadsheet_id: str, row_number: int, title: str) -> None:
-    """Rewrite one row's Title cell (column C); raises on any ambiguity, like the append."""
+def set_title(spreadsheet_id: str, tab: str, row_number: int, title: str) -> None:
+    """Rewrite one row's Title cell (column C) on its tab; raises on any ambiguity, like the append."""
     params = {
         "spreadsheetId": spreadsheet_id,
-        "range": f"{TAB}!C{row_number}",
+        "range": _range(tab, f"C{row_number}"),
         "valueInputOption": "USER_ENTERED",
     }
-    response = _gws("update", params, {"values": [[_literal(title)]]})
-    try:
-        updated_cells = response["updatedCells"]
-    except KeyError, TypeError:
-        raise JsaError("gws output was not an update response") from None
-    if not isinstance(updated_cells, int) or updated_cells < 1:
-        raise JsaError("gws reported no updated cell")
+    with _on_tab(tab):
+        response = _gws("update", params, {"values": [[_literal(title)]]})
+        try:
+            updated_cells = response["updatedCells"]
+        except KeyError, TypeError:
+            raise JsaError("gws output was not an update response") from None
+        if not isinstance(updated_cells, int) or updated_cells < 1:
+            raise JsaError("gws reported no updated cell")
+
+
+def entry_row(entry: db.TrackerEntry, today: date) -> list[str | int]:
+    return tracker_row(
+        entry.id,
+        entry.normalized_company,
+        entry.title,
+        entry.url,
+        entry.date_posted,
+        today,
+    )
 
 
 def append_tracked(
-    conn: db.Connection, spreadsheet_id: str, today: date, entry: tuple
+    conn: db.Connection, spreadsheet_id: str, today: date, entry: db.TrackerEntry
 ) -> None:
-    """Append one tracker-queue row, then mark it tracked; raises JsaError if the append fails."""
-    posting_id, company, title, url, date_posted = entry
-    append_row(
-        spreadsheet_id, tracker_row(posting_id, company, title, url, date_posted, today)
-    )
-    db.mark_tracked(conn, posting_id)
+    """Append one tracker-queue row to its role family's tab, then mark it tracked; raises JsaError if the append fails."""
+    append_row(spreadsheet_id, entry.role_family, entry_row(entry, today))
+    db.mark_tracked(conn, entry.id)
 
 
 def today() -> date:
@@ -116,6 +156,7 @@ def today() -> date:
 
 
 def track(posting_id: int | None, *, dry_run: bool) -> None:
+    names = role_family_names()
     spreadsheet_id = tracker_spreadsheet_id()
     added = today()
     conn = db.connect()
@@ -123,11 +164,12 @@ def track(posting_id: int | None, *, dry_run: bool) -> None:
     if not queue:
         print("No postings awaiting the tracker.")
         return
+    ready = with_role_family(queue, names)
     failures = []
-    for entry in queue:
-        pid = entry[0]
+    for entry in ready:
+        pid = entry.id
         if dry_run:
-            print(f"would append: {tracker_row(*entry, added)}")
+            print(f"would append to {entry.role_family}: {entry_row(entry, added)}")
             continue
         try:
             append_tracked(conn, spreadsheet_id, added, entry)
@@ -138,6 +180,6 @@ def track(posting_id: int | None, *, dry_run: bool) -> None:
         print(f"appended: posting {pid}")
     if failures:
         raise JsaError(
-            f"{len(failures)} of {len(queue)} rows failed to append: "
+            f"{len(failures)} of {len(ready)} rows failed to append: "
             + ", ".join(map(str, failures))
         )
