@@ -9,8 +9,8 @@ The product is specified in [`prds/`](prds/00-overview.md); start with `prds/00-
 
 ## Using this for your own search
 
-Everything about you lives in one gitignored `profile/` directory. Only `profile/search/` ever
-leaves your machine. The steps below take a fresh copy of the project to a running search, in order.
+Everything about you lives in one gitignored `profile/` directory. Only `profile/search/` and
+`profile/resume_skills.md` go into the cloud image. The steps below take a fresh copy of the project to a running search, in order.
 
 ### 1. Install
 
@@ -62,7 +62,7 @@ cp -r profile.example profile
 |---|---|
 | `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the resume redline and refine |
 | `profile/role_families/<name>/` | one folder per kind of role you apply to, named for it (`Data Analysis`). It holds that role family's base resume, `resume.docx`, and optionally a `cover_letter.*`, which is copied into each of its packets (a `.docx` also gets a PDF). Its Sheet tab (step 2) carries the same name. You need at least one; `jsa review`, `jsa revise`, `jsa add`, `jsa inbox`, `jsa packet`, `jsa generate`, `jsa track`, and `jsa refetch` refuse to start when a `resume.docx` is missing or empty, a folder holds two cover letters, or two names give the same email tag (the name in lowercase, each run of other characters turned into one `-`) |
-| `profile/resume_skills.md` | optional; the skills you have, one per line, comma-separated, or both in one file. The redline may add, remove, reword, or reorder skills in your resume's `Skills` section, using only words from this list or the posting |
+| `profile/resume_skills.md` | optional; the skills you have, one per line, comma-separated, or both in one file. The search prompt's Skills section lists them, locally and in the cloud (it ships in the image). The redline may add, remove, reword, or reorder skills in your resume's `Skills` section, using only words from this list or the posting |
 | `profile/search/search.toml` | timezone, `run_at`, `results_per_run`, the weekly schedule (each entry names a `search_family`), the Claude runner settings, and the verification mode |
 | `profile/search/<name>/` | one folder per search family: any of the six fragments (`candidate.md`, `target_roles.md`, `filters.md`, `positive_signals.md`, `negative_signals.md`, `hard_exclusions.md`) that tell that search who you are and what you want |
 | `profile/search/shared/` | optional; fragments that any search family without its own copy uses |
@@ -222,9 +222,9 @@ accept a refine proposal.
 
 With `[inbox]` set, `jsa deploy` also creates or updates the inbox app's one hourly machine, running
 `jsa inbox` from the same image (a machine in one Fly app can run an image from another app in the
-same organization). Every deploy sets that machine's `config.toml`, each role family's `resume.docx` and cover letter, and the skills list (if you have them) as machine
-files; they are never in the image or the build context. So run `jsa deploy` again after you change
-a role family or `config.toml`. Before building, it checks that the profile has everything the inbox
+same organization). Every deploy sets that machine's `config.toml`, and each role family's `resume.docx` and cover letter as machine
+files; they are never in the image or the build context. The inbox machine reads the skills list from the image. So run `jsa deploy` again after you change
+a role family, the skills list, or `config.toml`. Before building, it checks that the profile has everything the inbox
 needs and that the inbox app holds each secret from step 7; it never sets a secret. `--smoke` leaves
 both scheduled machines alone.
 

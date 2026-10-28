@@ -16,7 +16,7 @@ from docx.document import Document
 from jsa import agent_loop
 from jsa.assemble import Slot, app_template, assemble
 from jsa.errors import JsaError
-from jsa.profile import AgentSettings
+from jsa.profile import RESUME_SKILLS, AgentSettings
 from jsa.redline_docx import (
     ParagraphComment,
     TrackedChange,
@@ -625,7 +625,7 @@ def assemble_redline_prompt(
         "RESUME_PARAGRAPHS": Slot(numbered, "the packet's resume copy"),
         "SKILLS": Slot(
             "\n".join(skills) or NO_SKILLS_LIST,
-            "profile/resume_skills.md",
+            f"profile/{RESUME_SKILLS}",
             required=False,
         ),
         "SKILLS_SECTION": Slot(
