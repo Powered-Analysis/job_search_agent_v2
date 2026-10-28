@@ -168,7 +168,8 @@ Every agent job invokes `claude-code-action` with these settings. Each one close
 - **`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`** in the `settings` env, plus **`Monitor`** in `--disallowedTools`. In `-p` mode, subagents run in the background by default. An agent that ends its turn to wait for one is never re-invoked.
 - **`display_report: true`.** The agent's final report goes to the run's Step Summary, which is the record of why a run did what it did. The reporter is the one exception, because its output is private (see [Progress reports](#progress-reports)).
 - **Never `track_progress`.** It switches the action into tag mode, which runs its own branch checkout and ignores the one the workflow made.
-- **uv and the project's dependencies are installed in a step before the agent runs**, so the agent doesn't spend turns installing them.
+- **uv and the project's dependencies are installed in a step before the agent runs**, so the agent doesn't spend turns installing them. The workflow pins uv's version and Python 3.14, the version of PRD 06's image, so CI tests what ships. The pins also keep the dependency cache valid: its key covers the lockfile and the Python version but not uv's version, so a floating uv or Python leaves every job restoring a cache it can't use.
+- **`BASH_DEFAULT_TIMEOUT_MS` (10 minutes) and `BASH_MAX_TIMEOUT_MS` (30 minutes)** in the workflow's `env`. Claude Code's own defaults, 2 and 10 minutes, kill a full-suite run or a live search partway through, and the agent then retries it without knowing how long it needs.
 - **WOZCODE in every tick agent (PM, FSE, SA, SDET).**
   - The action installs it with `plugin_marketplaces: https://github.com/WithWoz/wozcode-plugin.git` and `plugins: woz@wozcode-marketplace`.
   - `WOZCODE_API_KEY` in the `settings` env logs the plugin in without a browser.
@@ -199,7 +200,7 @@ Workflows invoke scripts as `bash scripts/<name>.sh`, never by path, so a lost e
 
 #### CI environment
 
-**Database.** Every job that runs the app or its tests starts the libSQL server image as a service container and sets `TURSO_DATABASE_URL=http://127.0.0.1:8080`, with no auth token. It serves the same Hrana-over-HTTP protocol as hosted Turso, so the real `turso_serverless` client is exercised. That client is where the `XC-8` autocommit trap lives, and where PRD 02's transport constraints apply (a DELETE needs a stable primary key, and statements aren't atomic across round-trips). A `file:` URL runs stdlib `sqlite3` instead, so it can't catch either. Each run gets a fresh database. The production database's credentials never enter CI (`XC-2`).
+**Database.** Every job that runs the app or its tests starts the libSQL server image as a service container and sets `TURSO_DATABASE_URL=http://127.0.0.1:8080`, with no auth token. It serves the same Hrana-over-HTTP protocol as hosted Turso, so the real `turso_serverless` client is exercised. That client is where the `XC-8` autocommit trap lives, and where PRD 02's transport constraints apply (a DELETE needs a stable primary key, and statements aren't atomic across round-trips). A `file:` URL runs stdlib `sqlite3` instead, so it can't catch either. Each run gets a fresh database. The full suite starts its own containers instead (see Running the suite below). The production database's credentials never enter CI (`XC-2`).
 
 The first infrastructure issue proves that `turso_serverless` connects to the container's `http://` URL. If it can't, CI uses a dedicated throwaway hosted Turso database instead, never the production one.
 
@@ -215,6 +216,8 @@ The first infrastructure issue proves that `turso_serverless` connects to the co
 
 **No test reaches the network except the libSQL container.** The test gate compares the base commit to the head. A live fetch that fails on one and not the other would block, or pass, a PR for reasons unrelated to its diff.
 
+**Running the suite.** `bash scripts/suite.sh` runs the full suite the way the [test gate](#test-gate) does: split round-robin across one pytest process per CPU, each with its own fresh libSQL container. Every role runs the full suite this way and no other. While iterating, run only the tests the change touches, with `uv run pytest <path>`. Run the full suite once, in the foreground, before requesting review or committing; it finishes well within the Bash tool's 10-minute default. Never start it in the background and poll it with `sleep`. Never rerun it on `main` to learn which failures predate a branch: the test gate already compares the base to the head.
+
 **Live keys.** Tests never need a live key. `XC-9` requires agentic steps to be verified against real-world checks, and the FSE is the role that runs them, so only the FSE job gets live service keys:
 - `PERPLEXITY_API_KEY` is funded by prepaid credits, so spend is capped at the balance.
 - `GEMINI_API_KEY` is a paid key, because Deep Research isn't available on Gemini's free tier.
@@ -225,7 +228,9 @@ The first infrastructure issue proves that `turso_serverless` connects to the co
 - **Gemini:** no settings to lower, because PRD 01 pins the agent to `deep-research-preview-04-2026`, the cheaper of the two.
 - **Perplexity:** no settings to lower, because PRD 01 pins the `xhigh` preset wholesale. The prepaid balance is its only limit, so it's checked once per issue that changes the Perplexity runner.
 
-Search live checks use a 24-hour window. If a live check fails because of what the model returned, rather than because of the integration, the FSE reruns it once at `profile.example/`'s own settings before treating it as a bug. A weaker model's messier output is never a reason to loosen validation: PRD 01 requires an unparseable response to raise an error and every invalid posting to be dropped and counted.
+Search live checks use a 24-hour window. **A background-mode runner (Perplexity, Gemini) is checked without waiting for its research to finish**, which takes half an hour or more and proves nothing more about the integration. The FSE starts one search, confirms from its output that the run was created and polled, then interrupts it with SIGINT (`timeout -s INT <seconds> uv run jsa search …`). The runner then cancels the remote run, which the FSE also confirms. The FSE waits for a search to finish only when its issue changes how the finished response is read.
+
+If a live check fails because of what the model returned, rather than because of the integration, the FSE reruns it once at `profile.example/`'s own settings before treating it as a bug. A weaker model's messier output is never a reason to loosen validation: PRD 01 requires an unparseable response to raise an error and every invalid posting to be dropped and counted.
 
 Judging output quality is the owner's job after deployment (see [Completion](#completion)). That includes whether searches find good postings and whether the prompt templates the FSE writes produce good redlines and refine proposals.
 
@@ -489,7 +494,7 @@ When the SA and FSE each think their own approach is correct, resolve it as a di
 
 #### Test gate
 
-Before the SA agent runs, a deterministic job runs the test suite (`pytest`) twice: on the commit where the PR's branch left `main`, and on its head commit. That job runs the PR's code, so it holds no secret. The SA job then posts the result to the head commit as the `test-gate` commit status, which `main`'s merge gate requires. The PR passes the gate when all of these hold:
+Before the SA agent runs, a deterministic job runs the full suite with `scripts/suite.sh` twice, one run after the other: on the commit where the PR's branch left `main`, and on its head commit. Each run already uses every CPU, so running both at once would only slow each test down. That job runs the PR's code, so it holds no secret. The SA job then posts the result to the head commit as the `test-gate` commit status, which `main`'s merge gate requires. The PR passes the gate when all of these hold:
 
 - **The PR changes nothing under `prds/`, `docs/`, or `team.yml`.** Only `TICK_TOKEN` posts the status and no agent holds it, so a PR that touches the owner's files can't merge.
 - **No test that passes on the base fails on the head.** Tests that already fail on `main` are open `discrepancy` findings that other issues own. They don't block unrelated PRs.
@@ -541,6 +546,10 @@ The SDET never reads the PR description, review comments, or the reasoning behin
    - **Falsification attempts**, e.g., inputs that plausibly weren't considered.
 
    **Test IDs are deterministic.** No value generated when the tests are collected, such as a random UUID or a timestamp, appears in a parametrized argument or in `ids=`. The [test gate](#test-gate) matches tests by ID across two separate runs, so an ID that differs between runs reads as a regression on every PR.
+
+   **Tests are independent of order and load.** The suite runs split across parallel processes, each with its own database (see [Running the suite](#ci-environment)). So a test never relies on another test having run, on having its database to itself, or on finishing before a busy runner would let it. For example, a connection left idle for about ten seconds while the code under test runs has its database stream expire.
+
+   **Two transports only where the database is the subject.** Tests of the database module (PRD 02) run on both the libSQL container and a `file:` URL. Every other test uses the container alone, the transport that ships.
 
    Replace the outside world only at the [test seams](#ci-environment). No test reaches the network except the libSQL container.
 3. **Revise disputed tests.** For each `revise-test` issue, change the disputed tests to match the PM's recorded ruling, and close the issue once they're revised. This is the only time the SDET changes an assertion because of something other than the PRDs.
