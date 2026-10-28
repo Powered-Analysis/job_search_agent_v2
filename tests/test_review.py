@@ -8,6 +8,7 @@ from itertools import count
 import httpx
 import pytest
 from conftest import REPO_ROOT, drop_all_tables, unique_url, venv_script
+from profile_helpers import ROLE_FAMILIES, use_role_families
 
 from jsa import cli, db
 from jsa.review import parse_feedback
@@ -49,6 +50,12 @@ class Script:
 
     def fileno(self):
         raise io.UnsupportedOperation("fileno")
+
+
+@pytest.fixture(autouse=True)
+def profile(tmp_path, monkeypatch):
+    """One role family, so no role-family prompt unless a test adds a second (PRD 03)."""
+    return use_role_families(tmp_path, monkeypatch, ROLE_FAMILIES[:1])
 
 
 @pytest.fixture(autouse=True)

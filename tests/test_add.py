@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from conftest import REJECTED, drop_all_tables, raw_connect
+from profile_helpers import ROLE_FAMILIES, use_role_families, write_role_families
 
 from jsa import cli, db
 from jsa.naming import company_from_board, normalize_company, title_slug
@@ -39,6 +40,12 @@ def gh_routes(url, **overrides):
         **overrides,
     }
     return {("boards-api.greenhouse.io", f"/v1/boards/{token}/jobs/{job_id}"): record}
+
+
+@pytest.fixture(autouse=True)
+def profile(tmp_path, monkeypatch):
+    """One role family, so no role-family prompt unless a test adds a second (PRD 03)."""
+    return use_role_families(tmp_path, monkeypatch, ROLE_FAMILIES[:1])
 
 
 @pytest.fixture
@@ -93,6 +100,13 @@ def in_refinement(conn, url):
     ).fetchone()[0]
 
 
+def stored_role_family(conn, url):
+    return conn.execute(
+        "SELECT role_family FROM postings WHERE canonical_url = ?",
+        (canonicalize_url(url),),
+    ).fetchone()[0]
+
+
 def posting(conn, url):
     row = conn.execute(
         f"SELECT {COLUMNS} FROM postings WHERE canonical_url = ?",
@@ -112,7 +126,8 @@ def count(conn, table, url=None):
     ).fetchone()[0]
 
 
-def seed_decided(conn, url, decision, feedback=None, agent="claude"):
+def seed_decided(conn, url, decision, feedback=None, agent="claude", role_family=None):
+    """An Apply row may carry a role family (PRD 03); a Skip row never does."""
     posting_id = db.insert_posting(
         conn, company="Acme Widgets", title="Old Title", url=url, search_agent=agent
     )
@@ -120,6 +135,11 @@ def seed_decided(conn, url, decision, feedback=None, agent="claude"):
         "UPDATE postings SET decision = ?, fit_feedback = ?, decided_at = ? WHERE id = ?",
         (decision, feedback, LONG_AGO, posting_id),
     )
+    if role_family:
+        conn.execute(
+            "UPDATE postings SET role_family = ? WHERE id = ?",
+            (role_family, posting_id),
+        )
     return posting_id
 
 
@@ -440,7 +460,9 @@ def test_re_adding_a_row_with_a_tracking_variant_url_hits_the_same_row(
 def test_re_adding_an_apply_row_changes_nothing(db_url, conn, web, monkeypatch, capsys):
     url = gh_url()
     web.routes.update(gh_routes(url))
-    posting_id = seed_decided(conn, url, "Apply", feedback="great fit")
+    posting_id = seed_decided(
+        conn, url, "Apply", role_family=ROLE_FAMILIES[0], feedback="great fit"
+    )
     seed_finding(conn, url, "Apply")
     before = posting(conn, url)
     postings_before = count(conn, "postings")
@@ -499,9 +521,20 @@ def test_set_decision_refreshes_decided_at_and_syncs_findings_on_canonical_url(
 def test_find_posting_reports_id_and_decision_for_any_variant_of_the_url(db_url, conn):
     url = gh_url()
     posting_id = seed_decided(conn, url, "Skip")
-    assert db.find_posting(conn, url) == (posting_id, "Skip", 1)
-    assert db.find_posting(conn, f"{url}?utm_campaign=x") == (posting_id, "Skip", 1)
+    assert db.find_posting(conn, url) == (posting_id, "Skip", 1, None)
+    assert db.find_posting(conn, f"{url}?utm_campaign=x") == (
+        posting_id,
+        "Skip",
+        1,
+        None,
+    )
     assert db.find_posting(conn, gh_url()) is None
+
+
+def test_find_posting_reports_the_role_family_of_an_apply_row(db_url, conn):
+    url = gh_url()
+    posting_id = seed_decided(conn, url, "Apply", role_family=ROLE_FAMILIES[1])
+    assert db.find_posting(conn, url) == (posting_id, "Apply", 1, ROLE_FAMILIES[1])
 
 
 # --- prompts inside the add flow ---------------------------------------------
@@ -1193,6 +1226,41 @@ def test_the_refinement_question_follows_the_company_and_title_prompts(
     assert in_refinement(conn, url) == 0
 
 
+def test_with_two_role_families_the_refinement_question_follows_the_role_family_prompt(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+    profile,
+):
+    write_role_families(profile)
+    url = gh_url()
+    web.routes.update(gh_routes(url))
+    # Company, title, then role family 2; the last line can only be the refinement answer.
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="\n\n2\nn\n")
+    assert code == 0, output
+    assert in_refinement(conn, url) == 0
+    assert stored_role_family(conn, url) == ROLE_FAMILIES[1]
+
+
+def test_with_two_role_families_an_existing_row_is_asked_its_role_family_straight_after_the_lookup(
+    db_url,
+    conn,
+    web,
+    monkeypatch,
+    capsys,
+    profile,
+):
+    write_role_families(profile)
+    url = gh_url()
+    seed_decided(conn, url, "Apply", role_family=ROLE_FAMILIES[0])
+    code, output = jsa_add(monkeypatch, capsys, url, stdin="2\n\n")
+    assert code == 0, output
+    assert stored_role_family(conn, url) == ROLE_FAMILIES[1]
+    assert posting(conn, url)["decided_at"] == LONG_AGO
+
+
 def test_a_bad_answer_to_the_refinement_question_is_asked_again(
     db_url,
     conn,
@@ -1295,7 +1363,7 @@ def test_enter_keeps_an_included_row_included_and_writes_nothing(
     capsys,
 ):
     url = gh_url()
-    seed_decided(conn, url, "Apply")
+    seed_decided(conn, url, "Apply", role_family=ROLE_FAMILIES[0])
     code, output = jsa_add(monkeypatch, capsys, url, stdin="\n")
     assert code == 0, output
     assert in_refinement(conn, url) == 1
@@ -1311,7 +1379,7 @@ def test_enter_keeps_an_excluded_row_excluded_and_writes_nothing(
     capsys,
 ):
     url = gh_url()
-    seed_decided(conn, url, "Apply")
+    seed_decided(conn, url, "Apply", role_family=ROLE_FAMILIES[0])
     exclude(conn, url)
     code, output = jsa_add(monkeypatch, capsys, url, stdin="\n")
     assert code == 0, output
@@ -1386,7 +1454,7 @@ def test_the_exclude_flag_on_an_already_excluded_row_is_no_change(
     capsys,
 ):
     url = gh_url()
-    seed_decided(conn, url, "Apply")
+    seed_decided(conn, url, "Apply", role_family=ROLE_FAMILIES[0])
     exclude(conn, url)
     code, output = jsa_add(monkeypatch, capsys, url, "--exclude-from-refine")
     assert code == 0, output
@@ -1405,7 +1473,7 @@ def test_no_input_without_the_flag_leaves_an_existing_rows_setting_as_it_is(
     excluded,
 ):
     url = gh_url()
-    seed_decided(conn, url, "Apply")
+    seed_decided(conn, url, "Apply", role_family=ROLE_FAMILIES[0])
     if excluded:
         exclude(conn, url)
     code, output = jsa_add(monkeypatch, capsys, url, "--no-input")

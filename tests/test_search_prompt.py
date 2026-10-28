@@ -243,14 +243,14 @@ def set_results_per_run(profile, value):
 
 
 def test_the_example_profile_prompt_states_the_target_of_ten(profile):
-    assert "Return the 10 postings that best fit the candidate" in assembled()
+    assert "Return no more than 10 postings that best fit the candidate" in assembled()
 
 
 @pytest.mark.parametrize("value", [1, 4, 25])
 def test_the_prompt_states_the_users_result_target(profile, value):
     set_results_per_run(profile, value)
     prompt = assembled()
-    assert f"Return the {value} postings that best fit the candidate" in prompt
+    assert f"Return no more than {value} postings that best fit the candidate" in prompt
     assert "{{" not in prompt
 
 
@@ -259,20 +259,23 @@ def test_changing_the_result_target_changes_nothing_else_in_the_prompt(profile):
     set_results_per_run(profile, 4)
     four = assembled()
     assert ten != four
-    assert ten.replace("Return the 10 postings", "Return the 4 postings") == four
+    # The template restates the target; only the number differs between the two.
+    assert re.sub(r"\b10 postings", "4 postings", ten) == four
 
 
 def test_the_result_target_reaches_the_prompt_in_every_verification_mode(profile):
     set_results_per_run(profile, 7)
     for mode in ("strict", "best_effort"):
         set_mode(profile, mode)
-        assert "Return the 7 postings that best fit the candidate" in assembled()
+        assert (
+            "Return no more than 7 postings that best fit the candidate" in assembled()
+        )
 
 
 def test_the_search_template_hard_codes_no_result_target():
     template = app_template("search.md")
-    assert "Return the {{RESULTS_PER_RUN}} postings that best fit" in template
-    assert "Return the 10 postings" not in template
+    assert "Return no more than {{RESULTS_PER_RUN}} postings that best fit" in template
+    assert "no more than 10 postings" not in template
 
 
 # --- the app templates ------------------------------------------------------
@@ -290,6 +293,7 @@ def test_the_search_template_has_a_marker_for_every_slot_in_the_prd_table():
         "NEGATIVE_SIGNALS",
         "HARD_EXCLUSIONS",
         "RESULTS_PER_RUN",
+        "RESUME_SKILLS",
     ):
         assert "{{" + slot + "}}" in template, slot
 
@@ -306,6 +310,7 @@ def test_the_search_template_has_no_marker_beyond_the_prd_table():
         "NEGATIVE_SIGNALS",
         "HARD_EXCLUSIONS",
         "RESULTS_PER_RUN",
+        "RESUME_SKILLS",
     }
 
 

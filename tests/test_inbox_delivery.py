@@ -2,7 +2,7 @@
 
 `gws` is replaced by a stateful fake behind `JSA_GWS_BIN` that serves Gmail, Drive, and the tracker
 Sheet; Claude at the shared agent loop; outside HTTP beneath the app's client; the
-database is the libSQL container (and a `file:` database); the profile is a temporary directory.
+database is the libSQL container; the profile is a temporary directory.
 """
 
 import base64
@@ -767,7 +767,10 @@ def test_one_failed_posting_does_not_stop_the_next_message(
     gmail.requeue("m1")
     gmail.requeue("m2")
     run_inbox(monkeypatch)
-    assert tracked(conn, first) and tracked(conn, second)
+    # Opened after the runs: a connection idle through them could have its stream expire.
+    after = db.connect()
+    assert tracked(after, first) and tracked(after, second)
+    after.close()
     assert sorted(r[0] for r in world.rows()) == sorted([first, second])
 
 

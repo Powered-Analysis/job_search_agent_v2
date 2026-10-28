@@ -1,6 +1,6 @@
 """`jsa packet` (issue #11; PRD 04 "Base resume" and "Packet directory"; PRD 02 "Packet queue"; XC-9, XC-11).
 
-The database is the libSQL container (and a `file:` database); the packets directory and the profile are
+The database is the libSQL container; the packets directory and the profile are
 temporary directories, so nothing outside the test's own paths is touched.
 """
 

@@ -9,6 +9,8 @@ import turso_serverless
 import turso_serverless.dbapi
 from soffice_helpers import install_soffice
 
+from jsa import agent_loop
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TABLES = (
     "postings",
@@ -58,19 +60,26 @@ def unique_url(prefix: str = "https://job-boards.greenhouse.io/acme/jobs/") -> s
     return f"{prefix}{uuid.uuid4().hex}"
 
 
-@pytest.fixture(params=["http", "file"])
-def db_url(request, tmp_path, monkeypatch) -> str:
-    url = HTTP_URL if request.param == "http" else f"file:{tmp_path / 'test.db'}"
-    monkeypatch.setenv("TURSO_DATABASE_URL", url)
-    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
-    return url
-
-
 @pytest.fixture
 def http_url(monkeypatch) -> str:
     monkeypatch.setenv("TURSO_DATABASE_URL", HTTP_URL)
     monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
     return HTTP_URL
+
+
+@pytest.fixture
+def db_url(http_url) -> str:
+    """The transport that ships: only tests of the database module (PRD 02) also run on `file:`."""
+    return http_url
+
+
+@pytest.fixture(params=["http", "file"])
+def both_transports_url(request, tmp_path, monkeypatch) -> str:
+    """For a module that tests the database module: it overrides `db_url` with this."""
+    url = HTTP_URL if request.param == "http" else f"file:{tmp_path / 'test.db'}"
+    monkeypatch.setenv("TURSO_DATABASE_URL", url)
+    monkeypatch.delenv("TURSO_AUTH_TOKEN", raising=False)
+    return url
 
 
 @pytest.fixture
@@ -95,3 +104,18 @@ def http_conn(http_url):
 def soffice(tmp_path_factory, monkeypatch) -> Path:
     """Every test renders PDF copies through the stub `soffice` (`XC-9`); returns its invocation log."""
     return install_soffice(tmp_path_factory.mktemp("soffice"), monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def claude_is_never_reached(monkeypatch):
+    """Claude is replaced at the shared agent loop (XC-12); a test that reaches the real one fails even if the app swallows the error."""
+    reached = []
+
+    async def refuse(*, prompt, **_ignored):
+        reached.append(prompt)
+        raise AssertionError("a test reached the real Claude Agent SDK")
+        yield
+
+    monkeypatch.setattr(agent_loop, "query", refuse)
+    yield
+    assert not reached, "a test reached the real Claude Agent SDK"

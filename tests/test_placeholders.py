@@ -1,7 +1,7 @@
 """Placeholders in the resume and cover letter (issue #130; PRD 04 "Placeholders in the resume and cover letter" and "Packet directory"; XC-9, XC-11).
 
 `fill_placeholders` is exercised directly (it is pure over a loaded document), and the copy step through
-`jsa packet`. The database is the libSQL container (and a `file:` database); the profile and the packets
+`jsa packet`. The database is the libSQL container; the profile and the packets
 directory are temporary directories.
 """
 

@@ -8,6 +8,11 @@ from jsa import db
 from jsa.errors import JsaError
 
 
+@pytest.fixture
+def db_url(both_transports_url):
+    return both_transports_url
+
+
 def test_connect_creates_every_missing_table(db_url):
     drop_all_tables(db_url)
     assert not set(TABLES) & existing_tables(db_url)

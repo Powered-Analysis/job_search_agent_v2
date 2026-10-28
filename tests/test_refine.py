@@ -1,6 +1,6 @@
 """`jsa refine` (issue #15; PRD 05 "Search-profile refinement", "Proposal review"; PRD 02 "Refinement scope", "Learning-loop run table"; XC-7, XC-9, XC-12 to XC-14).
 
-The database is the libSQL container (and a `file:` database). Claude is replaced at
+The database is the libSQL container. Claude is replaced at
 `agent_loop.query`, the shared loop's one call into the SDK; the stand-in plays the refiner by editing
 the files in the working directory it was given. The profile is a temporary copy of `profile.example/`.
 """
