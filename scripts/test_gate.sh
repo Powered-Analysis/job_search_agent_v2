@@ -21,16 +21,16 @@ issue=$(team_issues | jq -c --argjson n "$(jq '.issue' <<<"$info")" '[.[] | sele
 git fetch -q origin main "+refs/pull/$pr/head:refs/remotes/pull/$pr"
 base=$(git merge-base origin/main "$head")
 
-# run_suite <name> <sha> <port>: writes the IDs of the tests that passed to
+# run_suite <name> <sha>: writes the IDs of the tests that passed to
 # $work/<name>.passed. Returns non-zero when the suite could not run at all.
+# The two runs go one after the other: suite.sh already uses every CPU, and
+# overloading them stretches tests past the database's idle-stream timeout.
 run_suite() {
-  local name="$1" sha="$2" port="$3" dir="$work/$1" log="$work/$1.log" rc=0
+  local name="$1" sha="$2" dir="$work/$1" log="$work/$1.log" rc=0
   : >"$work/$name.passed"
   git worktree add -q --detach "$dir" "$sha" || return 1
   [[ -f "$dir/pyproject.toml" ]] || return 0
-  (cd "$dir" && env -u GH_TOKEN TURSO_DATABASE_URL="http://127.0.0.1:$port" \
-    uv run --with pytest pytest -q -rA --tb=short -p no:cacheprovider \
-    --continue-on-collection-errors) >"$log" 2>&1 || rc=$?
+  bash "$(dirname "$0")/suite.sh" "$dir" -rA --tb=short >"$log" 2>&1 || rc=$?
   echo "::group::$name suite at $sha (pytest exit $rc)"
   tail -n 80 "$log"
   echo "::endgroup::"
@@ -39,12 +39,12 @@ run_suite() {
   { grep -E '^PASSED ' "$log" || true; } | sed -E 's/^PASSED //' | sort -u >"$work/$name.passed"
 }
 
-run_suite base "$base" 8081 || {
+run_suite base "$base" || {
   echo "::error::The test suite could not run on the base commit $base"
   exit 1
 }
 head_ran=true
-run_suite head "$head" 8082 || head_ran=false
+run_suite head "$head" || head_ran=false
 
 decide() {
   local owner_only regressions listed missing

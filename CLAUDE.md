@@ -8,7 +8,7 @@ The product is specified by the PRDs in `prds/`; start with `prds/00-overview.md
 
 - **Install:** `uv sync`
 - **Run:** `uv run jsa <command>`
-- **Test:** `uv run pytest`
+- **Test:** `uv run pytest <path>` for the tests a change touches; `bash scripts/suite.sh` for the full suite, split across one process per CPU, each with its own libSQL container (needs Docker)
 - **Format and lint:** `uv run ruff format` and `uv run ruff check`
 
 pytest and ruff are dev-only dependencies of the project.
