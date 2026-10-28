@@ -533,7 +533,7 @@ Normally at most one PR is uncovered, since the PM merges at most one per tick. 
 
 #### Commit access
 
-The SDET only touches the test suite, never production code, so it is the one role that commits directly to `main`, with no reviewer. `main`'s merge-gate ruleset requires a PR, and its only bypass actor is the `sdet` team, whose sole member is Sandro-BOTicelli (see [Credentials](#credentials)). A deterministic check after the SDET job fails the tick if any SDET commit touches files outside `tests/`.
+The SDET only touches the test suite, never production code, so it is the one role that commits directly to `main`, with no reviewer. `main`'s merge-gate ruleset requires a PR, and its only bypass actor is the `sdet` team, whose sole member is Sandro-BOTicelli (see [Credentials](#credentials)). A deterministic check after the SDET job fails the tick if any commit pushed to `main` without a PR during that job touches files outside `tests/`. A PR the owner merges meanwhile has passed the merge gate, so the check skips it.
 
 If the suite needs something only the owner can provide, such as a workflow change or a new secret, file an issue labeled `needs-human` (see [Escalation](#escalation)).
 
