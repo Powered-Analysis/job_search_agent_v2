@@ -34,10 +34,12 @@ Do this once; step 3 puts the keys in `.env`.
   (`ANTHROPIC_API_KEY`). Set exactly one: the CLI prefers the API key, so with both set the OAuth
   login fails with a 401.
 - **Fly.io** account.
-- **A Google Sheet** with an `Applications` tab. Row 1 is the header `ID`, `Company`, `Title`,
-  `URL`, `Date Posted`, `Date Added`, `Date Applied`, `Status` (columns A to H). Apply a Status
-  dropdown (data validation) to all of column H, so appended rows never run past the formatted
-  range. Its id is the part of the Sheet's URL between `/d/` and `/edit`.
+- **A Google Sheet** with a tab for each role family (step 4), named exactly as the role family's
+  folder. Row 1 is the header `ID`, `Company`, `Title`, `URL`, `Date Posted`, `Date Added`,
+  `Date Applied`, `Status` (columns A to H). Apply a Status dropdown (data validation) to all of
+  column H, so appended rows never run past the formatted range. Make the first tab this way, then
+  duplicate it in Sheets for each further role family and rename the copy. The app never creates or
+  formats a tab. Its id is the part of the Sheet's URL between `/d/` and `/edit`.
 
 ### 3. Configure `.env`
 
@@ -59,9 +61,7 @@ cp -r profile.example profile
 | File | What it holds |
 |---|---|
 | `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the resume redline and refine |
-| `profile/resume.docx` | your single base resume |
-| `profile/role_families/<name>/` | one folder per kind of role you apply to, named for it (`Data Analysis`). It holds that role family's base resume, `resume.docx`, and optionally a `cover_letter.*`. You need at least one; `jsa review`, `jsa revise`, and `jsa add` refuse to start when a `resume.docx` is missing or empty, a folder holds two cover letters, or two names give the same email tag (the name in lowercase, each run of other characters turned into one `-`) |
-| `profile/cover_letter.*` | optional; your cover letter, copied into each packet (a `.docx` also gets a PDF) |
+| `profile/role_families/<name>/` | one folder per kind of role you apply to, named for it (`Data Analysis`). It holds that role family's base resume, `resume.docx`, and optionally a `cover_letter.*`, which is copied into each of its packets (a `.docx` also gets a PDF). Its Sheet tab (step 2) carries the same name. You need at least one; `jsa review`, `jsa revise`, `jsa add`, `jsa inbox`, `jsa packet`, `jsa generate`, `jsa track`, and `jsa refetch` refuse to start when a `resume.docx` is missing or empty, a folder holds two cover letters, or two names give the same email tag (the name in lowercase, each run of other characters turned into one `-`) |
 | `profile/resume_skills.md` | optional; the skills you have, one per line, comma-separated, or both in one file. The redline may add, remove, reword, or reorder skills in your resume's `Skills` section, using only words from this list or the posting |
 | `profile/search/search.toml` | timezone, `run_at`, `results_per_run`, the weekly schedule, the Claude runner settings, and the verification mode |
 | `profile/search/*.md` | the six fragments that tell the search who you are and what you want |
@@ -84,8 +84,8 @@ the next heading or fully bold paragraph. A skills change may only use words fro
 posting text it quotes, or the text it replaces. A resume without exactly one `Skills` paragraph has no
 skills section, and `jsa generate` warns about it.
 
-**Placeholders.** Type `[COMPANY]`, `[TITLE]`, or `[DATE]` into `resume.docx` or a `.docx` cover
-letter, and each packet's copy of the file has them filled in. There is no setting: the token is the
+**Placeholders.** Type `[COMPANY]`, `[TITLE]`, or `[DATE]` into a role family's `resume.docx` or
+`.docx` cover letter, and each packet's copy of the file has them filled in. There is no setting: the token is the
 request, and the files in `profile/` are never changed.
 
 | Token | Filled with |
@@ -193,9 +193,9 @@ accept a refine proposal.
 
 With `[inbox]` set, `jsa deploy` also creates or updates the inbox app's one hourly machine, running
 `jsa inbox` from the same image (a machine in one Fly app can run an image from another app in the
-same organization). Every deploy sets that machine's `config.toml`, `resume.docx`, and cover letter and skills list (if you have them) as machine
+same organization). Every deploy sets that machine's `config.toml`, each role family's `resume.docx` and cover letter, and the skills list (if you have them) as machine
 files; they are never in the image or the build context. So run `jsa deploy` again after you change
-your resume or `config.toml`. Before building, it checks that the profile has everything the inbox
+a role family or `config.toml`. Before building, it checks that the profile has everything the inbox
 needs and that the inbox app holds each secret from step 7; it never sets a secret. `--smoke` leaves
 both scheduled machines alone.
 
@@ -234,7 +234,7 @@ credentials leave it only as the inbox app's two exported ones, each scoped to i
 (while the OAuth consent screen is in testing status the token expires after 7 days; publish it, or
 sign in again when `jsa track` reports exit code 2); `flyctl` (`jsa deploy`); LibreOffice (`soffice`, override `JSA_SOFFICE_BIN`; renders the resume and cover letter PDFs); Google Drive for Desktop (with the inbox, `packets_dir` mirrors the Drive packets folder); Microsoft Word (reviewing the redline); the Claude Code CLI (the local Claude commands).
 
-**The profile:** `config.toml`, `resume.docx`, `role_families/`, `search/search.toml`, and the six `search/*.md`
+**The profile:** `config.toml`, `role_families/`, `search/search.toml`, and the six `search/*.md`
 fragments, seeded from `profile.example/` (step 4).
 
 **Outside the profile:** the Google Sheet (step 2); with the inbox, the Drive packets folder and the
@@ -264,7 +264,14 @@ family when it has one. With only one role family nobody is asked: it is chosen.
 family, and `:a` at the note prompt asks the list before anything is saved. `jsa revise` and `jsa add`
 ask the same list; `jsa add --no-input` chooses the only role family, and with several leaves a new posting
 without one (an existing posting keeps its own) and prints the `jsa revise --id <id>` line that gives it one.
-Packets still start from `profile/resume.docx`.
+
+**Packets and tabs.** `jsa packet` and `jsa generate` copy the posting's role family's `resume.docx`
+(and its cover letter, if it has one) into the packet, and `jsa track` appends the row to the Sheet tab
+with the role family's name. If the Sheet has no such tab, that row's append fails and names the tab;
+make the tab, then run `jsa track`. An Apply with no role family, or one whose folder you have since
+removed, is flagged with its id and the `jsa revise --id <id>` line; nothing is built for it, and it
+waits in the queue. Changing a posting's role family later does not rebuild its packet or move its
+tracker row.
 
 **The redline.** `jsa generate` has Claude tailor each packet's resume copy to its posting, for ATS
 matching first and then for narrative and positioning. It may reword the headline, the summary, the

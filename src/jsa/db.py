@@ -506,6 +506,8 @@ class PacketJob(NamedTuple):
     # Set on every posting but the lowest id of its folder name, compared without regard to case (PRD 04),
     # so the folder is never shared.
     shares_name: bool
+    # The role family whose base resume the packet starts from (PRD 04); None until the user assigns one.
+    role_family: str | None
 
 
 _PACKET_JOB_COLUMNS = """
@@ -514,7 +516,8 @@ _PACKET_JOB_COLUMNS = """
         SELECT 1 FROM postings other
         WHERE LOWER(other.normalized_company) = LOWER(p.normalized_company)
             AND LOWER(other.title_slug) = LOWER(p.title_slug) AND other.id < p.id
-    )
+    ),
+    p.role_family
 """
 
 
@@ -575,29 +578,41 @@ def refetch_targets(
         """,
         params,
     ).fetchall()
-    return [RefetchTarget(PacketJob(*row[:8]), row[8], row[9]) for row in rows]
+    return [RefetchTarget(PacketJob(*row[:9]), row[9], row[10]) for row in rows]
 
 
-def tracker_queue(conn: Connection, posting_id: int | None = None) -> list[tuple]:
+class TrackerEntry(NamedTuple):
+    id: int
+    normalized_company: str
+    title: str
+    url: str
+    date_posted: str | None
+    # The tracker tab the row is appended to is named for it (PRD 04).
+    role_family: str | None
+
+
+def tracker_queue(
+    conn: Connection, posting_id: int | None = None
+) -> list[TrackerEntry]:
     """Apply postings not yet tracked, lowest id first (PRD 02).
 
-    Rows are (id, normalized_company, title, url, date_posted). A posting id waives the
-    closed condition, never Apply or added_to_tracker, so a posting is never appended twice.
+    A posting id waives the closed condition, never Apply or added_to_tracker, so a posting is never appended twice.
     """
     scope, params = (
         ("p.id = ? AND p.added_to_tracker = 0", (posting_id,))
         if posting_id is not None
         else ("p.added_to_tracker = 0 AND p.closed_at IS NULL", ())
     )
-    return conn.execute(
+    rows = conn.execute(
         f"""
-        SELECT p.id, p.normalized_company, p.title, p.url, p.date_posted
+        SELECT p.id, p.normalized_company, p.title, p.url, p.date_posted, p.role_family
         FROM postings p
         WHERE p.decision = 'Apply' AND {scope}
         ORDER BY p.id
         """,
         params,
     ).fetchall()
+    return [TrackerEntry(*row) for row in rows]
 
 
 def mark_tracked(conn: Connection, posting_id: int) -> None:

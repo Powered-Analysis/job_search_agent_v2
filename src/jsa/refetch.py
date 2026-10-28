@@ -1,6 +1,7 @@
 """`jsa refetch` (PRD 04 "Reconciliation"): carry an employer's edits into the database, the tracker, and the packet."""
 
 import glob
+from collections.abc import Iterable
 from contextlib import closing
 from pathlib import Path
 
@@ -26,14 +27,15 @@ from jsa.profile import (
     packet_sources,
     redline_settings,
     tracker_spreadsheet_id,
+    unassigned_reason,
 )
 
 
 def _read_sheet(
-    spreadsheet_id: str, *, required: bool
+    spreadsheet_id: str, tabs: Iterable[str], *, required: bool
 ) -> dict[int, tracker.SheetRow] | None:
     try:
-        return tracker.sheet_index(spreadsheet_id)
+        return tracker.sheet_index(spreadsheet_id, tabs)
     except JsaError as error:
         # The default scope is defined by the Sheet, so guessing at it would defeat it (PRD 04).
         if required:
@@ -172,8 +174,13 @@ def _refresh_packet(
                 f"the description changed after its redline was built; delete "
                 f"{new_directory / REDLINE_EDITS}, then run `jsa generate --id {fresh.id}`"
             )
+        # PRD 04: a posting whose role family the profile lacks can't be regenerated; the rename above needed no base resume.
+        if reason := unassigned_reason(
+            fresh.id, fresh.role_family, sources.role_families
+        ):
+            fixes.append(f"the packet was not refreshed: {reason}")
         # PRD 04: exactly `jsa generate --id`, which keeps the resume copy and rewrites the posting.
-        if not build_packet(fresh, config, sources, redline, rewrite=True):
+        elif not build_packet(fresh, config, sources, redline, rewrite=True):
             fixes.append(
                 f"no job description to redline from; fill in {new_directory / JOB_POSTING}, "
                 f"then run `jsa generate --id {fresh.id}`"
@@ -255,10 +262,12 @@ def _reconcile(
     sheet_row = index.get(job.id) if index is not None else None
     if title_changed and sheet_row and not sheet_row.date_applied:
         try:
-            tracker.set_title(spreadsheet_id, sheet_row.number, fresh.title)
+            tracker.set_title(
+                spreadsheet_id, sheet_row.tab, sheet_row.number, fresh.title
+            )
         except JsaError as error:
             fixes.append(
-                f"the Sheet's Title cell C{sheet_row.number} was not updated "
+                f"the Sheet's Title cell C{sheet_row.number} on the {sheet_row.tab!r} tab was not updated "
                 f"({one_line(error)}); fix it by hand"
             )
     # A retitle can add or drop the "(id)" suffix of another posting's folder. A folder that gains it
@@ -280,7 +289,13 @@ def _reconcile(
             )
         )
     # A copy is never rewritten, so a [TITLE] filled into it keeps the old title.
-    if has_packet and title_changed and holds_title_placeholder(sources):
+    family = sources.role_families.get(fresh.role_family)
+    if (
+        has_packet
+        and title_changed
+        and family is not None
+        and holds_title_placeholder(family)
+    ):
         fixes.append(
             f"the packet's resume or cover letter copy was filled with the old title "
             f"{job.title!r}; correct it by hand"
@@ -301,7 +316,7 @@ def refetch(
     config = load_config()
     redline = redline_settings(config)
     default_scope = posting_id is None and not every_row
-    index = _read_sheet(spreadsheet_id, required=default_scope)
+    index = _read_sheet(spreadsheet_id, sources.role_families, required=default_scope)
     with closing(db.connect()) as conn:
         targets = db.refetch_targets(conn, posting_id=posting_id, every_row=every_row)
     if posting_id is not None and not targets:
