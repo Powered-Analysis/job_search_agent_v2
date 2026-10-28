@@ -72,6 +72,7 @@ TABLES: dict[str, tuple[str, ...]] = {
         "added_to_tracker INTEGER NOT NULL DEFAULT 0",
         "closed_at TEXT",
         "in_refinement INTEGER NOT NULL DEFAULT 1",
+        "role_family TEXT",
     ),
     "search_findings": (
         "run_date TEXT NOT NULL",
@@ -141,6 +142,7 @@ def _add_column(table: str, name: str) -> Callable[[Connection], None]:
 # that gap with an empty table.
 MIGRATIONS: tuple[Callable[[Connection], None], ...] = (
     _add_column("postings", "in_refinement"),
+    _add_column("postings", "role_family"),
 )
 
 
@@ -176,10 +178,11 @@ def insert_posting(
     search_agent: str,
     date_posted: str | None = None,
     in_refinement: bool = True,
+    role_family: str | None = None,
 ) -> int | None:
     """Return the new posting's id, or None when its canonical URL is already stored.
 
-    Only a manual add chooses `in_refinement`; a searched row takes the default (PRD 02).
+    Only a manual add chooses `in_refinement` and `role_family`; a searched row takes the defaults (PRD 02).
     """
     manual = search_agent == "manual"
     # A manual add is decided in the INSERT itself so the row is never visible as undecided.
@@ -188,8 +191,9 @@ def insert_posting(
         f"""
         INSERT INTO postings (
             company, title, url, date_posted, canonical_url,
-            normalized_company, title_slug, search_agent, in_refinement, decision, decided_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {decision}, {decided_at})
+            normalized_company, title_slug, search_agent, in_refinement, role_family,
+            decision, decided_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {decision}, {decided_at})
         ON CONFLICT(canonical_url) DO NOTHING
         RETURNING id
         """,
@@ -203,6 +207,7 @@ def insert_posting(
             title_slug(title),
             search_agent,
             int(in_refinement),
+            role_family,
         ),
     ).fetchall()
     return rows[0][0] if rows else None
@@ -368,16 +373,20 @@ def health_search_runs(conn: Connection, since: datetime) -> list[tuple]:
     ).fetchall()
 
 
-REVISE_COLUMNS = "id, company, title, location, url, decision, fit_feedback"
+REVISE_COLUMNS = (
+    "id, company, title, location, url, decision, fit_feedback, role_family"
+)
 
 
-def find_posting(conn: Connection, url: str) -> tuple[int, str | None, bool] | None:
-    """A UX-only read: the posting's (id, decision, in_refinement) for this URL's canonical form."""
+def find_posting(
+    conn: Connection, url: str
+) -> tuple[int, str | None, bool, str | None] | None:
+    """A UX-only read: the posting's (id, decision, in_refinement, role_family) for this URL's canonical form."""
     rows = conn.execute(
-        "SELECT id, decision, in_refinement FROM postings WHERE canonical_url = ?",
+        "SELECT id, decision, in_refinement, role_family FROM postings WHERE canonical_url = ?",
         (canonicalize_url(url),),
     ).fetchall()
-    return (rows[0][0], rows[0][1], bool(rows[0][2])) if rows else None
+    return (rows[0][0], rows[0][1], bool(rows[0][2]), rows[0][3]) if rows else None
 
 
 def review_backlog(conn: Connection) -> list[tuple]:
@@ -392,7 +401,7 @@ def review_backlog(conn: Connection) -> list[tuple]:
 
 
 def posting_by_id(conn: Connection, posting_id: int) -> tuple | None:
-    """(id, company, title, location, url, decision, fit_feedback), or None for an unknown id."""
+    """(id, company, title, location, url, decision, fit_feedback, role_family), or None for an unknown id."""
     rows = conn.execute(
         f"SELECT {REVISE_COLUMNS} FROM postings WHERE id = ?", (posting_id,)
     ).fetchall()
@@ -435,15 +444,31 @@ def _write_decision(
 
 
 def set_decision(conn: Connection, url: str, decision: str) -> None:
-    """Change a posting's decision, keeping its feedback; telemetry follows (PRD 02)."""
-    _write_decision(conn, url, decision, "", ())
+    """Change a posting's decision, keeping its feedback; a Skip clears the role family; telemetry follows (PRD 02)."""
+    _write_decision(
+        conn,
+        url,
+        decision,
+        "role_family = CASE WHEN ? = 'Apply' THEN role_family END, ",
+        (decision,),
+    )
 
 
 def record_decision(
-    conn: Connection, url: str, decision: str, feedback: str | None
+    conn: Connection,
+    url: str,
+    decision: str,
+    feedback: str | None,
+    role_family: str | None = None,
 ) -> None:
-    """Store a decision with its feedback together; telemetry follows (PRD 02)."""
-    _write_decision(conn, url, decision, "fit_feedback = ?, ", (feedback,))
+    """Store a decision with its feedback and, for an Apply, its role family together; telemetry follows (PRD 02)."""
+    _write_decision(
+        conn,
+        url,
+        decision,
+        "fit_feedback = ?, role_family = ?, ",
+        (feedback, role_family if decision == "Apply" else None),
+    )
 
 
 def set_in_refinement(conn: Connection, posting_id: int, in_refinement: bool) -> None:
@@ -454,10 +479,18 @@ def set_in_refinement(conn: Connection, posting_id: int, in_refinement: bool) ->
     )
 
 
+def set_role_family(conn: Connection, posting_id: int, role_family: str | None) -> None:
+    """Set an Apply row's role family without refreshing `decided_at`; the current value is a no-op (PRD 02)."""
+    conn.execute(
+        "UPDATE postings SET role_family = ? WHERE id = ? AND decision = 'Apply' AND role_family IS NOT ?",
+        (role_family, posting_id, role_family),
+    )
+
+
 def clear_decision(conn: Connection, url: str) -> None:
     """Un-decide a posting. Telemetry keeps the last real decision (PRD 02)."""
     conn.execute(
-        "UPDATE postings SET decision = NULL, fit_feedback = NULL, decided_at = NULL WHERE canonical_url = ?",
+        "UPDATE postings SET decision = NULL, fit_feedback = NULL, decided_at = NULL, role_family = NULL WHERE canonical_url = ?",
         (canonicalize_url(url),),
     )
 

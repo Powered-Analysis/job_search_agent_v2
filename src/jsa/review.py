@@ -1,15 +1,16 @@
 """The review loop (PRD 03): no model call, one decision at a time, each committed on submit."""
 
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import httpx
 
 from jsa import db, prompts
 from jsa.errors import JsaError
 from jsa.health import search_health
+from jsa.profile import role_family_names
 from jsa.verify import CLOSED_OUTCOMES, Verifier, recheck
 
 FEEDBACK_LABEL = "Feedback (Enter to skip, :a/:s to change the decision)"
@@ -33,6 +34,7 @@ class Entry:
     url: str
     decision: str | None = None
     feedback: str | None = None
+    role_family: str | None = None
     rechecked: bool = True
 
 
@@ -52,6 +54,44 @@ def parse_feedback(decision: str, text: str) -> Feedback:
     if target:
         decision, text = target, rest
     return Feedback("save", decision, text.strip() or None)
+
+
+class FamilyChoice(NamedTuple):
+    """The answer to the role-family prompt: `b` went back, otherwise `name` (None when none fits)."""
+
+    back: bool
+    name: str | None
+
+
+def parse_role_family(
+    key: str, names: Sequence[str], current: str | None
+) -> str | None:
+    """The role family a valid non-back key names: a number, `n` for none, or Enter for `current`."""
+    if key == "":
+        return current
+    if key == "n":
+        return None
+    return names[int(key) - 1]
+
+
+def ask_role_family(
+    names: Sequence[str], current: str | None, *, allow_back: bool = True
+) -> FamilyChoice:
+    """Pick a role family from the numbered list (PRD 03); with only one in the profile nobody is asked."""
+    if len(names) == 1:
+        return FamilyChoice(False, names[0])
+    print("Role families:")
+    for number, name in enumerate(names, 1):
+        print(f"  {number}. {name}")
+    print("  n. none fits")
+    keys = [*(str(number) for number in range(1, len(names) + 1)), "n"]
+    if allow_back:
+        keys.append("b")
+    label = "Role family" + (f" (Enter keeps {current})" if current else "")
+    key = prompts.choose(label, keys, allow_enter=current is not None)
+    if key == "b":
+        return FamilyChoice(True, None)
+    return FamilyChoice(False, parse_role_family(key, names, current))
 
 
 def _open_in_chrome(url: str) -> None:
@@ -89,18 +129,37 @@ def _decide(entry: Entry) -> str:
     return DECISION_KEYS.get(key) or {"b": "back", "q": "quit"}[key]
 
 
-def _record(conn: db.Connection, entry: Entry, decision: str) -> bool:
-    """Ask for feedback and commit; False when the user backed out to the decision prompt."""
+def _record(
+    conn: db.Connection, entry: Entry, decision: str, families: Sequence[str]
+) -> bool:
+    """Ask the role family and feedback, then commit all three together; False when the user backed out to the decision prompt."""
+    choice = FamilyChoice(False, None)
+    if decision == "Apply":
+        choice = ask_role_family(families, entry.role_family)
+    if choice.back:
+        return False
     answer = prompts.ask(FEEDBACK_LABEL, entry.feedback or "")
     parsed = parse_feedback(decision, answer)
     if parsed.action == "back":
         return False
-    db.record_decision(conn, entry.url, parsed.decision, parsed.feedback)
-    entry.decision, entry.feedback = parsed.decision, parsed.feedback
+    if parsed.decision == "Apply" and decision != "Apply":
+        # A `:a` flip: the role family is asked before anything is written.
+        choice = ask_role_family(families, entry.role_family)
+        if choice.back:
+            return False
+    family = choice.name if parsed.decision == "Apply" else None
+    db.record_decision(conn, entry.url, parsed.decision, parsed.feedback, family)
+    entry.decision, entry.feedback, entry.role_family = (
+        parsed.decision,
+        parsed.feedback,
+        family,
+    )
     return True
 
 
-def _review_entry(conn: db.Connection, entry: Entry, *, first: bool) -> str:
+def _review_entry(
+    conn: db.Connection, entry: Entry, families: Sequence[str], *, first: bool
+) -> str:
     """Work one posting to a commit; returns 'next', 'back' or 'quit'."""
     while True:
         decision = _decide(entry)
@@ -108,17 +167,17 @@ def _review_entry(conn: db.Connection, entry: Entry, *, first: bool) -> str:
             print("This is the first posting.")
         elif decision in ("back", "quit"):
             return decision
-        elif _record(conn, entry, decision):
+        elif _record(conn, entry, decision, families):
             return "next"
 
 
-def _work(conn: db.Connection, entries: list[Entry]) -> None:
+def _work(conn: db.Connection, entries: list[Entry], families: Sequence[str]) -> None:
     index = 0
     while index < len(entries):
         entry = entries[index]
         _show(entry)
         _open_in_chrome(entry.url)
-        outcome = _review_entry(conn, entry, first=index == 0)
+        outcome = _review_entry(conn, entry, families, first=index == 0)
         if outcome == "quit":
             return
         if outcome == "back":
@@ -149,6 +208,7 @@ def _abortable(work: Callable[[], None]) -> None:
 
 
 def review(client: httpx.Client) -> None:
+    families = role_family_names()
     conn = db.connect()
     for line in search_health(conn):
         print(line)
@@ -158,11 +218,12 @@ def review(client: httpx.Client) -> None:
     if not entries:
         print("No postings awaiting review. 🎉")
         return
-    _abortable(lambda: _work(conn, entries))
+    _abortable(lambda: _work(conn, entries, families))
 
 
 def revise(*, posting_id: int | None = None, last: bool = False) -> None:
     """Reopen one decided posting outside a review session (PRD 03)."""
+    families = role_family_names()
     conn = db.connect()
     row = db.last_decided_posting(conn) if last else db.posting_by_id(conn, posting_id)
     if row is None:
@@ -179,4 +240,4 @@ def revise(*, posting_id: int | None = None, last: bool = False) -> None:
     _show(entry)
     _open_in_chrome(entry.url)
     # first=True: a step back has nowhere to go, so it re-asks, and `q` leaves the row as it was.
-    _abortable(lambda: _review_entry(conn, entry, first=True))
+    _abortable(lambda: _review_entry(conn, entry, families, first=True))
