@@ -6,6 +6,11 @@ from conftest import REJECTED, unique_url
 from jsa import db
 
 
+@pytest.fixture
+def db_url(both_transports_url):
+    return both_transports_url
+
+
 def _row(conn, posting_id, columns):
     return conn.execute(
         f"SELECT {columns} FROM postings WHERE id = ?", (posting_id,)

@@ -1,6 +1,6 @@
 """`jsa generate` (issue #13; PRD 04 "Redline", "Base resume" and "Packet directory"; PRD 02 "Packet queue"; XC-9 to XC-14).
 
-The database is the libSQL container (and a `file:` database). The outside world is replaced at the
+The database is the libSQL container. The outside world is replaced at the
 documented seams: HTTP at the transport, Claude at `agent_loop.query`, and `gws` by a stub script
 reached through `JSA_GWS_BIN`. The profile and the packets directory are temporary directories.
 """

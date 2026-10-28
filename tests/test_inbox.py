@@ -1,7 +1,7 @@
 """The email side door (issue #87; PRD 03 "Email side door" and "Manual-add side door"; XC-1, XC-3, XC-5, XC-9).
 
 `gws` is replaced by a stateful fake Gmail behind `JSA_GWS_BIN`; outside HTTP is replaced beneath the
-app's shared client; the database is the libSQL container (and a `file:` database); the profile is a
+app's shared client; the database is the libSQL container; the profile is a
 temporary directory.
 """
 
@@ -28,8 +28,9 @@ from test_add import (
     posting,
     seed_decided,
 )
+from test_generate import Agent
 
-from jsa import cli
+from jsa import agent_loop, cli, db
 from jsa.inbox import parse_posting, sender_allowed
 from jsa.urls import canonicalize_url
 
@@ -241,6 +242,14 @@ class FakeGmail:
             for call in self.calls_for(message_id, "get")
             if call["params"].get("format") != "metadata"
         ]
+
+
+@pytest.fixture(autouse=True)
+def agent(monkeypatch):
+    """Claude is replaced at the shared agent loop (XC-12) wherever a packet is built."""
+    stand_in = Agent()
+    monkeypatch.setattr(agent_loop, "query", stand_in.query)
+    return stand_in
 
 
 @pytest.fixture
@@ -480,7 +489,7 @@ def test_only_messages_in_the_inbox_are_processed(
 
 
 def test_messages_are_processed_oldest_first_by_arrival_time(
-    db_url, conn, gmail, web, monkeypatch
+    db_url, gmail, web, monkeypatch
 ):
     urls = {name: ats_posting(web) for name in ("newest", "oldest", "middle")}
     # Ids that sort differently from arrival time.
@@ -488,7 +497,10 @@ def test_messages_are_processed_oldest_first_by_arrival_time(
     gmail.add("c-oldest", 1000, urls["oldest"] + "\n")
     gmail.add("b-middle", 2000, urls["middle"] + "\n")
     assert run_inbox(monkeypatch) == 0
+    # Opened after the run: a connection idle through it could have its stream expire.
+    conn = db.connect()
     ids = {name: posting(conn, url)["id"] for name, url in urls.items()}
+    conn.close()
     assert ids["oldest"] < ids["middle"] < ids["newest"]
 
 

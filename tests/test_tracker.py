@@ -1,7 +1,7 @@
 """`jsa track` (issue #12; PRD 04 "Tracker write"; PRD 02 "Tracker queue"; PRD 06 env overrides; XC-4, XC-9, XC-10).
 
-`gws` is replaced by a stub script reached through `JSA_GWS_BIN`; the database is the libSQL container
-(and a `file:` database), and the profile is a temporary directory.
+`gws` is replaced by a stub script reached through `JSA_GWS_BIN`; the database is the libSQL container,
+and the profile is a temporary directory.
 """
 
 import json

@@ -1,6 +1,6 @@
 """`jsa refetch` (issue #14; PRD 04 "Reconciliation" and "Projection reads and writes"; PRD 02 "Refetch scope" and "JD capture"; XC-4, XC-5, XC-6).
 
-The database is the libSQL container (and a `file:` database). The outside world is replaced at the
+The database is the libSQL container. The outside world is replaced at the
 documented seams: HTTP at the transport (the employer's ATS record), Claude at `agent_loop.query`, and
 `gws` by a stub script reached through `JSA_GWS_BIN`. The profile and the packets directory are temporary
 directories.
