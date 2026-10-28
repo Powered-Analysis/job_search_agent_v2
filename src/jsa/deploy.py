@@ -13,6 +13,7 @@ from jsa.config import SEARCH_AGENT_KEYS, fly_bin
 from jsa.errors import JsaError
 from jsa.profile import (
     CONFIG_TOML,
+    RESUME_SKILLS,
     Config,
     FlyConfig,
     Schedule,
@@ -128,11 +129,14 @@ def deploy_warnings(config: SearchConfig, *, pending: bool) -> list[str]:
 def shipped_files() -> list[str]:
     """The profile files the image carries, as the image lays them out."""
     root = profile_dir() / SEARCH_DIR
-    return sorted(
+    files = [
         f"profile/{SEARCH_DIR}/{path.relative_to(root).as_posix()}"
         for path in root.rglob("*")
         if path.is_file()
-    )
+    ]
+    if resume_skills() is not None:
+        files.append(f"profile/{RESUME_SKILLS}")
+    return sorted(files)
 
 
 def _validate_inbox(config: Config) -> str:
@@ -253,7 +257,7 @@ def _launch(
 
 
 def _stage_build_context(stage: Path) -> None:
-    """Lay out the project with the validated search profile at ./profile/search, wherever it lives (XC-13)."""
+    """Lay out the project with the validated search profile and skills list under ./profile, wherever they live (XC-13)."""
     for name in BUILD_INPUTS:
         source = Path(name)
         if source.is_dir():
@@ -261,6 +265,8 @@ def _stage_build_context(stage: Path) -> None:
         else:
             shutil.copy2(source, stage / name)
     shutil.copytree(profile_dir() / SEARCH_DIR, stage / "profile" / SEARCH_DIR)
+    if (skills := resume_skills()) is not None:
+        shutil.copy2(skills, stage / "profile" / RESUME_SKILLS)
 
 
 def _build_and_push(app: str) -> str:
@@ -369,8 +375,6 @@ def inbox_machine_files() -> dict[str, Path]:
         sources.append(family.resume)
         if family.cover_letter is not None:
             sources.append(family.cover_letter)
-    if (skills := resume_skills()) is not None:
-        sources.append(skills)
     return {
         f"{MACHINE_PROFILE_DIR}/{source.relative_to(profile_dir()).as_posix()}": source
         for source in sources
