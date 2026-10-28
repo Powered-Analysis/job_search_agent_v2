@@ -26,6 +26,7 @@ from jsa.profile import (
     packet_sources,
     redline_settings,
     tracker_spreadsheet_id,
+    with_role_family,
 )
 from jsa.redline import edits_applied, parse_skills, redline_resume
 from jsa.tracker import append_tracked, today
@@ -128,7 +129,7 @@ def generate(client: httpx.Client, posting_id: int | None, *, dry_run: bool) -> 
     redline = redline_settings(config)
     workers = generate_workers()
     conn = db.connect()
-    queue = db.packet_queue(conn, posting_id)
+    queue = with_role_family(db.packet_queue(conn, posting_id), sources.role_families)
     if dry_run:
         for job in queue:
             print(f"would generate: {packet_paths(config, job)[0]}")

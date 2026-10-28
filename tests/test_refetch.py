@@ -9,6 +9,7 @@ directories.
 import html
 import itertools
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -1219,6 +1220,67 @@ def test_a_retitle_regeneration_adds_no_second_cover_letter_copy(
     # One cover letter copy, with the PDF the regeneration renders from it.
     assert sorted(letters) == sorted([NEW_LETTER, NEW_LETTER_PDF])
     assert (packets / NEW_DIR / NEW_LETTER).read_bytes() == b"MY REVISED LETTER"
+
+
+@pytest.mark.parametrize(
+    "old_letter, new_letter",
+    [
+        (None, "cover_letter.docx"),
+        (OLD_LETTER_PDF, "cover_letter.docx"),
+        (None, "cover_letter.pdf"),
+    ],
+    ids=["old-had-none", "old-was-a-pdf-new-is-a-docx", "old-had-none-new-is-a-pdf"],
+)
+def test_a_retitle_after_a_role_family_change_adds_nothing_from_the_new_family(
+    rdb, web, gws, env, monkeypatch, capsys, old_letter, new_letter
+):
+    profile, packets = env
+    new_family = family_dir(profile, ROLE_FAMILIES[1])
+    (new_family / new_letter).write_bytes(b"NEW FAMILY LETTER")
+    document = docx.Document()
+    document.add_paragraph("NEW FAMILY BASE LINE")
+    document.save(new_family / "resume.docx")
+    posting_id = seed(rdb, role_family=ROLE_FAMILIES[1])
+    folder = make_packet(rdb, packets, posting_id)
+    if old_letter:
+        (folder / old_letter).write_bytes(b"OLD FAMILY LETTER")
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    renamed = packets / NEW_DIR
+    letters = {path.name for path in renamed.iterdir() if "CoverLetter" in path.name}
+    assert letters == (
+        {old_letter.replace("Staff", "Principal")} if old_letter else set()
+    )
+    for path in renamed.iterdir():
+        assert b"NEW FAMILY LETTER" not in path.read_bytes()
+        assert b"NEW FAMILY BASE LINE" not in path.read_bytes()
+    assert REVISION in "\n".join(
+        paragraph.text
+        for paragraph in docx.Document(str(renamed / NEW_COPY)).paragraphs
+    )
+
+
+@pytest.mark.parametrize("state", ["no-role-families", "empty-resume"])
+def test_refetch_fails_before_any_row_on_a_role_family_profile_error(
+    rdb, web, gws, env, monkeypatch, capsys, state
+):
+    profile, packets = env
+    if state == "no-role-families":
+        shutil.rmtree(profile / "role_families")
+    else:
+        (family_dir(profile, ROLE_FAMILIES[1]) / "resume.docx").write_bytes(b"")
+    posting_id = seed(rdb)
+    make_packet(rdb, packets, posting_id)
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, ""))
+    code, output = refetch(monkeypatch, capsys)
+    assert code != 0
+    assert "profile.example" in output
+    assert column(rdb, posting_id, "title") == OLD_TITLE
+    assert {path.name for path in packets.iterdir()} == {OLD_DIR}
+    assert title_updates(gws) == []
 
 
 def test_refetch_never_creates_a_packet_or_cover_letter_where_none_existed(

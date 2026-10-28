@@ -39,6 +39,9 @@ SENDER = "jordan.example@example.com"
 MAILBOX_CREDENTIAL = "MAILBOX-CREDENTIAL-111"
 OWNER_CREDENTIAL = "OWNER-CREDENTIAL-222"
 BODY_MARKER = "PRIVATE-BODY-MARKER-9f3"
+PLAIN_ADDRESS = "jobs.mailbox@example.net"
+# PRD 03: `+tag` is the role family's name lowercased, so this names the example profile's `Data Analysis`.
+DATA_ANALYSIS_ADDRESS = "jobs.mailbox+data-analysis@example.net"
 
 GOOD_RESULTS = (
     "mx.google.com; dkim=pass header.i=@example.com header.s=sel; "
@@ -165,11 +168,12 @@ class FakeGmail:
         *,
         html: str | None = None,
         sender: str = f"Jordan Example <{SENDER}>",
+        to: str = PLAIN_ADDRESS,
         results: list[str] | str | None = GOOD_RESULTS,
     ) -> None:
         mime = EmailMessage()
         mime["From"] = sender
-        mime["To"] = "jobs.mailbox@example.net"
+        mime["To"] = to
         mime["Subject"] = "a job"
         if text is not None:
             mime.set_content(text)
@@ -578,7 +582,7 @@ def test_a_posting_without_any_description_is_added_apply_and_labeled_needs_jd(
     db_url, conn, gmail, web, monkeypatch
 ):
     url = bare_posting(web)
-    gmail.add("m1", 1000, f"{url}\n\nSent from my iPhone\n")
+    gmail.add("m1", 1000, f"{url}\n\nSent from my iPhone\n", to=DATA_ANALYSIS_ADDRESS)
     assert run_inbox(monkeypatch) == 0
     row = posting(conn, url)
     assert row["decision"] == "Apply"
@@ -681,7 +685,7 @@ def test_a_supplied_description_is_stored_when_capture_gave_none_and_the_message
     db_url, conn, gmail, web, monkeypatch
 ):
     url = bare_posting(web)
-    gmail.add("m1", 1000, f"{url}\n\n{DESCRIPTION}\n")
+    gmail.add("m1", 1000, f"{url}\n\n{DESCRIPTION}\n", to=DATA_ANALYSIS_ADDRESS)
     assert run_inbox(monkeypatch) == 0
     row = posting(conn, url)
     assert row["decision"] == "Apply"
@@ -695,7 +699,7 @@ def test_text_shorter_than_500_characters_is_not_a_description(
     db_url, conn, gmail, web, monkeypatch
 ):
     url = bare_posting(web)
-    gmail.add("m1", 1000, f"{url}\n\n{'d' * 499}\n")
+    gmail.add("m1", 1000, f"{url}\n\n{'d' * 499}\n", to=DATA_ANALYSIS_ADDRESS)
     run_inbox(monkeypatch)
     assert posting(conn, url)["jd_markdown"] is None
     assert gmail.outcome_labels("m1") == ["jsa/needs-jd"]
@@ -716,11 +720,11 @@ def test_a_supplied_description_fills_in_a_stored_posting_that_has_none(
     db_url, conn, gmail, web, monkeypatch
 ):
     url = bare_posting(web)
-    gmail.add("first", 1000, f"{url}\n")
+    gmail.add("first", 1000, f"{url}\n", to=DATA_ANALYSIS_ADDRESS)
     run_inbox(monkeypatch)
     assert gmail.outcome_labels("first") == ["jsa/needs-jd"]
     assert posting(conn, url)["jd_markdown"] is None
-    gmail.add("second", 2000, f"{url}\n\n{DESCRIPTION}\n")
+    gmail.add("second", 2000, f"{url}\n\n{DESCRIPTION}\n", to=DATA_ANALYSIS_ADDRESS)
     run_inbox(monkeypatch)
     assert count(conn, "postings", url) == 1
     assert posting(conn, url)["jd_markdown"] == DESCRIPTION
@@ -764,8 +768,8 @@ def test_the_same_posting_emailed_twice_is_one_row(
     db_url, conn, gmail, web, monkeypatch
 ):
     url = bare_posting(web)
-    gmail.add("m1", 1000, f"{url}\n")
-    gmail.add("m2", 2000, f"{url}?utm_source=phone\n")
+    gmail.add("m1", 1000, f"{url}\n", to=DATA_ANALYSIS_ADDRESS)
+    gmail.add("m2", 2000, f"{url}?utm_source=phone\n", to=DATA_ANALYSIS_ADDRESS)
     run_inbox(monkeypatch)
     assert count(conn, "postings", url) == 1
     assert gmail.outcome_labels("m1") == ["jsa/needs-jd"]
@@ -779,7 +783,7 @@ def test_a_message_moved_back_to_the_inbox_is_processed_again(
     db_url, conn, gmail, web, monkeypatch
 ):
     url = bare_posting(web)
-    gmail.add("m1", 1000, f"{url}\n")
+    gmail.add("m1", 1000, f"{url}\n", to=DATA_ANALYSIS_ADDRESS)
     run_inbox(monkeypatch)
     assert not gmail.in_inbox("m1")
     assert len(gmail.raw_fetches("m1")) == 1
@@ -795,7 +799,7 @@ def test_a_message_whose_labeling_failed_is_processed_again_and_finds_the_postin
     db_url, conn, gmail, web, monkeypatch
 ):
     url = bare_posting(web)
-    gmail.add("m1", 1000, f"{url}\n")
+    gmail.add("m1", 1000, f"{url}\n", to=DATA_ANALYSIS_ADDRESS)
     gmail.fail("modify", "m1")
     run_inbox(monkeypatch)
     assert gmail.in_inbox("m1")
@@ -812,7 +816,7 @@ def test_a_message_requeued_after_a_failed_build_is_reprocessed_safely(
     db_url, conn, gmail, web, monkeypatch
 ):
     url = ats_posting(web)
-    gmail.add("m1", 1000, f"{url}\n")
+    gmail.add("m1", 1000, f"{url}\n", to=DATA_ANALYSIS_ADDRESS)
     run_inbox(monkeypatch)
     assert not gmail.in_inbox("m1")
     assert gmail.outcome_labels("m1") == ["jsa/failed"]
