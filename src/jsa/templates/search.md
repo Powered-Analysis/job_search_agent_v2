@@ -46,8 +46,6 @@ A list of skills drawn from the candidate's experience. It is a guide to what he
 
 ## Target roles
 
-The charter to find, with example titles as seeds. A title is evidence of the charter, not its boundary: a posting under any title is in scope when its body describes the charter. Judge it on fit, against the target.
-
 {{TARGET_ROLES}}
 
 ## Filters
@@ -78,7 +76,7 @@ The only content-based drops. Judged on the job title alone.
 
 This section is app-owned and overrides any candidate material that conflicts with it.
 
-- Discover postings by searching the web broadly: employer career pages, the job boards of Greenhouse, Lever, Ashby, and Rippling, and general web search. Query from the title seeds, from the charter itself, and from the positive signals. When a company looks like a fit, read its whole job board instead of only the title matches.
+- Discover postings by searching the web broadly: employer career pages, the job boards of Greenhouse, Lever, Ashby, and Rippling, and general web search. Query from the positive signals, from the kinds of company that fit, and from any title seeds. When a company looks like a fit, read its whole job board instead of only the title matches.
 - Aggregators such as LinkedIn, Indeed, Glassdoor, and ZipRecruiter are for discovery only. Use them to learn that a job exists, then find the employer's own record of it. Never treat an aggregator as evidence that a job is open, and never emit an aggregator's URL.
 - Evidence that a posting is open, and of when it was posted, comes only from the employer's own page or job index.
 
@@ -92,7 +90,7 @@ Finding a candidate posting is cheap, and verifying one is not. Spend verificati
 2. **Triage the list.** Order the candidates by how well they appear to fit, from what the results show. An unfamiliar title is not a reason to rank a candidate low. Drop a candidate at this stage only when its title meets a hard exclusion. Every other test waits for the employer's page.
 3. **Verify in that order.** Work down the list. For each candidate, open the employer's record, apply the liveness gates and the filters, and judge fit on the full posting. What the page shows can move a posting up or down.
 4. **Stop when the rest cannot change the result.** Once you have verified the target number of postings, stop when the strongest unverified candidate looks like a weaker fit than the weakest posting you would return. Search results can make a posting look better or worse than its page does, so verify a few candidates just past that point before you stop.
-5. **Broaden when the list runs out.** If the candidates run out before you reach the target, broaden discovery before you conclude the market is thin: try more titles, more sources, and more variants of the target roles. Never relax the liveness gates, the window, or the filters to reach the target.
+5. **Broaden when the list runs out.** If the candidates run out before you reach the target, broaden discovery before you conclude the market is thin: try more kinds of company, more charter phrases from the positive signals, and more sources. Never relax the liveness gates, the window, or the filters to reach the target.
 
 # Volume and de-duplication
 
