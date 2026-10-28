@@ -180,6 +180,7 @@ Every agent job invokes `claude-code-action` with these settings. Each one close
 - **Never `track_progress`.** It switches the action into tag mode, which runs its own branch checkout and ignores the one the workflow made.
 - **uv and the project's dependencies are installed in a step before the agent runs**, so the agent doesn't spend turns installing them. The workflow pins uv's version and Python 3.14, the version of PRD 06's image, so CI tests what ships. The pins also keep the dependency cache valid: its key covers the lockfile and the Python version but not uv's version, so a floating uv or Python leaves every job restoring a cache it can't use.
 - **`BASH_DEFAULT_TIMEOUT_MS` (10 minutes) and `BASH_MAX_TIMEOUT_MS` (30 minutes)** in the workflow's `env`. Claude Code's own defaults, 2 and 10 minutes, kill a full-suite run or a live search partway through, and the agent then retries it without knowing how long it needs.
+- **`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`** in the workflow's `env`. A memory note an agent saves is deleted with its runner, but the agent believes its next run will read it, and so it leaves undone what it meant to record. Anything a later run needs goes on GitHub, the team's only state: a comment on the issue, or a `Closes #N` line in the PR.
 - **WOZCODE in every tick agent (PM, FSE, SA, SDET).**
   - The action installs it with `plugin_marketplaces: https://github.com/WithWoz/wozcode-plugin.git` and `plugins: woz@wozcode-marketplace`.
   - `WOZCODE_API_KEY` in the `settings` env logs the plugin in without a browser.
@@ -532,7 +533,7 @@ Normally at most one PR is uncovered, since the PM merges at most one per tick. 
 
 #### Commit access
 
-The SDET only touches the test suite, never production code, so it is the one role that commits directly to `main`, with no reviewer. `main`'s merge-gate ruleset requires a PR, and its only bypass actor is the `sdet` team, whose sole member is Sandro-BOTicelli (see [Credentials](#credentials)). A deterministic check after the SDET job fails the tick if any SDET commit touches files outside `tests/`.
+The SDET only touches the test suite, never production code, so it is the one role that commits directly to `main`, with no reviewer. `main`'s merge-gate ruleset requires a PR, and its only bypass actor is the `sdet` team, whose sole member is Sandro-BOTicelli (see [Credentials](#credentials)). A deterministic check after the SDET job fails the tick if any commit pushed to `main` without a PR during that job touches files outside `tests/`. A PR the owner merges meanwhile has passed the merge gate, so the check skips it.
 
 If the suite needs something only the owner can provide, such as a workflow change or a new secret, file an issue labeled `needs-human` (see [Escalation](#escalation)).
 
@@ -572,4 +573,6 @@ The SDET never reads the PR description, review comments, or the reasoning behin
 
    This step also catches failures caused by a crash between push and filing, or by a merge that broke an existing test.
 
-**A new test that fails against current `main` is a spec-vs-code finding, full stop.** Never weaken, delete, or adjust a test to match observed behavior; that is the exact failure mode this role exists to prevent. The PM decides whether the code or the test is wrong. Until then, the failing test stays on `main`. The test gate keeps it from blocking unrelated PRs.
+   **One exception: a requirement still being built.** A test fails on `main` only because its requirement is still being built when it asserts an acceptance criterion of the issue that the open feature PR closes. File no `discrepancy` issue for it. Instead, comment the test IDs on that issue, because the PR's merge is what makes them pass. If a test still fails once that PR has merged, this step files it at the next SDET run, like any other failure.
+
+**A new test that fails against current `main` is a spec-vs-code finding, full stop,** filed as step 6 says. Never weaken, delete, or adjust a test to match observed behavior; that is the exact failure mode this role exists to prevent. The PM decides whether the code or the test is wrong. Until then, the failing test stays on `main`. The test gate keeps it from blocking unrelated PRs.

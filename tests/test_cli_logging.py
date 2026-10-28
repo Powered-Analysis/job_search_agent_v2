@@ -42,6 +42,13 @@ def open_stub(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(bin_dir))
 
 
+@pytest.fixture
+def example_profile(tmp_path, monkeypatch):
+    """`review` and `add` validate the profile's role families first (PRD 04); CI has no `profile/`."""
+    path = copy_example(tmp_path / "profile")
+    monkeypatch.setenv("JSA_PROFILE_DIR", str(path))
+
+
 def route_to(stand_in, monkeypatch):
     monkeypatch.setattr(
         httpx.HTTPTransport, "handle_request", lambda _self, r: stand_in.handle(r)
@@ -74,7 +81,7 @@ def test_the_harness_sees_httpx_request_lines_when_nothing_silences_them(
 
 
 def test_a_review_run_prints_no_httpx_request_lines(
-    db_url, open_stub, monkeypatch, capsys, caplog
+    db_url, example_profile, open_stub, monkeypatch, capsys, caplog
 ):
     drop_all_tables(db_url)
     conn = db.connect()
@@ -91,7 +98,7 @@ def test_a_review_run_prints_no_httpx_request_lines(
 
 
 def test_an_add_run_prints_no_httpx_request_lines(
-    db_url, tmp_path, monkeypatch, capsys, caplog
+    db_url, example_profile, tmp_path, monkeypatch, capsys, caplog
 ):
     drop_all_tables(db_url)
     db.connect().close()
