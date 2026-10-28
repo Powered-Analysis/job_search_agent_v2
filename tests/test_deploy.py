@@ -1170,6 +1170,10 @@ def test_build_context_includes_profile_search(path):
     assert in_build_context(path)
 
 
+def test_build_context_includes_the_skills_list():
+    assert in_build_context("profile/resume_skills.md")
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -1184,6 +1188,8 @@ def test_build_context_includes_profile_search(path):
         "profile/packets/acme/resume.docx",
         "profile/searchlight/secret.md",
         "profile/decisions.json",
+        "profile/resume_skills.md.bak",
+        "profile/refine/resume_skills.md",
     ],
 )
 def test_build_context_excludes_everything_else_under_profile(path):
@@ -1239,6 +1245,7 @@ def project(fly, tmp_path, monkeypatch):
     (decoy / "refine").mkdir()
     (decoy / "refine" / "rationale.md").write_text(DECOY)
     (decoy / "config.toml").write_text(DECOY)
+    (decoy / "resume_skills.md").write_text(DECOY)
     validated, _ = fly
     (validated / "search" / "candidate.md").write_text(SHIPPED_FRAGMENT)
     (validated / "refine").mkdir()
@@ -1283,7 +1290,30 @@ def test_build_context_profile_holds_only_search(project, monkeypatch, capsys):
     shipped = {
         path.split("/")[1] for path in tree(snapshot) if path.startswith("profile/")
     }
+    assert shipped == {"search", "resume_skills.md"}
+
+
+def test_build_context_profile_holds_only_search_without_a_skills_list(
+    project, monkeypatch, capsys
+):
+    validated, _, snapshot = project
+    (validated / "resume_skills.md").unlink(missing_ok=True)
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    shipped = {
+        path.split("/")[1] for path in tree(snapshot) if path.startswith("profile/")
+    }
     assert shipped == {"search"}
+
+
+def test_build_context_carries_the_validated_skills_list_not_the_project_profiles(
+    project, monkeypatch, capsys
+):
+    validated, _, snapshot = project
+    (validated / "resume_skills.md").write_text("Python\nKubernetes\n")
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    assert (snapshot / "profile" / "resume_skills.md").read_text() == (
+        "Python\nKubernetes\n"
+    )
 
 
 def test_build_context_ships_nested_search_files(project, monkeypatch, capsys):
@@ -1662,11 +1692,10 @@ MACHINE_PROFILE_DIR = "/app/profile/"
 
 def inbox_machine_files(profile: Path, *cover_letters: str) -> dict[str, str]:
     """The machine files a deploy ships, by path under the profile: `config.toml` and every role family's
-    `resume.docx`, plus the skills list and the given cover letters (PRD 06 `jsa deploy` step 4)."""
+    `resume.docx`, plus the given cover letters, never the skills list (PRD 06 `jsa deploy` step 4)."""
     names = (
         "config.toml",
         *(f"role_families/{name}/resume.docx" for name in ROLE_FAMILIES),
-        "resume_skills.md",
         *cover_letters,
     )
     return {name: str(profile / name) for name in names if (profile / name).exists()}
@@ -1929,7 +1958,7 @@ def test_without_a_cover_letter_the_inbox_machine_gets_only_the_profiles_other_m
 
 
 @pytest.mark.parametrize("existing", [(), ("hourly",)], ids=["create", "update"])
-def test_a_skills_list_ships_to_the_inbox_machine_as_a_machine_file(
+def test_a_skills_list_never_ships_to_the_inbox_machine_as_a_machine_file(
     inbox, monkeypatch, capsys, existing
 ):
     profile, log = inbox
@@ -1939,26 +1968,10 @@ def test_a_skills_list_ships_to_the_inbox_machine_as_a_machine_file(
     assert code == 0
     verb = "update" if existing else "run"
     (launch,) = pick_machine(on_app(calls(log), INBOX_APP), verb)
-    files = {Path(t).name: source for t, source in machine_files(launch).items()}
-    assert files["resume_skills.md"] == str(profile / "resume_skills.md")
-    target = next(
-        t for t in machine_files(launch) if Path(t).name == "resume_skills.md"
-    )
-    assert Path(target).is_absolute() and Path(target).parent.name == "profile"
-
-
-def test_a_profile_without_a_skills_list_ships_none_to_the_inbox_machine(
-    inbox, monkeypatch, capsys
-):
-    profile, log = inbox
-    (profile / "resume_skills.md").unlink(missing_ok=True)
-    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
-    code, _ = jsa_deploy(monkeypatch, capsys)
-    assert code == 0
-    (launch,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
     assert "resume_skills.md" not in {
         Path(target).name for target in machine_files(launch)
     }
+    assert sorted(shipped(launch)) == sorted(inbox_machine_files(profile))
 
 
 def test_a_cover_letter_removed_from_the_profile_leaves_the_inbox_machine(
@@ -2771,11 +2784,11 @@ def test_readme_walkthrough_covers_the_inbox_setup(item):
     assert item in readme_walkthrough()
 
 
-def test_a_skills_list_removed_from_the_profile_leaves_the_inbox_machine(
+def test_a_skills_list_is_neither_set_on_nor_cleared_from_the_inbox_machine(
     inbox, monkeypatch, capsys
 ):
     profile, log = inbox
-    (profile / "resume_skills.md").unlink(missing_ok=True)
+    (profile / "resume_skills.md").write_text("Python\n")
     monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
     monkeypatch.setenv(
         "STUB_INBOX_MACHINES",
@@ -2783,37 +2796,16 @@ def test_a_skills_list_removed_from_the_profile_leaves_the_inbox_machine(
             "m0",
             "/app/profile/config.toml",
             f"/app/profile/{family_file('resume.docx')}",
-            "/app/profile/resume_skills.md",
         ),
     )
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code == 0
     (update,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
-    files = machine_files(update)
-    # Fly removes a machine file that is set to an empty source.
-    assert files["/app/profile/resume_skills.md"] == ""
-    assert files["/app/profile/config.toml"]
-    assert files[f"/app/profile/{family_file('resume.docx')}"]
+    assert "/app/profile/resume_skills.md" not in machine_files(update)
+    assert machine_files(update)["/app/profile/config.toml"]
 
 
-def test_a_kept_skills_list_is_not_cleared_from_the_inbox_machine(
-    inbox, monkeypatch, capsys
-):
-    profile, log = inbox
-    (profile / "resume_skills.md").write_text("Python\n")
-    monkeypatch.setenv("STUB_MACHINES", machines("hourly"))
-    monkeypatch.setenv(
-        "STUB_INBOX_MACHINES", held("m0", "/app/profile/resume_skills.md")
-    )
-    code, _ = jsa_deploy(monkeypatch, capsys)
-    assert code == 0
-    (update,) = pick_machine(on_app(calls(log), INBOX_APP), "update")
-    assert machine_files(update)["/app/profile/resume_skills.md"] == str(
-        profile / "resume_skills.md"
-    )
-
-
-def test_dry_run_lists_the_skills_list_among_the_inbox_machine_files(
+def test_dry_run_lists_the_skills_list_among_the_image_files_not_the_inbox_machine_files(
     inbox, monkeypatch, capsys
 ):
     profile, log = inbox
@@ -2821,11 +2813,15 @@ def test_dry_run_lists_the_skills_list_among_the_inbox_machine_files(
     code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
     assert code == 0
     assert launched_nothing(calls(log))
-    last_image_file = max(output.index(path) for path in shipped_search_files(profile))
-    assert output.index("resume_skills.md") > last_image_file
+    image_files, _, machine_listing = output.partition(
+        f"Files that would be set on the {INBOX_APP}"
+    )
+    assert "profile/resume_skills.md" in image_files
+    assert "resume_skills" not in machine_listing
+    assert "config.toml" in machine_listing
 
 
-def test_dry_run_without_a_skills_list_lists_none(inbox, monkeypatch, capsys):
+def test_dry_run_without_a_skills_list_lists_no_skills_file(inbox, monkeypatch, capsys):
     profile, _ = inbox
     (profile / "resume_skills.md").unlink(missing_ok=True)
     code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
