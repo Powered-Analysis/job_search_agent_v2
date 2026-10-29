@@ -1273,6 +1273,108 @@ def test_a_changed_role_family_adds_neither_its_resume_nor_its_cover_letter_to_a
         assert (folder / old_letter).read_bytes() == before[old_letter]
 
 
+# --- a deleted cover letter PDF is re-made whichever role family the packet's letter came from (issue #214; PRD 04 "PDF copies") ---
+
+LETTER_COPY_DOCX = COVER_LETTER_COPY
+
+
+def packet_with_letter(profile, packets, letter, *, pdf=True):
+    """An old role family's packet whose cover letter copy is `letter`; its PDF is there unless `pdf` is false."""
+    folder = packet_of_the_old_family(profile, packets, letter=letter)
+    if pdf:
+        (folder / LETTER_COPY_PDF).write_bytes(b"MY OWN EXPORT")
+    return folder
+
+
+@pytest.mark.parametrize(
+    "new_letter",
+    [None, "cover_letter.pdf", "cover_letter.txt", "cover_letter.docx"],
+    ids=["none", "pdf", "txt", "docx"],
+)
+@pytest.mark.parametrize("by_id", [False, True], ids=["queue", "id"])
+def test_a_docx_cover_letter_in_the_packet_gets_its_deleted_pdf_whatever_the_current_role_familys_letter(
+    gdb, env, soffice, by_id, new_letter, monkeypatch, capsys
+):
+    profile, packets = env
+    if new_letter:
+        (family_dir(profile, NEW_FAMILY) / new_letter).write_bytes(b"NEW FAMILY LETTER")
+    posting_id = seed(gdb, role_family=NEW_FAMILY)
+    folder = packet_with_letter(profile, packets, LETTER_COPY_DOCX, pdf=False)
+    code, _ = jsa_generate(
+        monkeypatch, capsys, *(["--id", posting_id] if by_id else [])
+    )
+    assert code == 0
+    assert (folder / LETTER_COPY_PDF).is_file()
+    assert (folder / LETTER_COPY_DOCX).read_bytes() == b"THE OLD FAMILYS LETTER"
+    assert rendered(soffice).count(LETTER_COPY_DOCX) == 1
+
+
+@pytest.mark.parametrize(
+    "new_letter", [None, "cover_letter.docx"], ids=["none", "docx"]
+)
+def test_an_existing_pdf_beside_an_earlier_role_familys_docx_cover_letter_is_never_replaced(
+    gdb, env, soffice, new_letter, monkeypatch, capsys
+):
+    profile, packets = env
+    if new_letter:
+        (family_dir(profile, NEW_FAMILY) / new_letter).write_bytes(b"NEW FAMILY LETTER")
+    posting_id = seed(gdb, role_family=NEW_FAMILY)
+    folder = packet_with_letter(profile, packets, LETTER_COPY_DOCX)
+    for args in ((), ("--id", posting_id)):
+        code, _ = jsa_generate(monkeypatch, capsys, *args)
+        assert code == 0
+        assert (folder / LETTER_COPY_PDF).read_bytes() == b"MY OWN EXPORT"
+    assert COVER_LETTER_COPY not in rendered(soffice)
+
+
+@pytest.mark.parametrize("letter", ["pdf", "txt"])
+def test_a_cover_letter_in_another_format_in_the_packet_is_never_rendered(
+    gdb, env, soffice, letter, monkeypatch, capsys
+):
+    profile, packets = env
+    (family_dir(profile, NEW_FAMILY) / "cover_letter.docx").write_bytes(b"NEW LETTER")
+    posting_id = seed(gdb, role_family=NEW_FAMILY)
+    name = COVER_LETTER_COPY.replace(".docx", f".{letter}")
+    folder = packet_of_the_old_family(profile, packets, letter=name)
+    code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
+    assert code == 0
+    assert COVER_LETTER_COPY not in rendered(soffice)
+    assert (folder / name).read_bytes() == b"THE OLD FAMILYS LETTER"
+    assert not (folder / COVER_LETTER_COPY).exists()
+    if letter == "txt":
+        assert not (folder / LETTER_COPY_PDF).exists()
+
+
+def test_only_the_postings_own_cover_letter_name_is_rendered_not_other_docx_files_in_the_packet(
+    gdb, env, soffice, monkeypatch, capsys
+):
+    profile, packets = env
+    posting_id = seed(gdb, role_family=NEW_FAMILY)
+    folder = packet_with_letter(profile, packets, LETTER_COPY_DOCX, pdf=False)
+    other_letter = COVER_LETTER_COPY.replace("Acme", "Other")
+    (folder / "notes.docx").write_bytes(b"NOTES")
+    (folder / other_letter).write_bytes(b"ANOTHER COMPANYS LETTER")
+    code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
+    assert code == 0
+    assert rendered(soffice).count(LETTER_COPY_DOCX) == 1
+    assert "notes.docx" not in rendered(soffice)
+    assert other_letter not in rendered(soffice)
+    assert not (folder / "notes.pdf").exists()
+
+
+def test_a_failed_render_of_an_earlier_role_familys_cover_letter_pdf_fails_the_row_and_leaves_no_partial_pdf(
+    gdb, env, soffice, monkeypatch, capsys
+):
+    profile, packets = env
+    posting_id = seed(gdb, role_family=NEW_FAMILY)
+    folder = packet_with_letter(profile, packets, LETTER_COPY_DOCX, pdf=False)
+    monkeypatch.setenv("SOFFICE_FAIL", "1")
+    code, _ = jsa_generate(monkeypatch, capsys, "--id", posting_id)
+    assert code != 0
+    assert not (folder / LETTER_COPY_PDF).exists()
+    assert (folder / LETTER_COPY_DOCX).read_bytes() == b"THE OLD FAMILYS LETTER"
+
+
 def test_the_command_is_registered_with_id_and_dry_run(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["jsa", "generate", "--help"])
     with pytest.raises(SystemExit) as stopped:
