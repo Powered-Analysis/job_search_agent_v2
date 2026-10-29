@@ -96,14 +96,6 @@ def render_ground_truth(rows: Sequence[db.DecidedPosting]) -> str:
     return "\n\n".join(blocks)
 
 
-def _context_family() -> str:
-    """The search family whose prompt the refiner is shown, and whose fragments it edits live in `shared/`."""
-    families = search_families()
-    if not families:
-        raise JsaError(f"{profile_dir() / SEARCH_DIR} holds no search family.")
-    return families[0]
-
-
 def render_search_prompt(family: str, config: SearchConfig) -> str:
     """A family's assembled search prompt under its name and the path each fragment resolved to."""
     search_dir = profile_dir() / SEARCH_DIR
