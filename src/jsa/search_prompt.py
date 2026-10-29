@@ -42,31 +42,38 @@ def fragment_path(folder: str, filename: str) -> Path:
     return profile_dir() / SEARCH_DIR / folder / filename
 
 
-def fragment_source(family: str, filename: str) -> Path | None:
+def fragment_source(
+    family: str,
+    filename: str,
+    replacement: Path | None = None,
+    shared_replacement: Path | None = None,
+) -> Path | None:
     """The file a family's fragment comes from: its own, even empty, else `shared/`'s, else None (PRD 01).
 
-    Every reader of a family's fragments goes through this (convention 3)."""
-    for folder in (family, SHARED_FAMILY):
-        path = fragment_path(folder, filename)
-        if path.is_file():
-            return path
-    return None
-
-
-def read_fragment(family: str, filename: str) -> str | None:
-    """The fragment's text for a family; None when neither the family nor `shared/` has the file."""
-    source = fragment_source(family, filename)
-    return source.read_text(encoding="utf-8") if source else None
+    A replacement stands in front of the live file of its level, so a proposed change can be tried
+    before it is accepted. Every reader of a family's fragments goes through this (convention 3)."""
+    candidates = (
+        replacement,
+        fragment_path(family, filename),
+        shared_replacement,
+        fragment_path(SHARED_FAMILY, filename),
+    )
+    return next((path for path in candidates if path and path.is_file()), None)
 
 
 def _fragment_slot(
-    family: str, name: str, filename: str, replacement: Path | None
+    family: str,
+    name: str,
+    filename: str,
+    replacement: Path | None,
+    shared_replacement: Path | None,
 ) -> Slot:
     required = FRAGMENTS[name][1]
-    if replacement is not None and replacement.is_file():
-        return Slot(replacement.read_text(encoding="utf-8"), str(replacement), required)
+    source = fragment_source(family, filename, replacement, shared_replacement)
+    if source is not None and source in (replacement, shared_replacement):
+        return Slot(source.read_text(encoding="utf-8"), str(source), required)
     return Slot(
-        read_fragment(family, filename),
+        source.read_text(encoding="utf-8") if source else None,
         f"{fragment_path(family, filename)} (or {fragment_path(SHARED_FAMILY, filename)} "
         f"when the family has no file of its own; copy the shape from profile.example/{SEARCH_DIR}/)",
         required,
@@ -85,12 +92,14 @@ def assemble_search_prompt_for(
     window: str,
     replacements_dir: Path | None = None,
     replaceable: Collection[str] | None = None,
+    shared_replacements_dir: Path | None = None,
 ) -> str:
     """The search family's prompt with `window` in the window slot, for a caller with no run of its own.
 
-    A fragment file in `replacements_dir` is used in place of the live one, so a proposed change
-    can be checked before it is accepted; an error about it names the file the user must fix.
-    Only the fragments in `replaceable` (default: all) are looked for there."""
+    A fragment file in `replacements_dir` is used in place of the family's own live file, and one in
+    `shared_replacements_dir` in place of `shared/`'s, so a proposed change can be checked before it
+    is accepted; an error about it names the file the user must fix.
+    Only the fragments in `replaceable` (default: all) are looked for in either."""
     require_search_family(family)
     slots = {
         "SEARCH_WINDOW": Slot(window, "the search window"),
@@ -103,13 +112,14 @@ def assemble_search_prompt_for(
         ),
     }
     for name, (filename, _) in FRAGMENTS.items():
-        replacement = (
-            replacements_dir / filename
-            if replacements_dir is not None
+        replacements = [
+            directory / filename
+            if directory is not None
             and (replaceable is None or filename in replaceable)
             else None
-        )
-        slots[name] = _fragment_slot(family, name, filename, replacement)
+            for directory in (replacements_dir, shared_replacements_dir)
+        ]
+        slots[name] = _fragment_slot(family, name, filename, *replacements)
     skills = resume_skills()
     slots["RESUME_SKILLS"] = Slot(
         skills.read_text(encoding="utf-8") if skills else None,

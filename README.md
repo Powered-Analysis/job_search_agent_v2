@@ -84,6 +84,24 @@ it, and `jsa review`'s search health line reports the latest search of each fami
 `profile.example/` has two families, `analytics` (with title seeds) and `charter` (without), that
 share three fragments.
 
+**Refining.** One `jsa refine` run learns from every decision for every search family, so a lesson
+about you (no K-12, no heavy travel) reaches every search, and a lesson about what one search is for
+stays in that search. Each decision is labeled with the search families that found it (`none` for a
+posting you added by hand, `unrecorded` for one found before search families existed). The refiner
+sees every family's assembled prompt, with the file each fragment came from, and may edit
+`target_roles.md`, `filters.md`, `positive_signals.md`, `negative_signals.md`, and
+`hard_exclusions.md` in `shared/` and in each family's folder. It may also create one in a family's
+folder, which then replaces `shared/`'s for that family alone. It never touches `candidate.md`,
+`search.toml`, or anything else. The proposal in `profile/refine/` mirrors those paths:
+`rationale.md`, and for each file the refiner changed or created, a copy at its relative path
+(`profile/refine/shared/filters.md`, `profile/refine/<family>/negative_signals.md`) in which each
+change is a conflict block (`<<<<<<< current`, `=======`, `>>>>>>> proposed`). A created file is one
+block with an empty current side. Resolve the markers in your editor, keeping the side you want, then
+run `jsa refine --accept`. It refuses while a marker is left, when any family's prompt would no longer
+assemble, when a file it was built from changed after the run, when a file it creates now exists, and
+when a family folder was added or removed; reject the proposal and run `jsa refine` again. An accepted
+change reaches the cloud with the next `jsa deploy`.
+
 No prompt in `src/` needs an edit. If one seems to, a profile slot is missing.
 
 **Skills list.** `profile/resume_skills.md` lists the skills you have, either one per line or
@@ -285,7 +303,7 @@ copying the tracker with `gws`; then `uv run jsa deploy`.
 | `jsa generate` | build each Apply posting's packet with a resume redline, then track it |
 | `jsa packet`, `jsa track` | the two halves of `generate`, on their own |
 | `jsa refetch` | update stored postings, tracker titles, and packets from the employer's edits |
-| `jsa refine` | exits with a message: refine across search families isn't built yet |
+| `jsa refine` | learn from your decisions across every search family and write one proposal; `--dry-run` previews the decisions in scope, `--accept` applies the resolved proposal, `--reject` discards it |
 | `jsa search --search-family <name> --agent <agent> --window-hours <n>` | run one search by hand |
 
 **Role families.** After you press `a` in `jsa review`, a list shows every role family in your
