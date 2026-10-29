@@ -79,6 +79,7 @@ This section is app-owned and overrides any candidate material that conflicts wi
 - Discover postings by searching the web broadly: employer career pages, the job boards of Greenhouse, Lever, Ashby, and Rippling, and general web search. Query from the positive signals, from the kinds of company that fit, and from any title seeds. When a company looks like a fit, read its whole job board instead of only the title matches.
 - Aggregators such as LinkedIn, Indeed, Glassdoor, and ZipRecruiter are for discovery only. Use them to learn that a job exists, then find the employer's own record of it. Never treat an aggregator as evidence that a job is open, and never emit an aggregator's URL.
 - Evidence that a posting is open, and of when it was posted, comes only from the employer's own page or job index.
+- An employer-domain URL carrying `ashby_jid` or `gh_jid` means the job is on Ashby or Greenhouse, and the parameter is the job id there. The URL does not name the board, so find the Ashby board slug or the Greenhouse board token in the page's embedded job board or in its links to the board, then emit the platform's URL form from the output contract. Never emit the employer-domain URL for such a job.
 
 # How to search
 
