@@ -6,7 +6,7 @@ import tomllib
 from collections.abc import Collection
 from datetime import date, time
 from pathlib import Path
-from typing import Annotated, Literal, NamedTuple, Protocol
+from typing import Annotated, Literal, NamedTuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -368,11 +368,6 @@ def packet_sources() -> PacketSources:
     return PacketSources(families, resume_skills())
 
 
-class HasRoleFamily(Protocol):
-    id: int
-    role_family: str | None
-
-
 def unassigned_reason(
     posting_id: int, role_family: str | None, known: Collection[str]
 ) -> str | None:
@@ -385,19 +380,6 @@ def unassigned_reason(
         else f"role family {role_family!r} is not in the profile"
     )
     return f"{problem}; `jsa revise --id {posting_id}` gives it one"
-
-
-def with_role_family[Row: HasRoleFamily](
-    rows: list[Row], known: Collection[str]
-) -> list[Row]:
-    """The rows whose role family the profile has; each other row is flagged and dropped, so it stays queued (PRD 04)."""
-    kept = []
-    for row in rows:
-        if reason := unassigned_reason(row.id, row.role_family, known):
-            print(f"flagged: posting {row.id}: {reason}")
-        else:
-            kept.append(row)
-    return kept
 
 
 def _agent_settings[T: ModelSettings](settings: T | None, name: str) -> T:

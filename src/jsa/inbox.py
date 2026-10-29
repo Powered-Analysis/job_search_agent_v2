@@ -32,9 +32,8 @@ from jsa.profile import (
     role_family_names,
     role_family_tag,
     tracker_spreadsheet_id,
-    with_role_family,
 )
-from jsa.tracker import today
+from jsa.tracker import flag_unassigned, today
 
 log = logging.getLogger(__name__)
 
@@ -222,7 +221,7 @@ def _deliver(posting_id: int, *, has_jd: bool) -> str:
     redline = redline_settings(config)
     sources = packet_sources()
     # PRD 04: flagged like in any command; the posting stays an untracked Apply row for `jsa revise` and `jsa generate`.
-    if not with_role_family([job], sources.role_families):
+    if not flag_unassigned([job], sources.role_families):
         return FAILED
     with tempfile.TemporaryDirectory() as scratch:
         built = config.model_copy(update={"packets_dir": Path(scratch)})

@@ -1,9 +1,9 @@
 """The Google Sheet tracker (PRD 04 "Tracker write"): build a row, append it through `gws`."""
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Collection, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 from jsa import db
 from jsa.errors import JsaError
@@ -12,7 +12,7 @@ from jsa.profile import (
     load_search_config,
     role_family_names,
     tracker_spreadsheet_id,
-    with_role_family,
+    unassigned_reason,
 )
 
 _FORMULA_STARTS = ("=", "+", "-", "@")
@@ -155,6 +155,24 @@ def today() -> date:
     return datetime.now(load_search_config().tz).date()
 
 
+class HasRoleFamily(Protocol):
+    id: int
+    role_family: str | None
+
+
+def flag_unassigned[Row: HasRoleFamily](
+    rows: list[Row], known: Collection[str]
+) -> list[Row]:
+    """The rows whose role family the profile has; each other row is flagged and dropped, so it stays queued (PRD 04)."""
+    kept = []
+    for row in rows:
+        if reason := unassigned_reason(row.id, row.role_family, known):
+            print(f"flagged: posting {row.id}: {reason}")
+        else:
+            kept.append(row)
+    return kept
+
+
 def track(posting_id: int | None, *, dry_run: bool) -> None:
     names = role_family_names()
     spreadsheet_id = tracker_spreadsheet_id()
@@ -164,7 +182,7 @@ def track(posting_id: int | None, *, dry_run: bool) -> None:
     if not queue:
         print("No postings awaiting the tracker.")
         return
-    ready = with_role_family(queue, names)
+    ready = flag_unassigned(queue, names)
     failures = []
     for entry in ready:
         pid = entry.id
