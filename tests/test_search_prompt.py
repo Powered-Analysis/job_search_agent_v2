@@ -624,3 +624,27 @@ def test_a_family_with_no_folder_raises_before_assembling(profile):
 def test_shared_is_not_a_search_family(profile):
     with pytest.raises(JsaError):
         assembled(family=SHARED)
+
+
+# --- employer URLs carrying ashby_jid / gh_jid (issue #108) ------------------
+
+
+@pytest.mark.parametrize("param", ["ashby_jid", "gh_jid"])
+def test_the_prompt_names_the_job_id_parameters_of_employer_urls(profile, param):
+    assert param in assembled()
+
+
+@pytest.mark.parametrize("param", ["ashby_jid", "gh_jid"])
+def test_the_prompt_says_to_find_the_board_and_emit_the_ats_url(profile, param):
+    prompt = assembled()
+    start = prompt.index(param)
+    nearby = prompt[max(0, start - 400) : start + 800].lower()
+    assert "employer" in nearby
+    assert "board" in nearby
+    assert "never emit" in nearby or "do not emit" in nearby or "not emit" in nearby
+
+
+def test_the_prompt_still_requires_the_job_boards_greenhouse_form(profile):
+    prompt = assembled()
+    assert "https://job-boards.greenhouse.io/{board token}/jobs/{job id}" in prompt
+    assert "jobUrl" in prompt
