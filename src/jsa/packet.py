@@ -1,5 +1,6 @@
 """Application packet folders (PRD 04): the job description and the user's own resume and cover letter copies."""
 
+import glob
 import shutil
 from pathlib import Path
 from typing import NamedTuple
@@ -54,7 +55,6 @@ class PacketCopy(NamedTuple):
 
     path: Path
     source: Path
-    cover_letter: bool
 
 
 def packet_copies(
@@ -71,11 +71,10 @@ def packet_copies(
             PacketCopy(
                 directory / f"{cover_letter_stem(config, job)}{extension}",
                 family.cover_letter,
-                cover_letter=True,
             )
         )
     # Last, so the resume copy's existence marks the head as complete (see `ensure_head`).
-    copies.append(PacketCopy(resume_copy, family.resume, cover_letter=False))
+    copies.append(PacketCopy(resume_copy, family.resume))
     return copies
 
 
@@ -114,7 +113,7 @@ def holds_title_placeholder(family: RoleFamily) -> bool:
 
 
 def ensure_head(
-    directory: Path,
+    config: Config,
     job: db.PacketJob,
     copies: list[PacketCopy],
     *,
@@ -122,14 +121,15 @@ def ensure_head(
 ) -> None:
     """Complete the folder, the job description, and the resume and cover letter copies, with their placeholders filled.
 
-    A `.docx` cover letter copy also gets its PDF. The copies, their PDFs, and a hand-filled job
-    description are never replaced. The row's description replaces an existing `job_posting.md`
+    A `.docx` cover letter copy also gets its PDF, whichever role family the copy came from. The
+    copies, their PDFs, and a hand-filled job description are never replaced. The row's description replaces an existing `job_posting.md`
     only when `refresh_posting` is set.
 
     The copies are made only while the resume copy (made last) is missing, so a run that died
     part-way through a new head completes it, and a posting whose role family changed after its
     head was built gets nothing from the new role family (PRD 04, Edge cases).
     """
+    directory = packet_paths(config, job)[0]
     directory.mkdir(parents=True, exist_ok=True)
     posting = directory / JOB_POSTING
     if job.jd_markdown is not None and (refresh_posting or not posting.exists()):
@@ -139,13 +139,10 @@ def ensure_head(
             # A copy is the user's working file, so an existing one is never replaced.
             if not copy.path.exists():
                 _copy_filled(copy.source, copy.path, job)
-    for copy in copies:
-        if (
-            copy.cover_letter
-            and copy.path.exists()
-            and copy.path.suffix.lower() == ".docx"
-        ):
-            ensure_pdf(copy.path)
+    # Not looked up in `copies`: a head built for an earlier role family may hold a cover letter this one lacks.
+    for path in directory.glob(f"{glob.escape(cover_letter_stem(config, job))}.*"):
+        if path.suffix.lower() == ".docx":
+            ensure_pdf(path)
 
 
 def build_packets(posting_id: int | None, *, dry_run: bool) -> None:
@@ -167,4 +164,4 @@ def build_packets(posting_id: int | None, *, dry_run: bool) -> None:
             for copy in copies:
                 print(f"  {copy.path.name} from {copy.source}")
         else:
-            ensure_head(directory, job, copies)
+            ensure_head(config, job, copies)
