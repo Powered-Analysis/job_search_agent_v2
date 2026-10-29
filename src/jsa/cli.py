@@ -25,6 +25,7 @@ from jsa.inbox import inbox
 from jsa.packet import build_packets
 from jsa.profile import role_family_names
 from jsa.refetch import refetch
+from jsa.refine import accept, refine, reject
 from jsa.review import ask_role_family, review, revise
 from jsa.search import RUNNERS, Summary, search
 from jsa.tracker import track
@@ -159,7 +160,12 @@ def _track(args: argparse.Namespace) -> None:
 
 
 def _refine(args: argparse.Namespace) -> None:
-    raise JsaError("refine across search families isn't built yet")
+    if args.accept:
+        accept()
+    elif args.reject:
+        reject()
+    else:
+        refine(dry_run=args.dry_run)
 
 
 def _refetch(args: argparse.Namespace) -> None:

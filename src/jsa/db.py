@@ -681,6 +681,9 @@ class DecidedPosting(NamedTuple):
     date_posted: str | None
     jd_markdown: str | None
     decided_at: str
+    # The search families whose findings name the posting; None stands for a finding recorded
+    # before search families existed. Empty for a hand-added posting no search found.
+    found_by: tuple[str | None, ...]
 
 
 def refinement_cutoff(conn: Connection) -> str | None:
@@ -689,17 +692,28 @@ def refinement_cutoff(conn: Connection) -> str | None:
 
 
 def decided_postings(conn: Connection) -> list[DecidedPosting]:
-    """Every decided posting in refinement in full, oldest decision first."""
+    """Every decided posting in refinement in full, oldest decision first (PRD 02, Refinement scope)."""
     rows = conn.execute(
         """
-        SELECT id, company, title, decision, fit_feedback, search_agent, url, location,
-            date_posted, jd_markdown, decided_at
-        FROM postings
-        WHERE decision IS NOT NULL AND in_refinement = 1
-        ORDER BY decided_at, id
+        SELECT p.id, p.company, p.title, p.decision, p.fit_feedback, p.search_agent, p.url,
+            p.location, p.date_posted, p.jd_markdown, p.decided_at,
+            f.canonical_url IS NOT NULL, f.search_family
+        FROM postings p
+        LEFT JOIN (SELECT DISTINCT canonical_url, search_family FROM search_findings) f
+            ON f.canonical_url = p.canonical_url
+        WHERE p.decision IS NOT NULL AND p.in_refinement = 1
+        ORDER BY p.decided_at, p.id, f.search_family
         """
     ).fetchall()
-    return [DecidedPosting(*row) for row in rows]
+    postings: dict[int, tuple[tuple, list[str | None]]] = {}
+    for *posting, found, family in rows:
+        _, found_by = postings.setdefault(posting[0], (tuple(posting), []))
+        if found:
+            found_by.append(family)
+    return [
+        DecidedPosting(*posting, tuple(found_by))
+        for posting, found_by in postings.values()
+    ]
 
 
 def excluded_decided_count(conn: Connection, cutoff: str | None) -> int:
