@@ -82,7 +82,7 @@ exist, or `shared`, is an error when the file loads. Search families have nothin
 families: any search finds postings for any role family. Each finding records the family that made
 it, and `jsa review`'s search health line reports the latest search of each family and agent pair.
 `profile.example/` has two families, `analytics` (with title seeds) and `charter` (without), that
-share four fragments.
+share three fragments.
 
 **Refining.** One `jsa refine` run learns from every decision for every search family, so a lesson
 about you (no K-12, no heavy travel) reaches every search, and a lesson about what one search is for
