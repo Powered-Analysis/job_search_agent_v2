@@ -306,7 +306,7 @@ def test_the_search_template_has_a_marker_for_every_slot_in_the_prd_table():
         "NEGATIVE_SIGNALS",
         "HARD_EXCLUSIONS",
         "RESULTS_PER_RUN",
-        "RESUME_SKILLS",
+        "SKILLS",
     ):
         assert "{{" + slot + "}}" in template, slot
 
@@ -323,7 +323,7 @@ def test_the_search_template_has_no_marker_beyond_the_prd_table():
         "NEGATIVE_SIGNALS",
         "HARD_EXCLUSIONS",
         "RESULTS_PER_RUN",
-        "RESUME_SKILLS",
+        "SKILLS",
     }
 
 
@@ -490,17 +490,21 @@ def image_profile(profile):
     return profile
 
 
-def test_a_profile_holding_only_search_and_the_skills_list_puts_the_list_under_skills(
+def test_a_profile_holding_only_search_and_the_redlines_list_puts_the_searchs_skills_under_skills(
     image_profile,
 ):
+    write_fragment(
+        image_profile, "skills", "UNIQUE-SKILL-ALPHA\nUNIQUE-SKILL-BETA\n", SHARED
+    )
     (image_profile / "resume_skills.md").write_text(
-        "UNIQUE-SKILL-ALPHA\nUNIQUE-SKILL-BETA\n", encoding="utf-8"
+        "UNIQUE-REDLINE-SKILL\n", encoding="utf-8"
     )
     assert {p.name for p in image_profile.iterdir()} == {"search", "resume_skills.md"}
     prompt = assembled()
     section = skills_section(prompt)
     assert "UNIQUE-SKILL-ALPHA\nUNIQUE-SKILL-BETA" in section
     assert OPTIONAL_PLACEHOLDER not in section
+    assert "UNIQUE-REDLINE-SKILL" not in prompt
     assert "{{" not in prompt
 
 
@@ -515,11 +519,23 @@ def test_the_image_layout_prompt_is_the_one_a_local_run_sends(profile):
     assert assembled() == local
 
 
-def test_without_the_skills_list_the_skills_section_gets_the_placeholder_note(
+def test_without_a_skills_fragment_the_skills_section_gets_the_placeholder_note(
     image_profile,
 ):
-    (image_profile / "resume_skills.md").unlink()
-    assert OPTIONAL_PLACEHOLDER in skills_section(assembled())
+    remove_fragment(image_profile, "skills")
+    prompt = assembled()
+    assert OPTIONAL_PLACEHOLDER in skills_section(prompt)
+    assert "{{" not in prompt
+
+
+def test_the_redlines_list_alone_does_not_fill_the_skills_section(image_profile):
+    remove_fragment(image_profile, "skills")
+    (image_profile / "resume_skills.md").write_text(
+        "UNIQUE-REDLINE-SKILL\n", encoding="utf-8"
+    )
+    prompt = assembled()
+    assert OPTIONAL_PLACEHOLDER in skills_section(prompt)
+    assert "UNIQUE-REDLINE-SKILL" not in prompt
 
 
 # --- search families (issue #199; PRD 01 "Search families") -------------------
@@ -609,10 +625,38 @@ def test_a_profile_with_no_shared_folder_assembles_from_the_familys_own_fragment
         assert f"UNIQUE-{name.upper()}-TEXT about something specific." in prompt, name
 
 
-def test_the_skills_list_comes_from_the_profile_root_for_every_family(profile):
-    (profile / "resume_skills.md").write_text("UNIQUE-SKILL-GAMMA\n", encoding="utf-8")
+def test_a_shared_skills_fragment_fills_the_skills_section_of_every_family(profile):
+    for family in (FAMILY, OTHER_FAMILY):
+        remove_fragment(profile, "skills", family)
+    write_fragment(profile, "skills", "UNIQUE-SKILL-GAMMA\n", SHARED)
     for family in (FAMILY, OTHER_FAMILY):
         assert "UNIQUE-SKILL-GAMMA" in skills_section(assembled(family=family))
+
+
+def test_a_familys_own_skills_beat_the_shared_ones_and_an_empty_own_file_turns_them_off(
+    profile,
+):
+    write_fragment(profile, "skills", "SHARED-SKILLS-TEXT", SHARED)
+    write_fragment(profile, "skills", "OWN-SKILLS-TEXT")
+    section = skills_section(assembled())
+    assert "OWN-SKILLS-TEXT" in section
+    assert "SHARED-SKILLS-TEXT" not in section
+    write_fragment(profile, "skills", "")
+    section = skills_section(assembled())
+    assert "SHARED-SKILLS-TEXT" not in section
+    assert OPTIONAL_PLACEHOLDER in section
+
+
+def test_changing_or_removing_the_redlines_skills_list_changes_no_search_prompt(
+    profile,
+):
+    before = {f: assembled(family=f) for f in (FAMILY, OTHER_FAMILY)}
+    skills_file = profile / "resume_skills.md"
+    skills_file.write_text("UNIQUE-REDLINE-SKILL\n", encoding="utf-8")
+    changed = {f: assembled(family=f) for f in (FAMILY, OTHER_FAMILY)}
+    skills_file.unlink()
+    removed = {f: assembled(family=f) for f in (FAMILY, OTHER_FAMILY)}
+    assert changed == before == removed
 
 
 def test_a_family_with_no_folder_raises_before_assembling(profile):
