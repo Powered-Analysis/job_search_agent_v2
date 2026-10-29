@@ -690,3 +690,41 @@ def test_the_prompt_still_requires_the_job_boards_greenhouse_form(profile):
     prompt = assembled()
     assert "https://job-boards.greenhouse.io/{board token}/jobs/{job id}" in prompt
     assert "jobUrl" in prompt
+
+
+# --- which URL counts as "the employer's own" (issue #227) -------------------
+
+
+def dedup_line(prompt):
+    lines = [line for line in prompt.splitlines() if "several URLs" in line]
+    assert len(lines) == 1
+    return lines[0]
+
+
+@pytest.mark.parametrize("mode", ["strict", "best_effort"])
+def test_the_dedup_line_says_the_platform_url_is_the_employers_own_record(
+    profile, mode
+):
+    set_mode(profile, mode)
+    line = dedup_line(assembled())
+    assert "emit only the employer's own record" in line
+    assert "four" in line
+    assert "platform URL" in line
+
+
+@pytest.mark.parametrize("mode", ["strict", "best_effort"])
+def test_the_dedup_line_does_not_leave_the_employers_own_unqualified(profile, mode):
+    set_mode(profile, mode)
+    line = dedup_line(assembled())
+    assert not re.search(r"employer's own\s*\.", line)
+
+
+def test_the_dedup_line_asks_for_each_job_once(profile):
+    assert "Emit each job once" in dedup_line(assembled())
+
+
+def test_the_dedup_line_does_not_prefer_an_employer_domain_url(profile):
+    line = dedup_line(assembled()).lower()
+    assert "employer domain" not in line
+    assert "employer's domain" not in line
+    assert "employer's site" not in line
