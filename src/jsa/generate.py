@@ -88,7 +88,7 @@ def build_packet(
     directory, copy = packet_paths(config, job)
     # PRD 04: `--id` (rewrite) refreshes `job_posting.md` from the row, as refetch relies on.
     ensure_head(
-        directory, job, packet_copies(config, job, sources), refresh_posting=rewrite
+        config, job, packet_copies(config, job, sources), refresh_posting=rewrite
     )
     edits_file = directory / REDLINE_EDITS
     # PRD 04: the copy may hold changes the user is reviewing, so no refresh reruns a finished redline.
