@@ -30,8 +30,10 @@ RATIONALE = "rationale.md"
 # What the proposal was built from, for `--accept` to compare (PRD 05): the search families, the hash
 # of each live fragment, and the paths the proposal creates.
 BUILT_FROM = ".built_from.json"
-# Facts about the person are not learnable from decisions, so the candidate fragment is out.
-REFINABLE = [name for slot, (name, _) in FRAGMENTS.items() if slot != "CANDIDATE"]
+# Facts about the person are not learnable from decisions, so the candidate and skills fragments are out.
+REFINABLE = [
+    name for slot, (name, _) in FRAGMENTS.items() if slot not in ("CANDIDATE", "SKILLS")
+]
 # Neither tool reaches outside the scratch directory, and the ground truth is untrusted text.
 TOOLS = ["Read", "Edit"]
 MAX_TURNS = 80

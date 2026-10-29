@@ -280,7 +280,7 @@ def _launch(
 
 
 def _stage_build_context(stage: Path) -> None:
-    """Lay out the project with the validated search profile and skills list under ./profile, wherever they live (XC-13)."""
+    """Lay out the project with the validated search profile and the redline's skills list under ./profile, wherever they live (XC-13)."""
     for name in BUILD_INPUTS:
         source = Path(name)
         if source.is_dir():
