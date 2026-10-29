@@ -220,8 +220,12 @@ nothing else. It lives in its own Fly app, so the search machine never holds a G
    posting, or of an existing Apply posting that has none; email never changes a role family a
    posting already has. With no matching tag, a profile with one role family uses it. With more, the
    posting is added as Apply with no role family and the message is labeled `jsa/needs-family`;
-   `jsa revise --id <id>` gives it one. A role family with no description in the posting or the
-   email is labeled `jsa/needs-jd` instead; a message missing both gets `jsa/needs-family`.
+   `jsa revise --id <id>` gives it one. A posting with a role family but no description in the
+   posting or the email is labeled `jsa/needs-jd` instead; a message missing both gets
+   `jsa/needs-family`. Every message is labeled with its outcome and archived: `jsa/tracked` when
+   its packet and tracker row are done, `jsa/ignored` from a sender not in `senders` or failing DMARC, `jsa/refused`
+   with no usable employer link, `jsa/needs-fields` when the company or title can't be derived, and
+   `jsa/failed` for anything else.
 
 ### 8. Deploy
 
@@ -243,7 +247,8 @@ With `[inbox]` set, `jsa deploy` also creates or updates the inbox app's one hou
 same organization). Every deploy sets that machine's `config.toml`, and each role family's `resume.docx` and cover letter as machine
 files; they are never in the image or the build context. The inbox machine reads the skills list from the image. So run `jsa deploy` again after you change
 a role family, the skills list, or `config.toml`. Before building, it checks that the profile has everything the inbox
-needs and that the inbox app holds each secret from step 7; it never sets a secret. `--smoke` leaves
+needs and that the inbox app holds each secret from step 7, and stops when it holds both Claude
+credentials; it never sets a secret. `--smoke` leaves
 both scheduled machines alone.
 
 `jsa deploy` checks the search profile exactly as the cloud will before building anything, and ships
