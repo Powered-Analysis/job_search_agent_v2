@@ -218,7 +218,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Unresolved tracked changes in the resume copy:** the redline is skipped for that row, with a warning, and the row continues to its tracker append. The copy's paragraph text is ambiguous until the user accepts or rejects those changes, and that is the user's state to fix, not a failure.
 - **Text in scope:** the body paragraphs. Text in tables, headers, footers, and text boxes isn't redlined, so a headline or summary kept there is out of reach.
 - **Skills section (Priority: P1):** the one place the redline may change what the resume lists, not only how it words it.
-  - **The skills list:** `profile/resume_skills.md`, optional (`XC-11`), holds the skills the user has. The search prompt reads it too (PRD 01). Items are separated by line breaks, by commas, or by both in one file:
+  - **The skills list:** `profile/resume_skills.md`, optional (`XC-11`), holds the skills the user has. Only the redline reads it; the search has its own `skills.md` fragment (PRD 01). Items are separated by line breaks, by commas, or by both in one file:
 
     ```
     Python
