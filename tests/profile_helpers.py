@@ -1,5 +1,6 @@
 """Shared builders for profile tests: a minimal valid profile written to a temp directory."""
 
+import re
 import shutil
 from pathlib import Path
 
@@ -15,16 +16,20 @@ FRAGMENTS = (
     "hard_exclusions",
 )
 
+FAMILY = "analytics"
+OTHER_FAMILY = "charter"
+SHARED = "shared"
+
 SEARCH_TOML = """\
 timezone = "America/New_York"
 run_at = "07:00"
 results_per_run = 10
 
 [schedule]
-monday = [{ agent = "perplexity", window_hours = 72 }]
+monday = [{ search_family = "analytics", agent = "perplexity", window_hours = 72 }]
 tuesday = [
-  { agent = "claude", window_hours = 24 },
-  { agent = "gemini", window_hours = 48 },
+  { search_family = "analytics", agent = "claude", window_hours = 24 },
+  { search_family = "charter", agent = "gemini", window_hours = 48 },
 ]
 
 [runners.claude]
@@ -53,9 +58,16 @@ effort = "high"
 """
 
 
-def write_search_toml(profile: Path, text: str = SEARCH_TOML) -> None:
+def write_search_toml(
+    profile: Path, text: str = SEARCH_TOML, folders: bool = True
+) -> None:
+    """Write `search.toml`; unless `folders` is false, also make a folder for each family it schedules."""
     (profile / "search").mkdir(parents=True, exist_ok=True)
     (profile / "search" / "search.toml").write_text(text, encoding="utf-8")
+    if folders:
+        for family in re.findall(r'search_family = "([^"]+)"', text):
+            if family != SHARED:
+                (profile / "search" / family).mkdir(exist_ok=True)
 
 
 def write_config_toml(profile: Path, text: str = CONFIG_TOML) -> None:
@@ -63,9 +75,28 @@ def write_config_toml(profile: Path, text: str = CONFIG_TOML) -> None:
     (profile / "config.toml").write_text(text, encoding="utf-8")
 
 
-def write_fragment(profile: Path, name: str, text: str) -> None:
-    (profile / "search").mkdir(parents=True, exist_ok=True)
-    (profile / "search" / f"{name}.md").write_text(text, encoding="utf-8")
+def fragment_file(profile: Path, name: str, family: str = FAMILY) -> Path:
+    """Where a search family's fragment lives (PRD 01 "Search families"); `family="shared"` for `shared/`."""
+    return profile / "search" / family / f"{name}.md"
+
+
+def write_fragment(profile: Path, name: str, text: str, family: str = FAMILY) -> None:
+    path = fragment_file(profile, name, family)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def remove_fragment(profile: Path, name: str, family: str = FAMILY) -> None:
+    """Make a fragment missing for `family`: delete its own file and the `shared/` one."""
+    fragment_file(profile, name, family).unlink(missing_ok=True)
+    fragment_file(profile, name, SHARED).unlink(missing_ok=True)
+
+
+def example_fragment(name: str, family: str = FAMILY) -> str:
+    """The example profile's text for a family's fragment: its own file, else `shared/`'s."""
+    own = fragment_file(EXAMPLE_DIR, name, family)
+    path = own if own.is_file() else fragment_file(EXAMPLE_DIR, name, SHARED)
+    return path.read_text(encoding="utf-8")
 
 
 def copy_example(destination: Path) -> Path:
@@ -117,11 +148,20 @@ _RUNNERS_AND_VERIFICATION = (
 )
 
 
-def schedule_toml(timezone: str, run_at: str, days: dict[str, list[tuple[str, int]]]):
-    """A `search.toml` whose `[schedule]` maps each named weekday to ordered (agent, window_hours)."""
+def schedule_toml(
+    timezone: str,
+    run_at: str,
+    days: dict[str, list[tuple[str, int] | tuple[str, int, str]]],
+):
+    """A `search.toml` whose `[schedule]` maps each named weekday to ordered searches.
+
+    A search is `(agent, window_hours)` for the `analytics` family or `(agent, window_hours, family)`."""
     schedule = "\n".join(
         f"{day} = ["
-        + ", ".join(f'{{ agent = "{a}", window_hours = {w} }}' for a, w in searches)
+        + ", ".join(
+            f'{{ search_family = "{(rest or (FAMILY,))[0]}", agent = "{agent}", window_hours = {window} }}'
+            for agent, window, *rest in searches
+        )
         + "]"
         for day, searches in days.items()
     )

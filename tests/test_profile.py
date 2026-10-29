@@ -17,12 +17,18 @@ from profile_helpers import (
     ROLE_FAMILIES,
     SEARCH_TOML,
     copy_example,
+    example_fragment,
     write_config_toml,
     write_search_toml,
 )
 
 from jsa.errors import JsaError
-from jsa.profile import load_config, load_search_config, profile_dir
+from jsa.profile import (
+    load_config,
+    load_search_config,
+    profile_dir,
+    search_families,
+)
 from jsa.redline import parse_skills
 from jsa.redline_docx import skills_section
 
@@ -57,10 +63,31 @@ def config_with(profile, replacements: dict[str, str]):
 def test_the_example_profile_has_both_toml_files_and_the_six_fragments():
     assert (EXAMPLE_DIR / "config.toml").is_file()
     assert (EXAMPLE_DIR / "search" / "search.toml").is_file()
-    for name in FRAGMENTS:
-        fragment = EXAMPLE_DIR / "search" / f"{name}.md"
-        assert fragment.is_file(), name
-        assert fragment.read_text(encoding="utf-8").strip(), name
+    for family in ("analytics", "charter"):
+        for name in FRAGMENTS:
+            assert example_fragment(name, family).strip(), (family, name)
+
+
+def test_the_example_profile_has_two_search_families_and_a_shared_folder():
+    folders = {p.name for p in (EXAMPLE_DIR / "search").iterdir() if p.is_dir()}
+    assert folders == {"analytics", "charter", "shared"}
+
+
+def test_the_example_profile_shares_three_fragments_between_its_families():
+    shared = {p.stem for p in (EXAMPLE_DIR / "search" / "shared").glob("*.md")}
+    assert len(shared) == 3
+    for family in ("analytics", "charter"):
+        own = {p.stem for p in (EXAMPLE_DIR / "search" / family).glob("*.md")}
+        assert own | shared == set(FRAGMENTS)
+        assert not own & shared
+
+
+def test_the_example_schedule_names_a_family_in_every_entry_and_uses_both():
+    schedule = tomllib.loads(
+        (EXAMPLE_DIR / "search" / "search.toml").read_text(encoding="utf-8")
+    )["schedule"]
+    entries = [entry for day in schedule.values() for entry in day]
+    assert {entry["search_family"] for entry in entries} == {"analytics", "charter"}
 
 
 def test_a_copy_of_the_example_profile_loads_without_error(tmp_path, monkeypatch):
@@ -232,13 +259,12 @@ def test_a_valid_search_profile_loads_typed_values(profile):
 def test_each_weekday_keeps_its_searches_in_order(profile):
     write_search_toml(profile)
     search = load_search_config()
-    assert [(s.agent, s.window_hours) for s in search.schedule.tuesday] == [
-        ("claude", 24),
-        ("gemini", 48),
-    ]
-    assert [(s.agent, s.window_hours) for s in search.schedule.monday] == [
-        ("perplexity", 72)
-    ]
+    assert [
+        (s.search_family, s.agent, s.window_hours) for s in search.schedule.tuesday
+    ] == [("analytics", "claude", 24), ("charter", "gemini", 48)]
+    assert [
+        (s.search_family, s.agent, s.window_hours) for s in search.schedule.monday
+    ] == [("analytics", "perplexity", 72)]
 
 
 def test_omitted_weekdays_run_nothing(profile):
@@ -252,9 +278,9 @@ def test_an_empty_schedule_is_valid(profile):
     search_with(
         profile,
         {
-            '[schedule]\nmonday = [{ agent = "perplexity", window_hours = 72 }]\n'
-            'tuesday = [\n  { agent = "claude", window_hours = 24 },\n'
-            '  { agent = "gemini", window_hours = 48 },\n]\n': "[schedule]\n"
+            '[schedule]\nmonday = [{ search_family = "analytics", agent = "perplexity", window_hours = 72 }]\n'
+            'tuesday = [\n  { search_family = "analytics", agent = "claude", window_hours = 24 },\n'
+            '  { search_family = "charter", agent = "gemini", window_hours = 48 },\n]\n': "[schedule]\n"
         },
     )
     assert load_search_config().schedule.monday == []
@@ -264,7 +290,7 @@ def test_a_perplexity_only_schedule_needs_no_runner_entries(profile):
     write_search_toml(
         profile,
         'timezone = "UTC"\nrun_at = "06:30"\nresults_per_run = 10\n'
-        '[schedule]\nmonday = [{ agent = "perplexity", window_hours = 24 }]\n'
+        '[schedule]\nmonday = [{ search_family = "analytics", agent = "perplexity", window_hours = 24 }]\n'
         '[verification]\nmode = "best_effort"\n',
     )
     search = load_search_config()
@@ -350,13 +376,13 @@ def test_packets_dir_can_be_set(profile, tmp_path):
         ),
         pytest.param(
             {
-                "monday = [": "funday = [{ agent = 'claude', window_hours = 1 }]\nmonday = ["
+                "monday = [": "funday = [{ search_family = 'analytics', agent = 'claude', window_hours = 1 }]\nmonday = ["
             },
             id="weekday",
         ),
         pytest.param(
             {
-                '{ agent = "perplexity", window_hours = 72 }': '{ agent = "perplexity", window_hours = 72, extra = 1 }'
+                '{ search_family = "analytics", agent = "perplexity", window_hours = 72 }': '{ search_family = "analytics", agent = "perplexity", window_hours = 72, extra = 1 }'
             },
             id="scheduled-search",
         ),
@@ -451,7 +477,7 @@ def test_a_gemini_only_schedule_needs_no_runners_at_all(profile):
     write_search_toml(
         profile,
         'timezone = "America/New_York"\nrun_at = "07:00"\nresults_per_run = 10\n\n'
-        '[schedule]\nfriday = [{ agent = "gemini", window_hours = 24 }]\n\n'
+        '[schedule]\nfriday = [{ search_family = "charter", agent = "gemini", window_hours = 24 }]\n\n'
         '[verification]\nmode = "strict"\n',
     )
     assert load_search_config().schedule.friday[0].agent == "gemini"
@@ -744,3 +770,70 @@ def test_the_positive_integer_rule_is_spelled_once_in_the_source():
     text = (REPO_ROOT / "src/jsa/profile.py").read_text(encoding="utf-8")
     assert len(re.findall(r"StrictInt, Field\(gt=0\)", text)) == 1
     assert len(re.findall(r"\bStrictInt\b", text)) == 2  # import and alias definition
+
+
+# --- search families (issue #199; PRD 01 "Search families", "Scheduling & cadence") ---
+
+
+def test_the_search_families_are_the_folders_under_search_except_shared(profile):
+    for folder in ("charter", "analytics", "shared", "zeta"):
+        (profile / "search" / folder).mkdir(parents=True)
+    (profile / "search" / "search.toml").write_text("", encoding="utf-8")
+    assert sorted(search_families()) == ["analytics", "charter", "zeta"]
+
+
+def test_a_profile_without_a_search_folder_has_no_search_families(profile):
+    assert list(search_families()) == []
+
+
+def test_a_file_under_search_is_not_a_search_family(profile):
+    (profile / "search").mkdir()
+    (profile / "search" / "notes.md").write_text("x", encoding="utf-8")
+    (profile / "search" / "a").mkdir()
+    assert list(search_families()) == ["a"]
+
+
+def test_a_schedule_entry_without_a_search_family_raises_at_load(profile):
+    search_with(
+        profile,
+        {
+            '{ search_family = "analytics", agent = "perplexity"': '{ agent = "perplexity"'
+        },
+    )
+    with pytest.raises(JsaError, match=r"search\.toml"):
+        load_search_config()
+
+
+def test_a_schedule_entry_naming_a_family_with_no_folder_raises_at_load(profile):
+    write_search_toml(
+        profile,
+        SEARCH_TOML.replace('search_family = "charter"', 'search_family = "ghost"'),
+        folders=False,
+    )
+    (profile / "search" / "analytics").mkdir()
+    with pytest.raises(JsaError, match="ghost"):
+        load_search_config()
+
+
+def test_a_schedule_entry_naming_shared_raises_at_load_even_with_the_folder(profile):
+    (profile / "search" / "shared").mkdir(parents=True)
+    write_search_toml(
+        profile,
+        SEARCH_TOML.replace('search_family = "charter"', 'search_family = "shared"'),
+    )
+    with pytest.raises(JsaError, match="shared"):
+        load_search_config()
+
+
+def test_a_schedule_entry_with_an_empty_family_name_raises_at_load(profile):
+    write_search_toml(
+        profile, SEARCH_TOML.replace('search_family = "charter"', 'search_family = ""')
+    )
+    with pytest.raises(JsaError, match=r"search\.toml"):
+        load_search_config()
+
+
+def test_an_unscheduled_family_folder_is_not_an_error_at_load(profile):
+    write_search_toml(profile)
+    (profile / "search" / "unused").mkdir()
+    assert load_search_config()

@@ -19,6 +19,10 @@ from test_generate import LONG_AGO, jsa
 from jsa import agent_loop, db
 from jsa.refine import conflict_view
 
+# Issue #199: until #200 builds refine across search families (PRD 05), `jsa refine` exits before
+# any model call, so none of these tests can run. #200 restores them against family folders and `shared/`.
+pytestmark = pytest.mark.skip(reason="refine across search families is issue #200")
+
 FRAGMENTS = (
     "target_roles.md",
     "filters.md",

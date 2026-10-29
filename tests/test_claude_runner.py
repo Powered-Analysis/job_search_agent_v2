@@ -413,7 +413,18 @@ def world(db_url, sdk, tmp_path, monkeypatch):
 
 def jsa_search_claude(monkeypatch, capsys, window="24"):
     monkeypatch.setattr(
-        sys, "argv", ["jsa", "search", "--agent", "claude", "--window-hours", window]
+        sys,
+        "argv",
+        [
+            "jsa",
+            "search",
+            "--search-family",
+            "analytics",
+            "--agent",
+            "claude",
+            "--window-hours",
+            window,
+        ],
     )
     code = 0
     try:
@@ -444,12 +455,15 @@ def test_a_claude_search_records_findings_with_the_configured_model_and_effort(
     assert world.sdk.options.model == "claude-sonnet-5-5"
     assert world.sdk.options.effort == "low"
     assert rows(
-        world.url, "SELECT agent, window_hours, model, effort FROM search_findings"
-    ) == [("claude", 48, "claude-sonnet-5-5", "low")]
+        world.url,
+        "SELECT search_family, agent, window_hours, model, effort FROM search_findings",
+    ) == [("analytics", "claude", 48, "claude-sonnet-5-5", "low")]
     assert rows(world.url, "SELECT search_agent FROM postings") == [("claude",)]
     assert rows(
-        world.url, "SELECT agent, window_hours, model, effort, outcome FROM search_runs"
-    ) == [("claude", 48, "claude-sonnet-5-5", "low", "ok")]
+        world.url,
+        "SELECT search_family, agent, window_hours, model, effort, outcome FROM search_runs",
+    ) == [("analytics", "claude", 48, "claude-sonnet-5-5", "low", "ok")]
+    assert "search_family: analytics" in out
     assert "agent: claude" in out
 
 

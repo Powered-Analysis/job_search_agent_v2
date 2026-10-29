@@ -971,7 +971,18 @@ def world(db_url, fake, tmp_path, monkeypatch):
 
 def jsa_search_gemini(monkeypatch, capsys, window="24"):
     monkeypatch.setattr(
-        sys, "argv", ["jsa", "search", "--agent", "gemini", "--window-hours", window]
+        sys,
+        "argv",
+        [
+            "jsa",
+            "search",
+            "--search-family",
+            "charter",
+            "--agent",
+            "gemini",
+            "--window-hours",
+            window,
+        ],
     )
     code = 0
     try:
@@ -1004,12 +1015,15 @@ def test_a_gemini_search_records_findings_with_the_agent_id_as_model_and_null_ef
     code, out, _err = jsa_search_gemini(monkeypatch, capsys, window="48")
     assert code == 0
     assert rows(
-        world.url, "SELECT agent, window_hours, model, effort FROM search_findings"
-    ) == [("gemini", 48, AGENT, None)]
+        world.url,
+        "SELECT search_family, agent, window_hours, model, effort FROM search_findings",
+    ) == [("charter", "gemini", 48, AGENT, None)]
     assert rows(world.url, "SELECT search_agent FROM postings") == [("gemini",)]
     assert rows(
-        world.url, "SELECT agent, window_hours, model, effort, outcome FROM search_runs"
-    ) == [("gemini", 48, AGENT, None, "ok")]
+        world.url,
+        "SELECT search_family, agent, window_hours, model, effort, outcome FROM search_runs",
+    ) == [("charter", "gemini", 48, AGENT, None, "ok")]
+    assert "search_family: charter" in out
     assert "agent: gemini" in out
 
 

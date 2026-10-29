@@ -140,7 +140,14 @@ def test_a_search_run_keeps_its_trace_and_summary_but_not_httpx_lines(
     web.posted(entry(web.job()))
     caplog.set_level(logging.INFO)
     code = run_main(
-        monkeypatch, "search", "--agent", "perplexity", "--window-hours", "24"
+        monkeypatch,
+        "search",
+        "--search-family",
+        "analytics",
+        "--agent",
+        "perplexity",
+        "--window-hours",
+        "24",
     )
     out = capsys.readouterr()
     assert code == 0
@@ -148,4 +155,5 @@ def test_a_search_run_keeps_its_trace_and_summary_but_not_httpx_lines(
     assert [r for r in caplog.records if r.name.startswith("jsa")]
     assert not [r for r in caplog.records if r.name.startswith("httpx")]
     assert HTTPX_LINE not in caplog.text + out.out + out.err
+    assert summary_of(out.out)["search_family"] == "analytics"
     assert summary_of(out.out)["agent"] == "perplexity"

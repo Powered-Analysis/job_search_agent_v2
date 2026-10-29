@@ -463,7 +463,7 @@ def profile(tmp_path, monkeypatch):
 
 
 def prompt_text():
-    return assemble_search_prompt(load_search_config(), 24, NOW)
+    return assemble_search_prompt(load_search_config(), "analytics", 24, NOW)
 
 
 def test_the_assembled_prompt_states_the_60_day_age_ceiling(profile):

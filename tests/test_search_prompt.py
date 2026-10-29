@@ -6,10 +6,15 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from profile_helpers import (
-    EXAMPLE_DIR,
+    FAMILY,
     FRAGMENTS,
+    OTHER_FAMILY,
     SEARCH_TOML,
+    SHARED,
     copy_example,
+    example_fragment,
+    fragment_file,
+    remove_fragment,
     write_fragment,
     write_search_toml,
 )
@@ -50,8 +55,8 @@ def set_mode(profile, mode):
     path.write_text(text, encoding="utf-8")
 
 
-def assembled(hours=24, now=NOW):
-    return assemble_search_prompt(load_search_config(), hours, now)
+def assembled(hours=24, now=NOW, family=FAMILY):
+    return assemble_search_prompt(load_search_config(), family, hours, now)
 
 
 # --- the assembled prompt ---------------------------------------------------
@@ -72,10 +77,15 @@ def test_the_assembled_prompt_contains_each_fragments_text(profile):
 def test_the_example_profiles_own_fragments_appear_in_the_prompt(profile):
     prompt = assembled()
     for name in FRAGMENTS:
-        text = (
-            (EXAMPLE_DIR / "search" / f"{name}.md").read_text(encoding="utf-8").strip()
-        )
-        assert text in prompt, name
+        assert example_fragment(name).strip() in prompt, name
+
+
+def test_each_example_families_prompt_holds_its_own_fragments(profile):
+    for family in (FAMILY, OTHER_FAMILY):
+        prompt = assembled(family=family)
+        for name in FRAGMENTS:
+            assert example_fragment(name, family).strip() in prompt, (family, name)
+    assert assembled(family=FAMILY) != assembled(family=OTHER_FAMILY)
 
 
 def test_the_strict_prompt_carries_the_strict_liveness_rules_and_not_the_other(profile):
@@ -120,11 +130,12 @@ def test_fragment_text_is_not_trimmed_into_the_wrong_slot(profile):
 def test_a_missing_required_fragment_raises_naming_the_file_and_the_example(
     profile, name
 ):
-    (profile / "search" / f"{name}.md").unlink()
+    remove_fragment(profile, name)
     with pytest.raises(JsaError) as raised:
         assembled()
     message = str(raised.value)
-    assert f"{name}.md" in message
+    assert str(fragment_file(profile, name)) in message
+    assert str(fragment_file(profile, name, SHARED)) in message
     assert "profile.example/search" in message
 
 
@@ -134,6 +145,7 @@ def test_an_empty_required_fragment_raises_naming_the_file_and_the_example(
     profile, name, content
 ):
     write_fragment(profile, name, content)
+    write_fragment(profile, name, content, SHARED)
     with pytest.raises(JsaError) as raised:
         assembled()
     message = str(raised.value)
@@ -144,7 +156,7 @@ def test_an_empty_required_fragment_raises_naming_the_file_and_the_example(
 @pytest.mark.parametrize("name", OPTIONAL)
 def test_a_missing_optional_fragment_fills_its_slot_with_the_placeholder(profile, name):
     marked(profile)
-    (profile / "search" / f"{name}.md").unlink()
+    remove_fragment(profile, name)
     prompt = assembled()
     assert OPTIONAL_PLACEHOLDER in prompt
     assert "{{" not in prompt
@@ -165,7 +177,7 @@ def test_with_every_optional_fragment_present_no_placeholder_appears(profile):
 def test_with_all_optional_fragments_absent_the_prompt_still_assembles(profile):
     marked(profile)
     for name in OPTIONAL:
-        (profile / "search" / f"{name}.md").unlink()
+        remove_fragment(profile, name)
     prompt = assembled()
     assert prompt.count(OPTIONAL_PLACEHOLDER) >= len(OPTIONAL)
     for name in REQUIRED:
@@ -318,11 +330,12 @@ def test_the_search_template_has_no_marker_beyond_the_prd_table():
 def test_the_search_template_holds_no_candidate_specific_content():
     template = app_template("search.md")
     for name in FRAGMENTS:
-        text = (EXAMPLE_DIR / "search" / f"{name}.md").read_text(encoding="utf-8")
-        for line in text.splitlines():
-            line = line.strip(" -*#\t")
-            if len(line) >= 20:
-                assert line not in template, line
+        for family in (FAMILY, OTHER_FAMILY):
+            text = example_fragment(name, family)
+            for line in text.splitlines():
+                line = line.strip(" -*#\t")
+                if len(line) >= 20:
+                    assert line not in template, line
     assert "Jordan Example" not in template
 
 
@@ -371,7 +384,7 @@ def replacements(tmp_path):
 
 def assembled_with(replacements):
     return assemble_search_prompt_for(
-        load_search_config(), "a test window", replacements
+        load_search_config(), FAMILY, "a test window", replacements
     )
 
 
@@ -398,7 +411,7 @@ def test_a_fragment_absent_from_the_replacements_directory_comes_from_the_live_p
 
 def test_replacing_a_fragment_leaves_the_live_file_untouched(profile, replacements):
     marked(profile)
-    live = profile / "search" / "filters.md"
+    live = fragment_file(profile, "filters")
     before = live.read_bytes()
     (replacements / "filters.md").write_text("REPLACED-FILTERS-TEXT", encoding="utf-8")
     assembled_with(replacements)
@@ -410,14 +423,14 @@ def test_an_empty_replacements_directory_assembles_the_same_prompt_as_none(
 ):
     window = "a test window"
     assert assembled_with(replacements) == assemble_search_prompt_for(
-        load_search_config(), window
+        load_search_config(), FAMILY, window
     )
 
 
 def test_a_replacement_supplies_a_required_fragment_the_live_profile_lacks(
     profile, replacements
 ):
-    (profile / "search" / "filters.md").unlink()
+    remove_fragment(profile, "filters")
     (replacements / "filters.md").write_text("REPLACED-FILTERS-TEXT", encoding="utf-8")
     assert "REPLACED-FILTERS-TEXT" in assembled_with(replacements)
 
@@ -433,7 +446,7 @@ def test_an_empty_replacement_of_a_required_fragment_raises_naming_the_replaceme
         assembled_with(replacements)
     message = str(raised.value)
     assert str(replacements / f"{name}.md") in message
-    assert str(profile / "search" / f"{name}.md") not in message
+    assert str(fragment_file(profile, name)) not in message
 
 
 @pytest.mark.parametrize("name", OPTIONAL)
@@ -451,10 +464,10 @@ def test_an_empty_replacement_of_an_optional_fragment_fills_its_slot_with_the_pl
 def test_a_live_required_fragment_that_is_missing_is_still_named_by_its_live_path(
     profile, replacements, name
 ):
-    (profile / "search" / f"{name}.md").unlink()
+    remove_fragment(profile, name)
     with pytest.raises(JsaError) as raised:
         assembled_with(replacements)
-    assert str(profile / "search" / f"{name}.md") in str(raised.value)
+    assert str(fragment_file(profile, name)) in str(raised.value)
 
 
 # --- the image's layout (issue #198; PRD 06 Fly image) -------------------------
@@ -507,3 +520,107 @@ def test_without_the_skills_list_the_skills_section_gets_the_placeholder_note(
 ):
     (image_profile / "resume_skills.md").unlink()
     assert OPTIONAL_PLACEHOLDER in skills_section(assembled())
+
+
+# --- search families (issue #199; PRD 01 "Search families") -------------------
+
+
+def test_a_familys_own_fragment_beats_the_shared_one(profile):
+    write_fragment(profile, "target_roles", "SHARED-ROLES-TEXT", SHARED)
+    write_fragment(profile, "target_roles", "OWN-ROLES-TEXT")
+    prompt = assembled()
+    assert "OWN-ROLES-TEXT" in prompt
+    assert "SHARED-ROLES-TEXT" not in prompt
+
+
+def test_deleting_the_familys_own_fragment_falls_back_to_the_shared_one(profile):
+    write_fragment(profile, "target_roles", "SHARED-ROLES-TEXT", SHARED)
+    write_fragment(profile, "target_roles", "OWN-ROLES-TEXT")
+    fragment_file(profile, "target_roles").unlink()
+    prompt = assembled()
+    assert "SHARED-ROLES-TEXT" in prompt
+    assert "OWN-ROLES-TEXT" not in prompt
+
+
+def test_a_family_with_no_own_file_uses_the_shared_one_and_another_family_keeps_its_own(
+    profile,
+):
+    write_fragment(profile, "filters", "SHARED-FILTERS-TEXT", SHARED)
+    fragment_file(profile, "filters").unlink(missing_ok=True)
+    write_fragment(profile, "filters", "CHARTER-FILTERS-TEXT", OTHER_FAMILY)
+    assert "SHARED-FILTERS-TEXT" in assembled(family=FAMILY)
+    prompt = assembled(family=OTHER_FAMILY)
+    assert "CHARTER-FILTERS-TEXT" in prompt
+    assert "SHARED-FILTERS-TEXT" not in prompt
+
+
+@pytest.mark.parametrize("name", OPTIONAL)
+def test_an_empty_own_optional_fragment_turns_it_off_even_when_shared_has_text(
+    profile, name
+):
+    write_fragment(profile, name, f"SHARED-{name.upper()}-TEXT", SHARED)
+    write_fragment(profile, name, "")
+    prompt = assembled()
+    assert f"SHARED-{name.upper()}-TEXT" not in prompt
+    assert OPTIONAL_PLACEHOLDER in prompt
+
+
+@pytest.mark.parametrize("name", OPTIONAL)
+def test_the_shared_optional_fragment_is_used_when_the_family_has_none(profile, name):
+    write_fragment(profile, name, f"SHARED-{name.upper()}-TEXT", SHARED)
+    fragment_file(profile, name).unlink(missing_ok=True)
+    assert f"SHARED-{name.upper()}-TEXT" in assembled()
+
+
+@pytest.mark.parametrize("name", REQUIRED)
+def test_an_empty_own_required_fragment_raises_even_when_shared_has_text(profile, name):
+    write_fragment(profile, name, f"SHARED-{name.upper()}-TEXT", SHARED)
+    write_fragment(profile, name, "")
+    with pytest.raises(JsaError) as raised:
+        assembled()
+    assert str(fragment_file(profile, name)) in str(raised.value)
+
+
+@pytest.mark.parametrize("name", REQUIRED)
+def test_a_required_fragment_missing_from_both_places_names_both_paths(profile, name):
+    remove_fragment(profile, name)
+    with pytest.raises(JsaError) as raised:
+        assembled()
+    message = str(raised.value)
+    assert str(fragment_file(profile, name)) in message
+    assert str(fragment_file(profile, name, SHARED)) in message
+
+
+@pytest.mark.parametrize("name", REQUIRED)
+def test_a_required_fragment_empty_in_both_places_raises(profile, name):
+    write_fragment(profile, name, "", SHARED)
+    write_fragment(profile, name, "")
+    with pytest.raises(JsaError):
+        assembled()
+
+
+def test_a_profile_with_no_shared_folder_assembles_from_the_familys_own_fragments(
+    profile,
+):
+    marked(profile)
+    shutil.rmtree(profile / "search" / SHARED)
+    prompt = assembled()
+    for name in FRAGMENTS:
+        assert f"UNIQUE-{name.upper()}-TEXT about something specific." in prompt, name
+
+
+def test_the_skills_list_comes_from_the_profile_root_for_every_family(profile):
+    (profile / "resume_skills.md").write_text("UNIQUE-SKILL-GAMMA\n", encoding="utf-8")
+    for family in (FAMILY, OTHER_FAMILY):
+        assert "UNIQUE-SKILL-GAMMA" in skills_section(assembled(family=family))
+
+
+def test_a_family_with_no_folder_raises_before_assembling(profile):
+    with pytest.raises(JsaError) as raised:
+        assembled(family="no-such-family")
+    assert "no-such-family" in str(raised.value)
+
+
+def test_shared_is_not_a_search_family(profile):
+    with pytest.raises(JsaError):
+        assembled(family=SHARED)

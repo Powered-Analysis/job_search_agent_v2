@@ -20,12 +20,16 @@ import pytest
 from conftest import REPO_ROOT
 from profile_helpers import (
     FRAGMENTS,
+    OTHER_FAMILY,
     ROLE_FAMILIES,
     ROLE_FAMILY,
     SEARCH_TOML,
+    SHARED,
     WEEKDAYS,
     copy_example,
     family_dir,
+    fragment_file,
+    remove_fragment,
     schedule_toml,
     write_config_toml,
     write_search_toml,
@@ -203,8 +207,19 @@ def set_search(profile: Path, toml: str) -> None:
     write_search_toml(profile, toml)
 
 
+def every_family(days: dict[str, list]) -> dict[str, list]:
+    """The same days with each search repeated for the other search family, so the schedule uses both."""
+    return {
+        day: [
+            *searches,
+            *((agent, window, OTHER_FAMILY) for agent, window, *_ in searches),
+        ]
+        for day, searches in days.items()
+    }
+
+
 def full_week(run_at: str = SAFE_RUN_AT) -> str:
-    return schedule_toml("America/New_York", run_at, FULL_WEEK)
+    return schedule_toml("America/New_York", run_at, every_family(FULL_WEEK))
 
 
 def warned(output: str) -> bool:
@@ -217,17 +232,19 @@ def warned(output: str) -> bool:
 @pytest.mark.parametrize("fragment", REQUIRED)
 def test_missing_fragment_aborts_before_fly(fly, monkeypatch, capsys, fragment):
     profile, log = fly
-    (profile / "search" / f"{fragment}.md").unlink()
+    remove_fragment(profile, fragment)
     code, output = jsa_deploy(monkeypatch, capsys)
     assert code != 0
-    assert fragment in output
+    assert str(fragment_file(profile, fragment)) in output
+    assert str(fragment_file(profile, fragment, SHARED)) in output
     assert calls(log) == []
 
 
 @pytest.mark.parametrize("fragment", REQUIRED)
 def test_empty_fragment_aborts_before_fly(fly, monkeypatch, capsys, fragment):
     profile, log = fly
-    (profile / "search" / f"{fragment}.md").write_text("  \n", encoding="utf-8")
+    for folder in ("analytics", SHARED):
+        fragment_file(profile, fragment, folder).write_text("  \n", encoding="utf-8")
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code != 0
     assert calls(log) == []
@@ -238,7 +255,7 @@ def test_missing_optional_fragment_does_not_block_the_deploy(
     fly, monkeypatch, capsys, fragment
 ):
     profile, log = fly
-    (profile / "search" / f"{fragment}.md").unlink()
+    remove_fragment(profile, fragment)
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code == 0
     assert pick(calls(log), "deploy")
@@ -374,7 +391,11 @@ def test_one_window_as_long_as_the_week_covers_it(fly, monkeypatch, capsys):
     profile, _ = fly
     set_search(
         profile,
-        schedule_toml("America/New_York", SAFE_RUN_AT, {"monday": [("claude", 168)]}),
+        schedule_toml(
+            "America/New_York",
+            SAFE_RUN_AT,
+            every_family({"monday": [("claude", 168)]}),
+        ),
     )
     code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
     assert code == 0
@@ -385,7 +406,7 @@ def test_overlapping_windows_covering_the_week_produce_no_warning(
     fly, monkeypatch, capsys
 ):
     profile, _ = fly
-    days = {"monday": [("claude", 96)], "thursday": [("gemini", 96)]}
+    days = every_family({"monday": [("claude", 96)], "thursday": [("gemini", 96)]})
     set_search(profile, schedule_toml("America/New_York", SAFE_RUN_AT, days))
     code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
     assert code == 0
@@ -413,11 +434,13 @@ def test_unsearched_hours_warn_and_the_deploy_continues(fly, monkeypatch, capsys
 
 def test_closing_the_last_gap_removes_the_warning(fly, monkeypatch, capsys):
     profile, _ = fly
-    days = {
-        "monday": [("claude", 72)],
-        "thursday": [("claude", 72)],
-        "friday": [("claude", 24)],
-    }
+    days = every_family(
+        {
+            "monday": [("claude", 72)],
+            "thursday": [("claude", 72)],
+            "friday": [("claude", 24)],
+        }
+    )
     set_search(profile, schedule_toml("America/New_York", SAFE_RUN_AT, days))
     code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
     assert code == 0
@@ -504,8 +527,8 @@ def test_dry_run_lists_nothing_outside_profile_search(fly, monkeypatch, capsys):
 
 def test_dry_run_lists_files_in_nested_search_directories(fly, monkeypatch, capsys):
     profile, _ = fly
-    (profile / "search" / "extra").mkdir()
-    (profile / "search" / "extra" / "more.md").write_text("x\n")
+    (profile / "search" / SHARED / "extra").mkdir()
+    (profile / "search" / SHARED / "extra" / "more.md").write_text("x\n")
     code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
     assert code == 0
     assert "more.md" in output
@@ -746,7 +769,7 @@ def test_smoke_with_no_scheduled_machine_creates_none(fly, monkeypatch, capsys):
 
 def test_smoke_validates_before_building(fly, monkeypatch, capsys):
     profile, log = fly
-    (profile / "search" / "filters.md").unlink()
+    remove_fragment(profile, "filters")
     code, _ = jsa_deploy(monkeypatch, capsys, "--smoke")
     assert code != 0
     assert calls(log) == []
@@ -1239,7 +1262,8 @@ def project(fly, tmp_path, monkeypatch):
             shutil.copy2(source, root / name)
     decoy = root / "profile"
     (decoy / "search").mkdir(parents=True)
-    (decoy / "search" / "candidate.md").write_text(DECOY)
+    (decoy / "search" / SHARED).mkdir()
+    (decoy / "search" / SHARED / "candidate.md").write_text(DECOY)
     (decoy / "search" / "decoy_only.md").write_text(DECOY)
     (decoy / "search" / "search.toml").write_text(DECOY)
     (decoy / "refine").mkdir()
@@ -1247,7 +1271,7 @@ def project(fly, tmp_path, monkeypatch):
     (decoy / "config.toml").write_text(DECOY)
     (decoy / "resume_skills.md").write_text(DECOY)
     validated, _ = fly
-    (validated / "search" / "candidate.md").write_text(SHIPPED_FRAGMENT)
+    (validated / "search" / SHARED / "candidate.md").write_text(SHIPPED_FRAGMENT)
     (validated / "refine").mkdir()
     (validated / "refine" / "rationale.md").write_text("never ships\n")
     snapshot = tmp_path / "context"
@@ -1318,18 +1342,17 @@ def test_build_context_carries_the_validated_skills_list_not_the_project_profile
 
 def test_build_context_ships_nested_search_files(project, monkeypatch, capsys):
     validated, _, snapshot = project
-    (validated / "search" / "extra").mkdir()
-    (validated / "search" / "extra" / "more.md").write_text("nested\n")
+    (validated / "search" / SHARED / "extra").mkdir()
+    (validated / "search" / SHARED / "extra" / "more.md").write_text("nested\n")
     assert jsa_deploy(monkeypatch, capsys)[0] == 0
-    assert (snapshot / "profile" / "search" / "extra" / "more.md").read_text() == (
-        "nested\n"
-    )
+    nested = snapshot / "profile" / "search" / SHARED / "extra" / "more.md"
+    assert nested.read_text() == "nested\n"
 
 
 def test_dry_run_lists_the_files_the_build_context_ships(project, monkeypatch, capsys):
     validated, _, snapshot = project
-    (validated / "search" / "extra").mkdir()
-    (validated / "search" / "extra" / "more.md").write_text("nested\n")
+    (validated / "search" / SHARED / "extra").mkdir()
+    (validated / "search" / SHARED / "extra" / "more.md").write_text("nested\n")
     _, listing = jsa_deploy(monkeypatch, capsys, "--dry-run")
     assert jsa_deploy(monkeypatch, capsys)[0] == 0
     for path in tree(snapshot / "profile" / "search"):
@@ -1391,7 +1414,7 @@ def test_an_invalid_validated_profile_builds_nothing_even_with_a_valid_project_p
     validated, decoy, snapshot = project
     shutil.rmtree(decoy)
     copy_example(decoy)
-    (validated / "search" / "filters.md").unlink()
+    remove_fragment(validated, "filters")
     code, _ = jsa_deploy(monkeypatch, capsys)
     assert code != 0
     assert not snapshot.exists()
@@ -2827,3 +2850,133 @@ def test_dry_run_without_a_skills_list_lists_no_skills_file(inbox, monkeypatch, 
     code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
     assert code == 0
     assert "resume_skills" not in output
+
+
+# --- search families (issue #199; PRD 06 `jsa deploy` step 1 and "Profile layout") ----------------
+
+
+def only_analytics() -> str:
+    return schedule_toml("America/New_York", SAFE_RUN_AT, FULL_WEEK)
+
+
+@pytest.mark.parametrize("flags", [(), ("--dry-run",)], ids=["deploy", "dry-run"])
+def test_a_scheduled_family_with_no_folder_aborts_before_fly(
+    fly, monkeypatch, capsys, flags
+):
+    profile, log = fly
+    set_search(profile, full_week())
+    shutil.rmtree(profile / "search" / OTHER_FAMILY)
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert code != 0
+    assert OTHER_FAMILY in output
+    assert calls(log) == []
+
+
+@pytest.mark.parametrize("flags", [(), ("--dry-run",)], ids=["deploy", "dry-run"])
+def test_a_schedule_entry_naming_shared_aborts_before_fly(
+    fly, monkeypatch, capsys, flags
+):
+    profile, log = fly
+    days = {day: [("perplexity", 24, SHARED)] for day in WEEKDAYS}
+    write_search_toml(
+        profile, schedule_toml("America/New_York", SAFE_RUN_AT, days), folders=False
+    )
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert code != 0
+    assert SHARED in output
+    assert calls(log) == []
+
+
+@pytest.mark.parametrize("flags", [(), ("--dry-run",)], ids=["deploy", "dry-run"])
+def test_a_family_no_schedule_entry_uses_warns_naming_it_and_the_deploy_continues(
+    fly, monkeypatch, capsys, flags
+):
+    profile, log = fly
+    set_search(profile, only_analytics())
+    code, output = jsa_deploy(monkeypatch, capsys, *flags)
+    assert code == 0
+    warnings = [line for line in output.splitlines() if warned(line)]
+    assert any(OTHER_FAMILY in line for line in warnings)
+    assert not any("analytics" in line for line in warnings)
+    if not flags:
+        assert pick(calls(log), "deploy")
+
+
+def test_a_family_every_schedule_entry_uses_produces_no_warning(
+    fly, monkeypatch, capsys
+):
+    profile, _ = fly
+    set_search(profile, full_week())
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert not warned(output)
+
+
+@pytest.mark.parametrize("family", ["analytics", OTHER_FAMILY])
+def test_a_missing_required_fragment_of_any_scheduled_family_aborts_before_fly(
+    fly, monkeypatch, capsys, family
+):
+    profile, log = fly
+    set_search(profile, full_week())
+    remove_fragment(profile, "target_roles", family)
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code != 0
+    assert str(fragment_file(profile, "target_roles", family)) in output
+    assert calls(log) == []
+
+
+def test_an_unscheduled_familys_missing_required_fragment_still_aborts(
+    fly, monkeypatch, capsys
+):
+    profile, log = fly
+    set_search(profile, only_analytics())
+    fragment_file(profile, "target_roles", OTHER_FAMILY).unlink()
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code != 0
+    assert OTHER_FAMILY in output
+    assert calls(log) == []
+
+
+def test_a_family_without_its_own_fragment_deploys_with_the_shared_one(
+    fly, monkeypatch, capsys
+):
+    profile, log = fly
+    set_search(profile, full_week())
+    fragment_file(profile, "positive_signals", "analytics").unlink(missing_ok=True)
+    fragment_file(profile, "filters", "analytics").unlink(missing_ok=True)
+    assert fragment_file(profile, "filters", SHARED).is_file()
+    code, _ = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    assert pick(calls(log), "deploy")
+
+
+def test_dry_run_lists_every_familys_files_and_the_shared_ones(
+    fly, monkeypatch, capsys
+):
+    profile, _ = fly
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    for path in (profile / "search").rglob("*"):
+        if path.is_file():
+            assert path.relative_to(profile).as_posix() in output, path
+
+
+def test_the_build_context_ships_every_familys_folder_and_shared(
+    project, monkeypatch, capsys
+):
+    validated, _, snapshot = project
+    assert jsa_deploy(monkeypatch, capsys)[0] == 0
+    assert tree(snapshot / "profile" / "search") == tree(validated / "search")
+    shipped = {
+        path.split("/")[2]
+        for path in tree(snapshot)
+        if path.startswith("profile/search/")
+    }
+    assert {"analytics", OTHER_FAMILY, SHARED} <= shipped
+
+
+def test_the_example_profile_alone_passes_a_dry_run_deploy(fly, monkeypatch, capsys):
+    monkeypatch.setenv("JSA_PROFILE_DIR", str(REPO_ROOT / "profile.example"))
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0, output
+    assert not warned(output)

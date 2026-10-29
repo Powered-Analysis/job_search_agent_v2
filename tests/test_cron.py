@@ -42,7 +42,7 @@ def local_today(zone: str):
 
 
 def schedule_on(zone, offsets_to_searches, run_at=DUE):
-    """A `search.toml` scheduling `{days from today: [(agent, window)]}` in `zone`."""
+    """A `search.toml` scheduling `{days from today: [(agent, window[, family])]}` in `zone`."""
     today = local_today(zone)
     days = {day: [] for day in WEEKDAYS}
     for offset, searches in offsets_to_searches.items():
@@ -56,7 +56,7 @@ NEW_YORK = schedule_toml(
     "America/New_York",
     "07:00",
     {
-        "monday": [("perplexity", 72), ("claude", 48)],
+        "monday": [("perplexity", 72, "analytics"), ("claude", 48, "charter")],
         "tuesday": [("gemini", 24)],
     },
 )
@@ -76,10 +76,10 @@ def config_from(tmp_path, monkeypatch):
 
 
 def ordered(searches):
-    return [(s.agent, s.window_hours) for s in searches]
+    return [(s.search_family, s.agent, s.window_hours) for s in searches]
 
 
-MONDAY_SEARCHES = [("perplexity", 72), ("claude", 48)]
+MONDAY_SEARCHES = [("analytics", "perplexity", 72), ("charter", "claude", 48)]
 
 
 def test_the_gate_returns_nothing_on_an_unscheduled_weekday(config_from):
@@ -127,7 +127,9 @@ def test_the_time_of_day_is_judged_in_the_profile_timezone_not_utc(config_from):
 def test_a_timezone_ahead_of_utc_moves_the_weekday_forward(config_from):
     tokyo = schedule_toml("Asia/Tokyo", "04:00", {"tuesday": [("claude", 24)]})
     monday_evening_utc = datetime(2026, 10, 5, 20, 0, tzinfo=UTC)
-    assert ordered(gate(config_from(tokyo), monday_evening_utc)) == [("claude", 24)]
+    assert ordered(gate(config_from(tokyo), monday_evening_utc)) == [
+        ("analytics", "claude", 24)
+    ]
 
 
 @pytest.fixture
@@ -236,7 +238,7 @@ def jsa(monkeypatch, capsys, *args):
     return code, captured.out, captured.err
 
 
-TWO = [("claude", 24), ("claude", 48)]
+TWO = [("claude", 24, "analytics"), ("claude", 48, "charter")]
 
 
 def app_tables(url):
@@ -247,7 +249,7 @@ def app_tables(url):
 def search_runs(world):
     return rows(
         world.url,
-        "SELECT trigger, run_date, window_hours, outcome, error FROM search_runs ORDER BY id",
+        "SELECT trigger, run_date, window_hours, outcome, error, search_family FROM search_runs ORDER BY id",
     )
 
 
@@ -294,6 +296,7 @@ def test_the_first_due_wake_claims_the_day_and_runs_its_searches_in_order(
         ("scheduled", world.today, 24, "ok"),
         ("scheduled", world.today, 48, "ok"),
     ]
+    assert [r[5] for r in search_runs(world)] == ["analytics", "charter"]
     assert world.sdk.calls == 2
 
 
@@ -384,7 +387,7 @@ def test_ungated_still_runs_after_the_day_was_claimed(world, monkeypatch, capsys
 def test_ungated_with_nothing_today_runs_the_next_scheduled_days_searches(
     world, monkeypatch, capsys
 ):
-    world.schedule({2: [("claude", 36)], 4: [("claude", 60)]})
+    world.schedule({2: [("claude", 36, "charter")], 4: [("claude", 60)]})
     code, _out, _err = jsa(monkeypatch, capsys, "cron", "--ungated")
     assert code == 0
     assert [(r[0], r[2]) for r in search_runs(world)] == [("smoke", 36)]
@@ -406,13 +409,22 @@ def test_ungated_with_no_search_on_any_weekday_runs_nothing_and_fails_saying_so(
 # --- hand runs --------------------------------------------------------------------------
 
 
+HAND_SEARCH = (
+    "search",
+    "--search-family",
+    "charter",
+    "--agent",
+    "claude",
+    "--window-hours",
+    "24",
+)
+
+
 def test_a_hand_search_never_writes_a_claim_and_ignores_the_gate(
     world, monkeypatch, capsys
 ):
     world.schedule({1: TWO}, run_at=NOT_YET)
-    code, _out, _err = jsa(
-        monkeypatch, capsys, "search", "--agent", "claude", "--window-hours", "24"
-    )
+    code, _out, _err = jsa(monkeypatch, capsys, *HAND_SEARCH)
     assert code == 0
     assert [(r[0], r[3]) for r in search_runs(world)] == [("hand", "ok")]
     assert claims(world) == []
@@ -422,7 +434,7 @@ def test_a_hand_search_does_not_use_up_the_days_scheduled_run(
     world, monkeypatch, capsys
 ):
     world.schedule({0: TWO})
-    jsa(monkeypatch, capsys, "search", "--agent", "claude", "--window-hours", "24")
+    jsa(monkeypatch, capsys, *HAND_SEARCH)
     code, out, err = jsa(monkeypatch, capsys, "cron")
     assert code == 0
     assert "already ran" not in out + err
