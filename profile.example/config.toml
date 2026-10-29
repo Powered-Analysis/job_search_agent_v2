@@ -1,4 +1,5 @@
-# Everything here is about you and stays on your machine; only profile/search/ ships to Fly.
+# Everything here is about you. Only profile/search/ and profile/resume_skills.md ship in the Fly
+# image; with [inbox], `jsa deploy` also gives this file to the inbox machine.
 # Replace the fictional values below.
 
 # Used in the resume and packet files.
