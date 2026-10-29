@@ -14,6 +14,7 @@ FRAGMENTS = (
     "positive_signals",
     "negative_signals",
     "hard_exclusions",
+    "skills",
 )
 
 FAMILY = "analytics"
