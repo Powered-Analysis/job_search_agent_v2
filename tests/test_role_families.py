@@ -15,7 +15,7 @@ from profile_helpers import (
 
 from jsa import cli, db
 from jsa.errors import JsaError
-from jsa.profile import RoleFamily, role_families, role_family_tag
+from jsa.profile import RoleFamily, role_families, role_family_tag, unassigned_reason
 
 FOLDERS = "role_families"
 
@@ -305,3 +305,19 @@ def test_the_command_failure_names_the_offending_folder(
     code, output = run(monkeypatch, capsys, "review")
     assert code != 0
     assert folder in output
+
+
+@pytest.mark.parametrize(
+    "role_family", [None, "gone"], ids=["no-role-family", "unknown-role-family"]
+)
+def test_the_profiles_unassigned_check_names_the_row_and_prints_nothing(
+    role_family, capsys
+):
+    reason = unassigned_reason(41, role_family, ["data", "product"])
+    assert reason is not None and "jsa revise --id 41" in reason
+    assert capsys.readouterr().out == ""
+
+
+def test_the_profiles_unassigned_check_passes_a_known_role_family(capsys):
+    assert unassigned_reason(41, "data", ["data", "product"]) is None
+    assert capsys.readouterr().out == ""
