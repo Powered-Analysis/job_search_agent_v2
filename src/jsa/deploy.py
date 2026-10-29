@@ -14,6 +14,7 @@ from jsa.errors import JsaError
 from jsa.profile import (
     CONFIG_TOML,
     RESUME_SKILLS,
+    SEARCH_DIR,
     Config,
     FlyConfig,
     Schedule,
@@ -27,10 +28,11 @@ from jsa.profile import (
     redline_settings,
     resume_skills,
     role_families,
+    search_families,
     tracker_spreadsheet_id,
 )
 from jsa.refine import proposal_pending, refine_dir
-from jsa.search_prompt import SEARCH_DIR, assemble_search_prompt_for
+from jsa.search_prompt import assemble_search_prompt_for
 from jsa.tools import run_tool
 
 MEMORY_MB = "1024"
@@ -126,6 +128,18 @@ def deploy_warnings(config: SearchConfig, *, pending: bool) -> list[str]:
     return warnings
 
 
+def unscheduled_family_warnings(
+    config: SearchConfig, families: Sequence[str]
+) -> list[str]:
+    """A warning for each search family no schedule entry uses, since it never runs. Pure (XC-9)."""
+    scheduled = {search.search_family for search in config.schedule.searches()}
+    return [
+        f"search family {family!r} is in no schedule entry, so it never runs"
+        for family in families
+        if family not in scheduled
+    ]
+
+
 def shipped_files() -> list[str]:
     """The profile files the image carries, as the image lays them out."""
     root = profile_dir() / SEARCH_DIR
@@ -209,7 +223,9 @@ def validate() -> tuple[FlyConfig, str | None, list[str]]:
     Returns the search app's Fly settings, the inbox app's name (None without `[inbox]`), and warnings.
     """
     config = load_search_config()
-    assemble_search_prompt_for(config, "the deploy-time check")
+    families = search_families()
+    for family in families:
+        assemble_search_prompt_for(config, family, "the deploy-time check")
     profile = load_config()
     fly = fly_settings(profile)
     app = _validate_inbox(profile) if profile.inbox is not None else None
@@ -219,7 +235,10 @@ def validate() -> tuple[FlyConfig, str | None, list[str]]:
     return (
         fly,
         app,
-        deploy_warnings(config, pending=proposal_pending(refine_dir())),
+        [
+            *deploy_warnings(config, pending=proposal_pending(refine_dir())),
+            *unscheduled_family_warnings(config, families),
+        ],
     )
 
 

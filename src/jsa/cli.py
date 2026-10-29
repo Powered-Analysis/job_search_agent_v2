@@ -25,7 +25,6 @@ from jsa.inbox import inbox
 from jsa.packet import build_packets
 from jsa.profile import role_family_names
 from jsa.refetch import refetch
-from jsa.refine import accept, refine, reject
 from jsa.review import ask_role_family, review, revise
 from jsa.search import RUNNERS, Summary, search
 from jsa.tracker import track
@@ -160,12 +159,7 @@ def _track(args: argparse.Namespace) -> None:
 
 
 def _refine(args: argparse.Namespace) -> None:
-    if args.accept:
-        accept()
-    elif args.reject:
-        reject()
-    else:
-        refine(dry_run=args.dry_run)
+    raise JsaError("refine across search families isn't built yet")
 
 
 def _refetch(args: argparse.Namespace) -> None:
@@ -182,7 +176,9 @@ def _print_search(summary: Summary, warnings: list[str]) -> None:
 
 def _search(args: argparse.Namespace) -> None:
     with make_client() as client:
-        _print_search(*search(client, args.agent, args.window_hours))
+        _print_search(
+            *search(client, args.search_family, args.agent, args.window_hours)
+        )
 
 
 def _cron(args: argparse.Namespace) -> None:
@@ -335,6 +331,11 @@ def main() -> None:
     refetch_command.set_defaults(run=_refetch)
     search_command = commands.add_parser(
         "search", help="run one search-and-capture cycle"
+    )
+    search_command.add_argument(
+        "--search-family",
+        required=True,
+        help="the folder under profile/search/ whose fragments this search uses",
     )
     search_command.add_argument("--agent", required=True, choices=sorted(RUNNERS))
     search_command.add_argument(

@@ -63,8 +63,26 @@ cp -r profile.example profile
 | `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the resume redline and refine |
 | `profile/role_families/<name>/` | one folder per kind of role you apply to, named for it (`Data Analysis`). It holds that role family's base resume, `resume.docx`, and optionally a `cover_letter.*`, which is copied into each of its packets (a `.docx` also gets a PDF). Its Sheet tab (step 2) carries the same name. You need at least one; `jsa review`, `jsa revise`, `jsa add`, `jsa inbox`, `jsa packet`, `jsa generate`, `jsa track`, and `jsa refetch` refuse to start when a `resume.docx` is missing or empty, a folder holds two cover letters, or two names give the same email tag (the name in lowercase, each run of other characters turned into one `-`) |
 | `profile/resume_skills.md` | optional; the skills you have, one per line, comma-separated, or both in one file. The search prompt's Skills section lists them, locally and in the cloud (it ships in the image). The redline may add, remove, reword, or reorder skills in your resume's `Skills` section, using only words from this list or the posting |
-| `profile/search/search.toml` | timezone, `run_at`, `results_per_run`, the weekly schedule, the Claude runner settings, and the verification mode |
-| `profile/search/*.md` | the six fragments that tell the search who you are and what you want |
+| `profile/search/search.toml` | timezone, `run_at`, `results_per_run`, the weekly schedule (each entry names a `search_family`), the Claude runner settings, and the verification mode |
+| `profile/search/<name>/` | one folder per search family: any of the six fragments (`candidate.md`, `target_roles.md`, `filters.md`, `positive_signals.md`, `negative_signals.md`, `hard_exclusions.md`) that tell that search who you are and what you want |
+| `profile/search/shared/` | optional; fragments that any search family without its own copy uses |
+
+**Search families.** A search family is one search's set of fragments. A career shift wants a
+targeted search for each kind of role you are moving into, and another by the characteristics of the
+seat, which finds postings that no title search does. Each family is a folder under `profile/search/`;
+its name is the folder's name, and `shared` is reserved. They all use the same prompt template, the
+same `search.toml`, and the same database, and the one scheduled machine runs a day's searches one
+after another. For each fragment, a family's own file is used when it exists, even if it is empty, and
+`shared/`'s file only when the family has none. So an empty `positive_signals.md` turns positive
+signals off for that family, and a required fragment (`candidate.md`, `target_roles.md`,
+`filters.md`) that is missing or empty in both places is an error naming both paths. Every
+`[schedule]` entry carries a required `search_family`, as in
+`{ search_family = "analytics", agent = "perplexity", window_hours = 72 }`; naming a folder that doesn't
+exist, or `shared`, is an error when the file loads. Search families have nothing to do with role
+families: any search finds postings for any role family. Each finding records the family that made
+it, and `jsa review`'s search health line reports the latest search of each family and agent pair.
+`profile.example/` has two families, `analytics` (with title seeds) and `charter` (without), that
+share three fragments.
 
 No prompt in `src/` needs an edit. If one seems to, a profile slot is missing.
 
@@ -213,9 +231,11 @@ both scheduled machines alone.
 `jsa deploy` checks the search profile exactly as the cloud will before building anything, and ships
 that same directory into the image, wherever `JSA_PROFILE_DIR` points. It also checks that the
 search app holds `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, and the key of each agent `search.toml`
-schedules, and stops naming any it lacks; an agent the schedule never uses needs no key. It warns,
-without stopping, when the schedule leaves hours of the week unsearched, when `run_at` is after
-22:59, and when a refine proposal is pending (it will not ship).
+schedules, and stops naming any it lacks; an agent the schedule never uses needs no key. It builds
+every search family's prompt and stops on a missing required fragment or on a scheduled family with
+no folder. It warns, without stopping, when the schedule leaves hours of the week unsearched, when
+`run_at` is after 22:59, when a search family is in no schedule entry (it never runs), and when a
+refine proposal is pending (it will not ship).
 
 ## Setup inventory
 
@@ -245,8 +265,8 @@ credentials leave it only as the inbox app's two exported ones, each scoped to i
 (while the OAuth consent screen is in testing status the token expires after 7 days; publish it, or
 sign in again when `jsa track` reports exit code 2); `flyctl` (`jsa deploy`); LibreOffice (`soffice`, override `JSA_SOFFICE_BIN`; renders the resume and cover letter PDFs); Google Drive for Desktop (with the inbox, `packets_dir` mirrors the Drive packets folder); Microsoft Word (reviewing the redline); the Claude Code CLI (the local Claude commands).
 
-**The profile:** `config.toml`, `role_families/`, `search/search.toml`, and the six `search/*.md`
-fragments, seeded from `profile.example/` (step 4).
+**The profile:** `config.toml`, `role_families/`, `search/search.toml`, and the search fragments in
+`search/shared/` and a folder per search family, seeded from `profile.example/` (step 4).
 
 **Outside the profile:** the Google Sheet (step 2); with the inbox, the Drive packets folder and the
 tracker copy (step 7).
@@ -265,8 +285,8 @@ copying the tracker with `gws`; then `uv run jsa deploy`.
 | `jsa generate` | build each Apply posting's packet with a resume redline, then track it |
 | `jsa packet`, `jsa track` | the two halves of `generate`, on their own |
 | `jsa refetch` | update stored postings, tracker titles, and packets from the employer's edits |
-| `jsa refine` | propose search-profile edits learned from your decisions; resolve the conflict-marked copies in `profile/refine/`, then `jsa refine --accept` or `--reject` |
-| `jsa search --agent <agent> --window-hours <n>` | run one search by hand |
+| `jsa refine` | exits with a message: refine across search families isn't built yet |
+| `jsa search --search-family <name> --agent <agent> --window-hours <n>` | run one search by hand |
 
 **Role families.** After you press `a` in `jsa review`, a list shows every role family in your
 profile, numbered from 1 in name order, plus `n` (none fits) and `b` (back to the decision). Press a

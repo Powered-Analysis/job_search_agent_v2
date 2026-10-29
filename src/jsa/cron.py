@@ -55,6 +55,7 @@ def _run_searches(
             run.results.append(
                 search(
                     client,
+                    scheduled.search_family,
                     scheduled.agent,
                     scheduled.window_hours,
                     trigger=trigger,
@@ -64,7 +65,8 @@ def _run_searches(
         # Any failure, whatever its type, must not stop the day's later searches (PRD 01).
         except Exception as error:  # noqa: BLE001
             message = (
-                f"{scheduled.agent} ({scheduled.window_hours}h): {one_line(error)}"
+                f"{scheduled.search_family} {scheduled.agent} "
+                f"({scheduled.window_hours}h): {one_line(error)}"
             )
             log.error("Search failed: %s", message)
             run.failures.append(message)

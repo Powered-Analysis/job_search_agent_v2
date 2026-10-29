@@ -30,6 +30,7 @@ PositiveInt = Annotated[StrictInt, Field(gt=0)]
 RESUME_DOCX = "resume.docx"
 COVER_LETTER_PREFIX = "cover_letter"
 _COVER_LETTER = re.compile(rf"{COVER_LETTER_PREFIX}\..+")
+SHARED_FAMILY = "shared"
 _RUN_AT = re.compile(r"([01]\d|2[0-3]):([0-5]\d)")
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
@@ -53,8 +54,18 @@ class AgentSettings(ModelSettings):
 
 class ScheduledSearch(BaseModel):
     model_config = _STRICT
+    search_family: NonEmptyStr
     agent: Literal["perplexity", "claude", "gemini"]
     window_hours: PositiveInt
+
+    @field_validator("search_family")
+    @classmethod
+    def _not_shared(cls, name: str) -> str:
+        if name == SHARED_FAMILY:
+            raise ValueError(
+                f"{SHARED_FAMILY!r} holds fragments for the search families and is not one itself"
+            )
+        return name
 
 
 class Schedule(BaseModel):
@@ -176,7 +187,8 @@ class Config(BaseModel):
 
 
 CONFIG_TOML = "config.toml"
-SEARCH_TOML = "search/search.toml"
+SEARCH_DIR = "search"
+SEARCH_TOML = f"{SEARCH_DIR}/search.toml"
 
 
 def _pointer(relative_path: str) -> str:
@@ -207,8 +219,33 @@ def load_config() -> Config:
     return _load(CONFIG_TOML, Config)
 
 
+def search_families() -> list[str]:
+    """Every search family in name order: each folder under `search/` except `shared` (PRD 01)."""
+    root = profile_dir() / SEARCH_DIR
+    folders = sorted(root.iterdir()) if root.is_dir() else []
+    return [
+        folder.name
+        for folder in folders
+        if folder.is_dir() and folder.name != SHARED_FAMILY
+    ]
+
+
+def require_search_family(family: str) -> None:
+    """A search family must have a folder; a name without one raises, listing the folders there are."""
+    families = search_families()
+    if family not in families:
+        raise JsaError(
+            f"{family!r} is not a search family: {profile_dir() / SEARCH_DIR / family} "
+            f"is not a folder. The profile has: {', '.join(families) or 'none'}. "
+            f"{_pointer(f'{SEARCH_DIR}/')}"
+        )
+
+
 def load_search_config() -> SearchConfig:
-    return _load(SEARCH_TOML, SearchConfig)
+    config = _load(SEARCH_TOML, SearchConfig)
+    for family in dict.fromkeys(s.search_family for s in config.schedule.searches()):
+        require_search_family(family)
+    return config
 
 
 def _require_table[T](table: T | None, relative_path: str, name: str) -> T:

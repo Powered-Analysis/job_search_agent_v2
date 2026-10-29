@@ -1,0 +1,3 @@
+- Postings that describe building or owning a metrics layer, a semantic layer, or a company's definitions of its key numbers.
+- Postings that name the leaders the role supports, such as a head of product or of operations.
+- Companies in e-commerce, logistics, or marketplaces, where the metrics decide daily operations.

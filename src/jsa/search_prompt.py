@@ -5,9 +5,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from jsa.assemble import Slot, app_template, assemble
-from jsa.profile import RESUME_SKILLS, SearchConfig, profile_dir, resume_skills
+from jsa.profile import (
+    RESUME_SKILLS,
+    SEARCH_DIR,
+    SHARED_FAMILY,
+    SearchConfig,
+    profile_dir,
+    require_search_family,
+    resume_skills,
+)
 
-SEARCH_DIR = "search"
 # Slot name -> (fragment file, required); the one definition of the fragments' homes.
 FRAGMENTS = {
     "CANDIDATE": ("candidate.md", True),
@@ -31,44 +38,60 @@ def search_window(hours: int, now: datetime, config: SearchConfig) -> str:
     return f"the last {hours} hours (from {render(start)} through {render(now)})"
 
 
-def fragment_path(filename: str) -> Path:
-    return profile_dir() / SEARCH_DIR / filename
+def fragment_path(folder: str, filename: str) -> Path:
+    return profile_dir() / SEARCH_DIR / folder / filename
 
 
-def read_fragment(filename: str) -> str | None:
-    """The fragment's text; None when the user has no such file."""
-    try:
-        return fragment_path(filename).read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None
+def fragment_source(family: str, filename: str) -> Path | None:
+    """The file a family's fragment comes from: its own, even empty, else `shared/`'s, else None (PRD 01).
+
+    Every reader of a family's fragments goes through this (convention 3)."""
+    for folder in (family, SHARED_FAMILY):
+        path = fragment_path(folder, filename)
+        if path.is_file():
+            return path
+    return None
 
 
-def _read_fragment(name: str, filename: str, replacement: Path | None) -> Slot:
+def read_fragment(family: str, filename: str) -> str | None:
+    """The fragment's text for a family; None when neither the family nor `shared/` has the file."""
+    source = fragment_source(family, filename)
+    return source.read_text(encoding="utf-8") if source else None
+
+
+def _fragment_slot(
+    family: str, name: str, filename: str, replacement: Path | None
+) -> Slot:
     required = FRAGMENTS[name][1]
     if replacement is not None and replacement.is_file():
         return Slot(replacement.read_text(encoding="utf-8"), str(replacement), required)
     return Slot(
-        read_fragment(filename),
-        f"{fragment_path(filename)} (copy the shape from profile.example/{SEARCH_DIR}/{filename})",
+        read_fragment(family, filename),
+        f"{fragment_path(family, filename)} (or {fragment_path(SHARED_FAMILY, filename)} "
+        f"when the family has no file of its own; copy the shape from profile.example/{SEARCH_DIR}/)",
         required,
     )
 
 
-def assemble_search_prompt(config: SearchConfig, hours: int, now: datetime) -> str:
-    return assemble_search_prompt_for(config, search_window(hours, now, config))
+def assemble_search_prompt(
+    config: SearchConfig, family: str, hours: int, now: datetime
+) -> str:
+    return assemble_search_prompt_for(config, family, search_window(hours, now, config))
 
 
 def assemble_search_prompt_for(
     config: SearchConfig,
+    family: str,
     window: str,
     replacements_dir: Path | None = None,
     replaceable: Collection[str] | None = None,
 ) -> str:
-    """The search prompt with `window` in the window slot, for a caller with no run of its own.
+    """The search family's prompt with `window` in the window slot, for a caller with no run of its own.
 
     A fragment file in `replacements_dir` is used in place of the live one, so a proposed change
     can be checked before it is accepted; an error about it names the file the user must fix.
     Only the fragments in `replaceable` (default: all) are looked for there."""
+    require_search_family(family)
     slots = {
         "SEARCH_WINDOW": Slot(window, "the search window"),
         "RESULTS_PER_RUN": Slot(
@@ -86,7 +109,7 @@ def assemble_search_prompt_for(
             and (replaceable is None or filename in replaceable)
             else None
         )
-        slots[name] = _read_fragment(name, filename, replacement)
+        slots[name] = _fragment_slot(family, name, filename, replacement)
     skills = resume_skills()
     slots["RESUME_SKILLS"] = Slot(
         skills.read_text(encoding="utf-8") if skills else None,

@@ -76,6 +76,7 @@ TABLES: dict[str, tuple[str, ...]] = {
     ),
     "search_findings": (
         "run_date TEXT NOT NULL",
+        "search_family TEXT",
         _text_in("agent", SEARCH_AGENTS, not_null=True),
         "canonical_url TEXT NOT NULL",
         "window_hours INTEGER",
@@ -87,12 +88,13 @@ TABLES: dict[str, tuple[str, ...]] = {
         _text_in("ats_date_kind", ATS_DATE_KINDS),
         "model TEXT",
         "effort TEXT",
-        "PRIMARY KEY (run_date, agent, canonical_url)",
+        "PRIMARY KEY (run_date, search_family, agent, canonical_url)",
     ),
     "search_runs": (
         "id INTEGER PRIMARY KEY AUTOINCREMENT",
         "run_date TEXT",
         _text_in("trigger", SEARCH_TRIGGERS),
+        "search_family TEXT",
         "agent TEXT",
         "window_hours INTEGER",
         "mode TEXT",
@@ -137,12 +139,56 @@ def _add_column(table: str, name: str) -> Callable[[Connection], None]:
     return migrate
 
 
+FINDINGS = "search_findings"
+_FINDINGS_NEW = f"{FINDINGS}_new"
+_FINDINGS_OLD = f"{FINDINGS}_old"
+
+
+def _rebuild_search_findings(conn: Connection) -> None:
+    """Give `search_findings` the primary key that includes `search_family` (PRD 02).
+
+    SQLite can't alter a primary key, so the table is rebuilt: create, copy by name, rename
+    twice, drop. Each statement is its own round-trip over HTTP, so every step leaves the rows in
+    a named table and a half-done swap is finished on the next open. Applied, it costs one read.
+    """
+    tables = dict(
+        conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE name IN (?, ?, ?)",
+            (FINDINGS, _FINDINGS_NEW, _FINDINGS_OLD),
+        ).fetchall()
+    )
+    current = tables.get(FINDINGS)
+    if current is None and _FINDINGS_NEW in tables:
+        # Died between the two renames: the copy is complete, it only needs its name.
+        conn.execute(f"ALTER TABLE {_FINDINGS_NEW} RENAME TO {FINDINGS}")
+    elif current is not None and "search_family" not in current:
+        carried = ", ".join(
+            name
+            for column in TABLES[FINDINGS]
+            if (name := column.split()[0]) not in ("PRIMARY", "search_family")
+        )
+        # A copy left by an earlier try is discarded: its NULL families would not dedupe on a re-copy.
+        conn.execute(f"DROP TABLE IF EXISTS {_FINDINGS_NEW}")
+        conn.execute(f"CREATE TABLE {_FINDINGS_NEW} ({', '.join(TABLES[FINDINGS])})")
+        conn.execute(
+            f"INSERT INTO {_FINDINGS_NEW} ({carried}) SELECT {carried} FROM {FINDINGS}"
+        )
+        conn.execute(f"DROP TABLE IF EXISTS {_FINDINGS_OLD}")
+        conn.execute(f"ALTER TABLE {FINDINGS} RENAME TO {_FINDINGS_OLD}")
+        conn.execute(f"ALTER TABLE {_FINDINGS_NEW} RENAME TO {FINDINGS}")
+    elif current is None or _FINDINGS_OLD not in tables:
+        return
+    conn.execute(f"DROP TABLE IF EXISTS {_FINDINGS_OLD}")
+
+
 # Schema changes ship as migrations that run before the creates (PRD 02):
 # a rebuild parks data under another name, and a create run first would fill
 # that gap with an empty table.
 MIGRATIONS: tuple[Callable[[Connection], None], ...] = (
     _add_column("postings", "in_refinement"),
     _add_column("postings", "role_family"),
+    _add_column("search_runs", "search_family"),
+    _rebuild_search_findings,
 )
 
 
@@ -253,6 +299,7 @@ def record_finding(
     conn: Connection,
     *,
     run_date: str,
+    search_family: str,
     agent: str,
     canonical_url: str,
     window_hours: int,
@@ -267,17 +314,18 @@ def record_finding(
     conn.execute(
         f"""
         INSERT INTO search_findings (
-            run_date, agent, canonical_url, window_hours, rank, found_at, decision,
-            verification, ats_date, ats_date_kind, model, effort
+            run_date, search_family, agent, canonical_url, window_hours, rank, found_at,
+            decision, verification, ats_date, ats_date_kind, model, effort
         ) VALUES (
-            ?, ?, ?, ?, ?, {NOW},
+            ?, ?, ?, ?, ?, ?, {NOW},
             (SELECT decision FROM postings WHERE canonical_url = ?),
             ?, ?, ?, ?, ?
         )
-        ON CONFLICT(run_date, agent, canonical_url) DO NOTHING
+        ON CONFLICT(run_date, search_family, agent, canonical_url) DO NOTHING
         """,
         (
             run_date,
+            search_family,
             agent,
             canonical_url,
             window_hours,
@@ -297,6 +345,7 @@ def open_search_run(
     *,
     trigger: str,
     run_date: str,
+    search_family: str,
     agent: str,
     window_hours: int,
     mode: str,
@@ -304,11 +353,11 @@ def open_search_run(
     """Open a run's row before its runner starts; a row never closed means the process died (PRD 02)."""
     rows = conn.execute(
         f"""
-        INSERT INTO search_runs (run_date, trigger, agent, window_hours, mode, started_at)
-        VALUES (?, ?, ?, ?, ?, {NOW})
+        INSERT INTO search_runs (run_date, trigger, search_family, agent, window_hours, mode, started_at)
+        VALUES (?, ?, ?, ?, ?, ?, {NOW})
         RETURNING id
         """,
-        (run_date, trigger, agent, window_hours, mode),
+        (run_date, trigger, search_family, agent, window_hours, mode),
     ).fetchall()
     return rows[0][0]
 
@@ -353,17 +402,18 @@ def cron_run_dates(conn: Connection) -> set[str]:
 def health_search_runs(conn: Connection, since: datetime) -> list[tuple]:
     """The runs review's health line reads, oldest first.
 
-    Runs started since `since`, every run with no outcome, and each agent's latest run:
-    (id, run_date, trigger, agent, started_at, outcome, error, summary, warnings).
+    Runs started since `since`, every run with no outcome, and the latest run of each search family
+    and agent pair: (id, run_date, trigger, search_family, agent, started_at, outcome, error,
+    summary, warnings).
     """
     return conn.execute(
         """
-        SELECT id, run_date, trigger, agent, started_at, outcome, error, summary, warnings
+        SELECT id, run_date, trigger, search_family, agent, started_at, outcome, error, summary, warnings
         FROM search_runs
         WHERE started_at >= ? OR outcome IS NULL OR id IN (
             SELECT id FROM (
                 SELECT id, ROW_NUMBER() OVER (
-                    PARTITION BY agent ORDER BY started_at DESC, id DESC
+                    PARTITION BY search_family, agent ORDER BY started_at DESC, id DESC
                 ) AS n FROM search_runs
             ) WHERE n = 1
         )

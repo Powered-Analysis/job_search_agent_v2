@@ -19,6 +19,7 @@ class Run(NamedTuple):
     id: int
     run_date: str
     trigger: str
+    search_family: str | None
     agent: str
     started_at: str
     outcome: str | None
@@ -31,13 +32,18 @@ def _started(run: Run) -> datetime:
     return datetime.fromisoformat(run.started_at)
 
 
+def _name(run: Run) -> str:
+    """What ran; a run from before search families existed has no family."""
+    return " ".join(part for part in (run.search_family, run.agent) if part)
+
+
 def _is_dead(run: Run, now: datetime) -> bool:
     return run.outcome is None and now - _started(run) > DEAD_AFTER
 
 
 def _latest(run: Run, now: datetime) -> str:
     status = run.outcome or ("dead" if _is_dead(run, now) else "running")
-    text = f"{run.agent} {run.run_date} {status}"
+    text = f"{_name(run)} {run.run_date} {status}"
     if run.outcome == "ok":
         counts = json.loads(run.summary) if run.summary else {}
         cost = counts.get("cost")
@@ -49,17 +55,21 @@ def _latest(run: Run, now: datetime) -> str:
 def health_lines(
     config: SearchConfig, runs: list[Run], claimed_days: set[str], now: datetime
 ) -> list[str]:
-    """The health line: the latest run per scheduled agent, then one line per problem. Pure (XC-9)."""
-    agents = dict.fromkeys(search.agent for search in config.schedule.searches())
-    latest = {run.agent: run for run in runs}
+    """The health line: the latest run per scheduled search family and agent, then one line per problem. Pure (XC-9)."""
+    pairs = dict.fromkeys(
+        (search.search_family, search.agent) for search in config.schedule.searches()
+    )
+    latest = {(run.search_family, run.agent): run for run in runs}
     summary = [
-        _latest(latest[agent], now) if agent in latest else f"{agent} has not run"
-        for agent in agents
+        _latest(latest[pair], now)
+        if pair in latest
+        else f"{' '.join(pair)} has not run"
+        for pair in pairs
     ]
     lines = ["Search health: " + ("; ".join(summary) or "no searches scheduled")]
     since = now - LOOKBACK
     for run in runs:
-        label = f"{run.agent} search of {run.run_date}"
+        label = f"{_name(run)} search of {run.run_date}"
         if _is_dead(run, now):
             lines.append(f"  dead: {label} started {run.started_at} and has no outcome")
         if _started(run) < since:
