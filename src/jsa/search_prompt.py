@@ -6,18 +6,17 @@ from pathlib import Path
 
 from jsa.assemble import Slot, app_template, assemble
 from jsa.profile import (
-    RESUME_SKILLS,
     SEARCH_DIR,
     SHARED_FAMILY,
     SearchConfig,
     profile_dir,
     require_search_family,
-    resume_skills,
 )
 
 # Slot name -> (fragment file, required); the one definition of the fragments' homes.
 FRAGMENTS = {
     "CANDIDATE": ("candidate.md", True),
+    "SKILLS": ("skills.md", False),
     "TARGET_ROLES": ("target_roles.md", True),
     "FILTERS": ("filters.md", True),
     "POSITIVE_SIGNALS": ("positive_signals.md", False),
@@ -120,10 +119,4 @@ def assemble_search_prompt_for(
             for directory in (replacements_dir, shared_replacements_dir)
         ]
         slots[name] = _fragment_slot(family, name, filename, *replacements)
-    skills = resume_skills()
-    slots["RESUME_SKILLS"] = Slot(
-        skills.read_text(encoding="utf-8") if skills else None,
-        str(profile_dir() / RESUME_SKILLS),
-        required=False,
-    )
     return assemble(app_template("search.md"), slots)

@@ -62,9 +62,9 @@ cp -r profile.example profile
 |---|---|
 | `profile/config.toml` | your name, `tracker_spreadsheet_id`, `packets_dir`, `[fly]` app and region, `[inbox]` (optional, step 7), and the model and effort for the resume redline and refine |
 | `profile/role_families/<name>/` | one folder per kind of role you apply to, named for it (`Data Analysis`). It holds that role family's base resume, `resume.docx`, and optionally a `cover_letter.*`, which is copied into each of its packets (a `.docx` also gets a PDF). Its Sheet tab (step 2) carries the same name. You need at least one; `jsa review`, `jsa revise`, `jsa add`, `jsa inbox`, `jsa packet`, `jsa generate`, `jsa track`, and `jsa refetch` refuse to start when a `resume.docx` is missing or empty, a folder holds two cover letters, or two names give the same email tag (the name in lowercase, each run of other characters turned into one `-`) |
-| `profile/resume_skills.md` | optional; the skills you have, one per line, comma-separated, or both in one file. The search prompt's Skills section lists them, locally and in the cloud (it ships in the image). The redline may add, remove, reword, or reorder skills in your resume's `Skills` section, using only words from this list or the posting |
+| `profile/resume_skills.md` | optional; the skills the redline may draw on, one per line, comma-separated, or both in one file. The redline may add, remove, reword, or reorder skills in your resume's `Skills` section, using only words from this list or the posting. It ships in the image for the inbox machine's redline. The search prompt does not read it (see `skills.md` below) |
 | `profile/search/search.toml` | timezone, `run_at`, `results_per_run`, the weekly schedule (each entry names a `search_family`), the Claude runner settings, and the verification mode |
-| `profile/search/<name>/` | one folder per search family: any of the six fragments (`candidate.md`, `target_roles.md`, `filters.md`, `positive_signals.md`, `negative_signals.md`, `hard_exclusions.md`) that tell that search who you are and what you want |
+| `profile/search/<name>/` | one folder per search family: any of the seven fragments (`candidate.md`, `skills.md`, `target_roles.md`, `filters.md`, `positive_signals.md`, `negative_signals.md`, `hard_exclusions.md`) that tell that search who you are and what you want |
 | `profile/search/shared/` | optional; fragments that any search family without its own copy uses |
 
 **Search families.** A search family is one search's set of fragments. A career shift wants a
@@ -82,7 +82,7 @@ exist, or `shared`, is an error when the file loads. Search families have nothin
 families: any search finds postings for any role family. Each finding records the family that made
 it, and `jsa review`'s search health line reports the latest search of each family and agent pair.
 `profile.example/` has two families, `analytics` (with title seeds) and `charter` (without), that
-share three fragments.
+share four fragments.
 
 **Refining.** One `jsa refine` run learns from every decision for every search family, so a lesson
 about you (no K-12, no heavy travel) reaches every search, and a lesson about what one search is for
@@ -92,7 +92,7 @@ sees every family's assembled prompt, with the file each fragment came from, and
 `target_roles.md`, `filters.md`, `positive_signals.md`, `negative_signals.md`, and
 `hard_exclusions.md` in `shared/` and in each family's folder. It may also create one in a family's
 folder, which then replaces `shared/`'s for that family alone. It never touches `candidate.md`,
-`search.toml`, or anything else. The proposal in `profile/refine/` mirrors those paths:
+`skills.md`, `search.toml`, or anything else. The proposal in `profile/refine/` mirrors those paths:
 `rationale.md`, and for each file the refiner changed or created, a copy at its relative path
 (`profile/refine/shared/filters.md`, `profile/refine/<family>/negative_signals.md`) in which each
 change is a conflict block (`<<<<<<< current`, `=======`, `>>>>>>> proposed`). A created file is one
@@ -104,8 +104,13 @@ change reaches the cloud with the next `jsa deploy`.
 
 No prompt in `src/` needs an edit. If one seems to, a profile slot is missing.
 
-**Skills list.** `profile/resume_skills.md` lists the skills you have, either one per line or
-comma-separated, or both in one file:
+**Skills lists.** The search and the redline each have their own list, for different jobs. The search's
+Skills section comes from `skills.md` in a search family's folder or in `profile/search/shared/`, resolved
+like the other fragments: the vocabulary you want postings matched on, so keep it to the skills you want
+to work with, not every variant an applicant tracking system might look for. The redline's list is
+`profile/resume_skills.md`, and neither list falls back to the other. `resume_skills.md` lists the skills
+you have, either one per line or comma-separated, or both in one file; make it exhaustive, in every form
+a posting might use:
 
 ```
 Python
@@ -288,7 +293,7 @@ credentials leave it only as the inbox app's two exported ones, each scoped to i
 (while the OAuth consent screen is in testing status the token expires after 7 days; publish it, or
 sign in again when `jsa track` reports exit code 2); `flyctl` (`jsa deploy`); LibreOffice (`soffice`, override `JSA_SOFFICE_BIN`; renders the resume and cover letter PDFs); Google Drive for Desktop (with the inbox, `packets_dir` mirrors the Drive packets folder); Microsoft Word (reviewing the redline); the Claude Code CLI (the local Claude commands).
 
-**The profile:** `config.toml`, `role_families/`, `search/search.toml`, and the search fragments in
+**The profile:** `config.toml`, `role_families/`, `search/search.toml`, and the seven search fragments (`candidate.md`, `skills.md`, and five more) in
 `search/shared/` and a folder per search family, seeded from `profile.example/` (step 4).
 
 **Outside the profile:** the Google Sheet (step 2); with the inbox, the Drive packets folder and the

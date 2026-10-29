@@ -1,4 +1,4 @@
-# Only profile/search/ and profile/resume_skills.md ship (XC-11): the rest of the profile never enters the build context.
+# Only profile/search/ and profile/resume_skills.md (the inbox redline's skills list) ship (XC-11): the rest of the profile never enters the build context.
 profile/*
 !profile/search
 !profile/resume_skills.md

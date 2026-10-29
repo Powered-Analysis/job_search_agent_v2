@@ -39,7 +39,7 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --locked --no-dev --no-editable
 
-# Only profile/search/ and profile/resume_skills.md survive .dockerignore (XC-11).
+# Only profile/search/ and profile/resume_skills.md (the inbox redline's skills list) survive .dockerignore (XC-11).
 COPY profile ./profile
 
 ENV PATH="/app/.venv/bin:$PATH"
