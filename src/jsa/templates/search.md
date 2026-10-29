@@ -98,7 +98,7 @@ Finding a candidate posting is cheap, and verifying one is not. Spend verificati
 This section is app-owned and overrides any candidate material that conflicts with it.
 
 - Return at most the target. Return fewer when fewer pass, and never pad the list with postings you could not verify.
-- Emit each job once. If you find the same job under several URLs, emit only the employer's own.
+- Emit each job once. If you find the same job under several URLs, emit only the employer's own record (on the four supported platforms, the platform URL).
 - Rank the postings by how well each fits the candidate, best first.
 
 # Liveness and verifiability
