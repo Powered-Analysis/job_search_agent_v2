@@ -261,9 +261,9 @@ that same directory into the image, wherever `JSA_PROFILE_DIR` points. It also c
 search app holds `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, and the key of each agent `search.toml`
 schedules, and stops naming any it lacks; an agent the schedule never uses needs no key. It builds
 every search family's prompt and stops on a missing required fragment or on a scheduled family with
-no folder. It warns, without stopping, when the schedule leaves hours of the week unsearched, when
-`run_at` is after 22:59, when a search family is in no schedule entry (it never runs), and when a
-refine proposal is pending (it will not ship).
+no folder. It warns, without stopping, when a scheduled search family's windows leave hours of the
+week unsearched, when `run_at` is after 22:59, when a search family is in no schedule entry (it
+never runs), and when a refine proposal is pending (it will not ship).
 
 ## Setup inventory
 

@@ -72,16 +72,18 @@ def _clock(minute: int) -> str:
     return f"{day[:3].title()} {minute % _DAY_MINUTES // 60:02d}:{minute % 60:02d}"
 
 
-def unsearched_gaps(config: SearchConfig) -> list[tuple[int, int]]:
-    """Stretches of the week no search window covers, as (start, end) minutes after Monday 00:00 local.
+def unsearched_gaps(config: SearchConfig, family: str) -> list[tuple[int, int]]:
+    """Stretches of the week no window of the search family covers, as (start, end) minutes after Monday 00:00 local.
 
     Each search covers the `window_hours` before its day's `run_at`; the week wraps, so a gap's end
-    may pass the week's end. Pure (XC-9).
+    may pass the week's end. The family must have a scheduled search. Pure (XC-9).
     """
     run_at = config.run_at.hour * 60 + config.run_at.minute
     spans: list[tuple[int, int]] = []
     for weekday, day in enumerate(Schedule.model_fields):
         for search in getattr(config.schedule, day):
+            if search.search_family != family:
+                continue
             length = search.window_hours * 60
             if length >= _WEEK_MINUTES:
                 return []
@@ -89,8 +91,6 @@ def unsearched_gaps(config: SearchConfig) -> list[tuple[int, int]]:
             spans.append((start, min(start + length, _WEEK_MINUTES)))
             if start + length > _WEEK_MINUTES:
                 spans.append((0, start + length - _WEEK_MINUTES))
-    if not spans:
-        return [(0, _WEEK_MINUTES)]
     merged: list[list[int]] = []
     for start, end in sorted(spans):
         if merged and start <= merged[-1][1]:
@@ -107,15 +107,19 @@ def unsearched_gaps(config: SearchConfig) -> list[tuple[int, int]]:
 def deploy_warnings(config: SearchConfig, *, pending: bool) -> list[str]:
     """What the user should know before shipping; none of it stops the deploy. Pure (XC-9)."""
     warnings = []
-    gaps = unsearched_gaps(config)
-    if gaps:
-        spans = ", ".join(
-            f"{_clock(start)} to {_clock(end)} ({(end - start) / 60:g}h)"
-            for start, end in gaps
-        )
-        warnings.append(
-            f"the schedule never searches these hours ({config.timezone}): {spans}"
-        )
+    # Per family, since another family's windows don't make up for hours this one skips.
+    for family in sorted(
+        {search.search_family for search in config.schedule.searches()}
+    ):
+        gaps = unsearched_gaps(config, family)
+        if gaps:
+            spans = ", ".join(
+                f"{_clock(start)} to {_clock(end)} ({(end - start) / 60:g}h)"
+                for start, end in gaps
+            )
+            warnings.append(
+                f"search family {family!r} never searches these hours ({config.timezone}): {spans}"
+            )
     if config.run_at > LATEST_SAFE_RUN_AT:
         warnings.append(
             f"run_at {config.run_at:%H:%M} is after {LATEST_SAFE_RUN_AT:%H:%M}: "

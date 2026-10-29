@@ -447,6 +447,147 @@ def test_closing_the_last_gap_removes_the_warning(fly, monkeypatch, capsys):
     assert not warned(output)
 
 
+# Issue #221: coverage of the week is judged for each search family on its own (PRD 06, `jsa deploy` step 1).
+
+
+def warning_lines(output: str) -> list[str]:
+    return [line for line in output.splitlines() if warned(line)]
+
+
+def by_family(*families_days: tuple[str, dict[str, list]]) -> dict[str, list]:
+    """One schedule from per-family days, each search `(agent, window_hours)` given for that family."""
+    merged: dict[str, list] = {}
+    for family, days in families_days:
+        for day, searches in days.items():
+            merged.setdefault(day, []).extend(
+                (agent, window, family) for agent, window in searches
+            )
+    return merged
+
+
+ANALYTICS_ALL_WEEK = ("analytics", {day: [("perplexity", 24)] for day in WEEKDAYS})
+CHARTER_ALL_WEEK = (OTHER_FAMILY, {day: [("perplexity", 24)] for day in WEEKDAYS})
+SKIPS_TUE_AND_THU = {
+    "monday": [("claude", 72)],
+    "wednesday": [("claude", 24)],
+    "friday": [("claude", 24)],
+}
+
+
+def test_a_family_leaving_hours_unsearched_warns_though_another_family_covers_them(
+    fly, monkeypatch, capsys
+):
+    profile, log = fly
+    days = by_family(ANALYTICS_ALL_WEEK, (OTHER_FAMILY, SKIPS_TUE_AND_THU))
+    set_search(profile, schedule_toml("America/New_York", SAFE_RUN_AT, days))
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    lines = warning_lines(output)
+    assert len(lines) == 1
+    assert OTHER_FAMILY in lines[0]
+    assert "analytics" not in lines[0]
+    assert pick(calls(log), "deploy")
+
+
+def test_the_warning_names_the_family_that_has_the_gap_whichever_it_is(
+    fly, monkeypatch, capsys
+):
+    profile, _ = fly
+    days = by_family(("analytics", SKIPS_TUE_AND_THU), CHARTER_ALL_WEEK)
+    set_search(profile, schedule_toml("America/New_York", SAFE_RUN_AT, days))
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    lines = warning_lines(output)
+    assert len(lines) == 1
+    assert "analytics" in lines[0]
+    assert OTHER_FAMILY not in lines[0]
+
+
+def test_each_family_with_a_gap_gets_its_own_warning(fly, monkeypatch, capsys):
+    profile, _ = fly
+    days = by_family(
+        ("analytics", {"monday": [("claude", 24)]}),
+        (OTHER_FAMILY, {"thursday": [("gemini", 24)]}),
+    )
+    set_search(profile, schedule_toml("America/New_York", SAFE_RUN_AT, days))
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    lines = warning_lines(output)
+    assert len(lines) == 2
+    assert any("analytics" in line for line in lines)
+    assert any(OTHER_FAMILY in line for line in lines)
+
+
+def test_families_that_each_cover_the_week_with_different_windows_produce_no_warning(
+    fly, monkeypatch, capsys
+):
+    profile, _ = fly
+    days = by_family(
+        ("analytics", {"monday": [("claude", 96)], "thursday": [("gemini", 72)]}),
+        CHARTER_ALL_WEEK,
+    )
+    set_search(profile, schedule_toml("America/New_York", SAFE_RUN_AT, days))
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert not warned(output)
+
+
+def test_a_family_covers_the_week_only_with_all_its_own_searches_together(
+    fly, monkeypatch, capsys
+):
+    profile, _ = fly
+    covering = {
+        "monday": [("claude", 72)],
+        "thursday": [("claude", 72)],
+        "friday": [("gemini", 24)],
+    }
+    days = by_family(("analytics", covering), (OTHER_FAMILY, covering))
+    set_search(profile, schedule_toml("America/New_York", SAFE_RUN_AT, days))
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert not warned(output)
+    short = {day: searches for day, searches in covering.items() if day != "friday"}
+    days = by_family(("analytics", covering), (OTHER_FAMILY, short))
+    set_search(profile, schedule_toml("America/New_York", SAFE_RUN_AT, days))
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert len(warning_lines(output)) == 1
+
+
+def test_a_family_in_no_schedule_entry_gets_only_the_never_runs_warning(
+    fly, monkeypatch, capsys
+):
+    profile, log = fly
+    days = by_family(ANALYTICS_ALL_WEEK)
+    set_search(profile, schedule_toml("America/New_York", SAFE_RUN_AT, days))
+    code, output = jsa_deploy(monkeypatch, capsys)
+    assert code == 0
+    lines = warning_lines(output)
+    assert len(lines) == 1
+    assert OTHER_FAMILY in lines[0]
+    assert "never runs" in lines[0]
+    assert pick(calls(log), "deploy")
+
+
+def test_a_per_family_gap_does_not_hide_the_other_warnings(fly, monkeypatch, capsys):
+    profile, _ = fly
+    days = by_family(ANALYTICS_ALL_WEEK, (OTHER_FAMILY, SKIPS_TUE_AND_THU))
+    set_search(profile, schedule_toml("America/New_York", "23:30", days))
+    (profile / "refine").mkdir()
+    (profile / "refine" / "rationale.md").write_text("1. Tighten filters.\n")
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert len(warning_lines(output)) >= 3
+
+
+def test_the_example_profile_as_shipped_deploys_without_warnings(
+    fly, monkeypatch, capsys
+):
+    code, output = jsa_deploy(monkeypatch, capsys, "--dry-run")
+    assert code == 0
+    assert not warned(output)
+
+
 def test_run_at_after_2259_warns_and_the_deploy_continues(fly, monkeypatch, capsys):
     profile, log = fly
     set_search(profile, full_week("23:00"))
