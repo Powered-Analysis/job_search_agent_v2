@@ -493,9 +493,7 @@ def image_profile(profile):
 def test_a_profile_holding_only_search_and_the_redlines_list_puts_the_searchs_skills_under_skills(
     image_profile,
 ):
-    write_fragment(
-        image_profile, "skills", "UNIQUE-SKILL-ALPHA\nUNIQUE-SKILL-BETA\n", SHARED
-    )
+    write_fragment(image_profile, "skills", "UNIQUE-SKILL-ALPHA\nUNIQUE-SKILL-BETA\n")
     (image_profile / "resume_skills.md").write_text(
         "UNIQUE-REDLINE-SKILL\n", encoding="utf-8"
     )

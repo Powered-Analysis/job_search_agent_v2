@@ -60,7 +60,7 @@ def config_with(profile, replacements: dict[str, str]):
 # --- profile.example/ -------------------------------------------------------
 
 
-def test_the_example_profile_has_both_toml_files_and_the_six_fragments():
+def test_the_example_profile_has_both_toml_files_and_the_seven_fragments():
     assert (EXAMPLE_DIR / "config.toml").is_file()
     assert (EXAMPLE_DIR / "search" / "search.toml").is_file()
     for family in ("analytics", "charter"):
