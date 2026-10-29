@@ -22,10 +22,9 @@ from jsa.profile import (
     RoleFamily,
     load_config,
     packet_sources,
-    with_role_family,
 )
 from jsa.resume import load_resume
-from jsa.tracker import today
+from jsa.tracker import flag_unassigned, today
 
 JOB_POSTING = "job_posting.md"
 REDLINE_EDITS = "redline_edits.json"
@@ -156,7 +155,7 @@ def build_packets(posting_id: int | None, *, dry_run: bool) -> None:
     if not queue:
         print("No postings awaiting a packet.")
         return
-    for job in with_role_family(queue, sources.role_families):
+    for job in flag_unassigned(queue, sources.role_families):
         directory = packet_paths(config, job)[0]
         if directory.exists():
             print(f"skipped (folder exists): {directory}")
