@@ -75,7 +75,7 @@ This spec owns the search-and-capture pipeline (PRD Steps 1–2): scheduling, th
   | `{{RESULTS_PER_RUN}}` | `results_per_run` in `profile/search/search.toml` | yes | The result target: the most postings one run returns, the best fits it can verify. |
   | `{{LIVENESS_RULES}}` | the app's liveness rules for the `[verification] mode` (one set per mode) | yes | App-owned, never user content: the Liveness and verifiability rules for the mode. |
   | `{{CANDIDATE}}` | `candidate.md` | yes | Who the candidate is — context for judging fit; states no rules. |
-  | `{{RESUME_SKILLS}}` | `profile/resume_skills.md`, the redline's skills list (PRD 04), as written | no | Vocabulary for matching a posting's requirements: a guide to what the candidate can do, never a test of qualification or a ranking; the candidate's shape under Candidate decides fit. Absent, a fixed note. |
+  | `{{SKILLS}}` | `skills.md` | no | Vocabulary for matching a posting's requirements: a guide to what the candidate can do, never a test of qualification or a ranking; the candidate's shape under Candidate decides fit. Absent, a fixed note. |
   | `{{TARGET_ROLES}}` | `target_roles.md` | yes | The scope of roles to find: title seeds, the characteristics of the seat, or both. Any title seeds are discovery queries, and every posting is judged on fit against the result target. |
   | `{{FILTERS}}` | `filters.md` | yes | Hard, company- or posting-level tests; subordinate to liveness and the output contract. |
   | `{{POSITIVE_SIGNALS}}` | `positive_signals.md` | no | Query seeds and evidence for fit; absence never excludes. |
@@ -202,7 +202,7 @@ mode = "strict"
 - *Local/dev:* `jsa search --search-family … --agent … --window-hours …` runs one cycle against the same DB. Every command ensures the schema itself (PRD 02).
 
 **Core Experience**
-1. Assemble the search prompt (`XC-13`) from the template, the search family's resolved fragments, the skills list, and the date-range window in the profile's timezone.
+1. Assemble the search prompt (`XC-13`) from the template, the search family's resolved fragments, and the date-range window in the profile's timezone.
 2. Open the search's `search_runs` row (PRD 02), then run the selected runner; watch the streamed/logged progress trace.
 3. Parse the returned JSON and validate each posting, dropping invalid ones as `malformed`.
 4. Connect to the DB (autocommit per `XC-8`), ensure the schema, then per posting: canonicalize → resolve + verify liveness and recency against the employer's record → record finding → (admitted only) idempotent insert → (new only) fetch + store JD.
@@ -267,7 +267,7 @@ mode = "strict"
 - `GEMINI_API_KEY` — obtain from Google AI Studio; set as a Fly secret and in local `.env`. Needed only if `search.toml` or a hand run uses `gemini`.
 - `JSA_SEARCH_ANTHROPIC_API_KEY` — an Anthropic Console API key, production only; set as a Fly secret and in the owner's local `.env`. Needed only if `search.toml` or a hand run uses `claude`; development leaves it unset.
 - `TURSO_DATABASE_URL` (+ `TURSO_AUTH_TOKEN`) — the shared DB (PRD 02/06).
-- **`profile/search/`** (`XC-11`), seeded from `profile.example/search/`: `search.toml` (timezone, cadence, and runner settings), a folder per search family, and optionally `shared/`, holding the six fragments in the slot table above between them. The fragments stay standalone — no ground-truth references or watermarks (`XC-7`). It and `profile/resume_skills.md` are the only profile content that ships to the cloud; `jsa deploy` bakes both into the image (PRD 06).
+- **`profile/search/`** (`XC-11`), seeded from `profile.example/search/`: `search.toml` (timezone, cadence, and runner settings), a folder per search family, and optionally `shared/`, holding the seven fragments in the slot table above between them. The fragments stay standalone — no ground-truth references or watermarks (`XC-7`). The search's `skills.md` is not the redline's skills list (`profile/resume_skills.md`, PRD 04), and neither reads the other: the search's list is the vocabulary the candidate wants postings matched on, while the redline's is every skill the resume may claim, in every form an ATS may look for. It and `profile/resume_skills.md` are the only profile content that ships to the cloud; `jsa deploy` bakes both into the image (PRD 06).
 
 -----
 #### Outstanding Questions

@@ -51,7 +51,7 @@ How the system runs: the **cloud/local split** (the search and the email side do
 
 **Deployment image (Priority: P0)**
 - Python 3.14, timezone data, and the Claude Code CLI the Claude Agent SDK drives (the SDK bundles it). It runs as a non-root user with a writable home directory, because the Claude Code CLI refuses to run without permission prompts as root. Its entrypoint is `jsa cron`; the inbox machine overrides it with `jsa inbox`. One image serves both machines, so it also carries what the inbox's packet build needs: the `gws` CLI and LibreOffice (`soffice`, which renders the packet's PDF copies, PRD 04). No dev dependencies. Base image and install mechanics are the engineers' call, on current, supported releases.
-- **Copies the app plus `profile/search/` and `profile/resume_skills.md` (when present) and nothing else of the profile.** The search prompt reads the skills list (PRD 01). The build context excludes `profile/` except those two, so the rest of the profile is never even in the build context — which matters because Fly's remote builder uploads the context off the machine (`XC-11`).
+- **Copies the app plus `profile/search/` and `profile/resume_skills.md` (when present) and nothing else of the profile.** The inbox machine's redline reads the skills list (PRD 04). The build context excludes `profile/` except those two, so the rest of the profile is never even in the build context — which matters because Fly's remote builder uploads the context off the machine (`XC-11`).
 - No `TZ` anchor: the cadence and window use the profile's `timezone` explicitly (PRD 01).
 
 **Fly configuration (`fly.toml`) (Priority: P0)**
@@ -124,8 +124,7 @@ profile/
       cover_letter.<ext>          optional; any file matching ^cover_letter\..+$,
                                   copied into the role family's packets
   resume_skills.md        SHIPS IN THE FLY IMAGE   optional; the skills the redline may draw on
-                                  in the resume's skills section (PRD 04), and the
-                                  search prompt's skills vocabulary         (PRD 01)
+                                  in the resume's skills section            (PRD 04)
   search/                 SHIPS IN THE FLY IMAGE
     search.toml                 timezone; run_at; results_per_run;
                                 [schedule] weekday → ordered (search_family, agent, window_hours);
@@ -135,7 +134,8 @@ profile/
                                   file uses (the name is reserved)          (PRD 01)
     <name>/                     one folder per search family; any of
       candidate.md, target_roles.md, filters.md,
-      positive_signals.md, negative_signals.md, hard_exclusions.md             (PRD 01 slots)
+      positive_signals.md, negative_signals.md, hard_exclusions.md,
+      skills.md                                                                (PRD 01 slots)
   refine/                 local   a pending refine proposal: rationale + conflict-marked fragments (PRD 05)
 ```
 
@@ -153,7 +153,7 @@ profile/
 
 *Local tools:* Google Chrome (review); Microsoft Word (redline review); the `gws` CLI + `gws auth login` (Sheets — note the testing-status OAuth 7-day token expiry until the consent screen is published); `flyctl` + `fly auth login` (deploy); `uv`; the Claude Code CLI (for local Claude-driven commands); LibreOffice (the packet's resume and cover letter PDFs); Google Drive for Desktop (with the inbox: `packets_dir` mirrors the Drive packets folder).
 
-*The profile the user seeds (`XC-11`)* — `cp -r profile.example profile`, then replace the fictional candidate: `config.toml`; `search.toml`, a folder per search family, and optionally `shared/`, holding the six search fragments between them (`profile.example/` has two search families, one with title seeds and one without, that share three fragments); `role_families/`, a folder per role family with its base resume and optional cover letter (`profile.example/` has two, so the role-family prompt shows); optionally `resume_skills.md`. With the inbox, a phone contact per role family's address is optional and makes picking one a tap (PRD 03). No app prompt needs an edit.
+*The profile the user seeds (`XC-11`)* — `cp -r profile.example profile`, then replace the fictional candidate: `config.toml`; `search.toml`, a folder per search family, and optionally `shared/`, holding the seven search fragments between them (`profile.example/` has two search families, one with title seeds and one without, that share three fragments); `role_families/`, a folder per role family with its base resume and optional cover letter (`profile.example/` has two, so the role-family prompt shows); optionally `resume_skills.md`. With the inbox, a phone contact per role family's address is optional and makes picking one a tap (PRD 03). No app prompt needs an edit.
 
 *Outside the profile:* the Google Sheet (a tab per role family, named exactly as its folder, each with the A:H header and the Status dropdown / data-validation applied to all of column H, so appended rows can never run past the pre-formatted range).
 
