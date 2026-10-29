@@ -54,6 +54,7 @@ def ago(**delta):
 def add_run(
     conn,
     *,
+    family="analytics",
     agent="claude",
     started=None,
     trigger="scheduled",
@@ -66,11 +67,13 @@ def add_run(
     if outcome == "ok" and summary is None:
         summary = {"inserted": 3, "cost": 0.5}
     conn.execute(
-        "INSERT INTO search_runs (run_date, trigger, agent, window_hours, mode, started_at, "
-        "finished_at, outcome, error, summary, warnings) VALUES (?, ?, ?, 24, 'strict', ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO search_runs (run_date, trigger, search_family, agent, window_hours, mode, "
+        "started_at, finished_at, outcome, error, summary, warnings) "
+        "VALUES (?, ?, ?, ?, 24, 'strict', ?, ?, ?, ?, ?, ?)",
         (
             started.astimezone(UTC).date().isoformat(),
             trigger,
+            family,
             agent,
             db.format_timestamp(started),
             db.format_timestamp(started + timedelta(minutes=20)) if outcome else None,
@@ -184,6 +187,112 @@ def test_the_latest_search_counts_whatever_started_it(health_db):
         summary={"inserted": 83, "cost": 0.5},
     )
     assert "83" in text(health(health_db))
+
+
+# --- search families (issue #199; PRD 03 "Search health line") -----------------------------
+
+TWO_FAMILIES = schedule_toml(
+    "America/New_York",
+    "07:00",
+    {
+        day: [("claude", 24, "analytics"), ("claude", 24, "charter")]
+        for day in ("monday", "tuesday", "wednesday", "thursday", "friday")
+    },
+)
+
+
+@pytest.fixture
+def two_families(profile):
+    write_search_toml(profile, TWO_FAMILIES)
+
+
+def test_each_family_and_agent_pair_the_schedule_uses_has_its_own_latest_run(
+    health_db, two_families
+):
+    add_run(
+        health_db,
+        family="analytics",
+        started=ago(hours=4),
+        summary={"inserted": 12, "cost": 1.75},
+    )
+    add_run(
+        health_db,
+        family="charter",
+        started=ago(hours=3),
+        summary={"inserted": 97, "cost": 0.5},
+    )
+    claim_days(health_db, 1, 2, 3, 4, 5, 6, 7)
+    (line,) = health(health_db)
+    analytics, charter = line.split("; ")
+    assert "analytics" in analytics
+    assert "12" in analytics
+    assert "1.75" in analytics
+    assert "charter" in charter
+    assert "97" in charter
+    assert "0.5" in charter
+    assert "charter" not in analytics
+    assert "analytics" not in charter
+
+
+def test_another_familys_later_run_is_not_a_familys_latest_run(health_db, two_families):
+    add_run(
+        health_db,
+        family="analytics",
+        started=ago(hours=4),
+        summary={"inserted": 12, "cost": 1.75},
+    )
+    add_run(
+        health_db,
+        family="charter",
+        started=ago(hours=3),
+        summary={"inserted": 97, "cost": 0.5},
+    )
+    claim_days(health_db, 1, 2, 3, 4, 5, 6, 7)
+    analytics = health(health_db)[0].split("; ")[0]
+    assert "12" in analytics
+    assert "97" not in analytics
+
+
+def test_a_family_with_no_search_yet_is_still_named(health_db, two_families):
+    add_run(health_db, family="analytics", started=ago(hours=3))
+    claim_days(health_db, 1, 2, 3, 4, 5, 6, 7)
+    assert "charter" in text(health(health_db))
+
+
+def test_a_failed_search_names_its_family(health_db, two_families):
+    add_run(health_db, family="analytics", started=ago(hours=4))
+    add_run(
+        health_db,
+        family="charter",
+        started=ago(days=2),
+        outcome="failed",
+        error="the charter search broke",
+    )
+    claim_days(health_db, 1, 2, 3, 4, 5, 6, 7)
+    lines = [line for line in health(health_db) if "the charter search broke" in line]
+    assert lines
+    assert all("charter" in line for line in lines)
+
+
+def test_a_family_the_schedule_does_not_use_is_not_named(health_db):
+    healthy(health_db)
+    add_run(health_db, family="charter", started=ago(hours=2))
+    assert "charter" not in text(health(health_db))
+
+
+def test_a_search_from_before_search_families_is_reported_without_a_family(health_db):
+    healthy(health_db)
+    add_run(
+        health_db,
+        family=None,
+        started=ago(days=2),
+        outcome="failed",
+        error="an old search broke",
+    )
+    lines = [line for line in health(health_db) if "an old search broke" in line]
+    assert lines
+    assert "None" not in text(lines)
+    assert "claude" in text(lines)
 
 
 # --- failures ---------------------------------------------------------------------------

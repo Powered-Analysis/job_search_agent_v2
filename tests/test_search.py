@@ -36,6 +36,7 @@ MODEL = "anthropic/claude-opus-5-5"
 COST = 1.25
 LOCAL_DATABASE_HOSTS = {"127.0.0.1", "localhost"}
 SUMMARY_KEYS = [
+    "search_family",
     "agent",
     "model",
     "effort",
@@ -254,9 +255,16 @@ def jsa_search(monkeypatch, capsys, *args):
     return code, captured.out, captured.err
 
 
-def run(monkeypatch, capsys, window="24"):
+def run(monkeypatch, capsys, window="24", family="analytics"):
     return jsa_search(
-        monkeypatch, capsys, "--agent", "perplexity", "--window-hours", window
+        monkeypatch,
+        capsys,
+        "--search-family",
+        family,
+        "--agent",
+        "perplexity",
+        "--window-hours",
+        window,
     )
 
 
@@ -286,7 +294,7 @@ def findings(url):
     return table(
         url,
         "search_findings",
-        "canonical_url, agent, run_date, window_hours, rank, found_at, decision, "
+        "canonical_url, search_family, agent, run_date, window_hours, rank, found_at, decision, "
         "verification, ats_date, ats_date_kind, model, effort",
         order="rank",
     )
@@ -303,7 +311,7 @@ def search_runs(url):
     return table(
         url,
         "search_runs",
-        "trigger, run_date, agent, window_hours, mode, model, effort, started_at, "
+        "trigger, run_date, search_family, agent, window_hours, mode, model, effort, started_at, "
         "finished_at, outcome, error, summary, warnings",
         order="id",
     )
@@ -387,10 +395,15 @@ def deref(schema, node):
 
 @pytest.mark.parametrize(
     "args",
-    [[], ["--agent", "perplexity"], ["--window-hours", "24"]],
-    ids=["neither", "no-window", "no-agent"],
+    [
+        [],
+        ["--search-family", "analytics", "--agent", "perplexity"],
+        ["--search-family", "analytics", "--window-hours", "24"],
+        ["--agent", "perplexity", "--window-hours", "24"],
+    ],
+    ids=["none", "no-window", "no-agent", "no-search-family"],
 )
-def test_search_without_agent_or_window_is_a_usage_error(
+def test_search_without_search_family_agent_or_window_is_a_usage_error(
     world, monkeypatch, capsys, args
 ):
     code, _out, err = jsa_search(monkeypatch, capsys, *args)
@@ -398,6 +411,13 @@ def test_search_without_agent_or_window_is_a_usage_error(
     assert "usage" in err.lower()
     assert world.web.requests == []
     assert count_rows(world.url, "search_runs") == 0
+
+
+def test_search_help_offers_the_search_family_option(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["jsa", "search", "--help"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert "--search-family" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("window", ["abc", "0", "-5"])
@@ -412,7 +432,14 @@ def test_a_window_that_is_not_a_positive_number_of_hours_is_refused(
 
 def test_an_unknown_agent_is_refused(world, monkeypatch, capsys):
     code, _out, _err = jsa_search(
-        monkeypatch, capsys, "--agent", "nonesuch", "--window-hours", "24"
+        monkeypatch,
+        capsys,
+        "--search-family",
+        "analytics",
+        "--agent",
+        "nonesuch",
+        "--window-hours",
+        "24",
     )
     assert code != 0
     assert world.web.requests == []
@@ -798,7 +825,7 @@ def test_a_missing_key_raises_a_runtime_error_naming_it_before_any_request(
         make_client() as client,
         pytest.raises(RuntimeError, match="PERPLEXITY_API_KEY"),
     ):
-        search.search(client, "perplexity", 24)
+        search.search(client, "analytics", "perplexity", 24)
     assert world.web.requests == []
 
 
@@ -1373,6 +1400,7 @@ def test_another_agents_finding_of_the_same_url_is_a_separate_row(
     db.record_finding(
         conn,
         run_date=run_date_now(),
+        search_family="analytics",
         agent="gemini",
         canonical_url=canonicalize_url(url),
         window_hours=24,
@@ -1387,6 +1415,67 @@ def test_another_agents_finding_of_the_same_url_is_a_separate_row(
     world.web.posted(entry(url))
     run(monkeypatch, capsys)
     assert sorted(f["agent"] for f in findings(world.url)) == ["gemini", "perplexity"]
+
+
+def test_two_search_families_finding_the_same_url_leave_two_findings_and_one_posting(
+    world, monkeypatch, capsys
+):
+    url = world.web.job()
+    world.web.posted(entry(url))
+    run(monkeypatch, capsys, family="analytics")
+    world.web.posted(entry(url))
+    code, _out, _err = run(monkeypatch, capsys, family="charter")
+    assert code == 0
+    matching = [
+        f for f in findings(world.url) if f["canonical_url"] == canonicalize_url(url)
+    ]
+    assert sorted(f["search_family"] for f in matching) == ["analytics", "charter"]
+    assert [p["canonical_url"] for p in postings(world.url)] == [canonicalize_url(url)]
+    assert [r["search_family"] for r in search_runs(world.url)] == [
+        "analytics",
+        "charter",
+    ]
+
+
+def test_the_same_family_agent_and_url_the_same_day_is_one_finding(
+    world, monkeypatch, capsys
+):
+    url = world.web.job()
+    for _ in range(2):
+        world.web.posted(entry(url))
+        run(monkeypatch, capsys, family="charter")
+    (found,) = findings(world.url)
+    assert found["search_family"] == "charter"
+
+
+def test_a_search_for_a_family_with_no_folder_closes_the_run_failed_and_inserts_nothing(
+    world, monkeypatch, capsys
+):
+    world.web.posted(entry(world.web.job()))
+    try:
+        code, _out, _err = run(monkeypatch, capsys, family="ghost")
+    except JsaError:
+        code = 1
+    assert code != 0
+    assert count_rows(world.url, "postings") == 0
+    assert count_rows(world.url, "search_findings") == 0
+
+
+def test_the_prompt_sent_is_the_named_familys(world, monkeypatch, capsys):
+    sent = []
+
+    def runner(request):
+        sent.append(request.content.decode())
+        return event_stream(stream_for(answer_with([])))
+
+    world.web.routes[PERPLEXITY] = runner
+    (world.profile / "search" / "charter" / "target_roles.md").write_text(
+        "CHARTER-ONLY-ROLES-TEXT\n", encoding="utf-8"
+    )
+    run(monkeypatch, capsys, family="charter")
+    run(monkeypatch, capsys, family="analytics")
+    assert "CHARTER-ONLY-ROLES-TEXT" in sent[0]
+    assert "CHARTER-ONLY-ROLES-TEXT" not in sent[1]
 
 
 # --- output that cannot be used --------------------------------------------------
@@ -1454,6 +1543,7 @@ def test_the_cli_prints_the_summary_with_every_key(world, monkeypatch, capsys):
     assert code == 0
     summary = summary_of(out)
     assert sorted(summary) == sorted(SUMMARY_KEYS)
+    assert summary["search_family"] == "analytics"
     assert summary["agent"] == "perplexity"
     assert summary["model"] == MODEL
     assert summary["mode"] == "strict"
@@ -1516,6 +1606,7 @@ def test_a_successful_search_leaves_a_closed_hand_run_row_with_a_json_summary(
     assert row["trigger"] == "hand"
     assert row["outcome"] == "ok"
     assert row["error"] is None
+    assert row["search_family"] == "analytics"
     assert row["agent"] == "perplexity"
     assert row["window_hours"] == 36
     assert row["mode"] == "strict"
@@ -1544,6 +1635,7 @@ def test_the_run_row_is_open_before_the_runner_starts(world, monkeypatch, capsys
     assert code == 0
     (opened,) = seen
     assert opened["trigger"] == "hand"
+    assert opened["search_family"] == "analytics"
     assert opened["agent"] == "perplexity"
     assert opened["window_hours"] == 48
     assert opened["mode"] == "strict"

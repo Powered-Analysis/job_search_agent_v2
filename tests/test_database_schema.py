@@ -106,9 +106,9 @@ POSTING_SQL = (
     "VALUES ('Acme', 'Engineer', ?, ?, ?, ?)"
 )
 FINDING_SQL = (
-    "INSERT INTO search_findings (run_date, agent, canonical_url, window_hours, rank, found_at, "
-    "decision, verification, ats_date, ats_date_kind, model, effort) "
-    "VALUES (?, ?, ?, 24, 1, '2026-01-01T00:00:00.000Z', NULL, ?, NULL, ?, 'm', NULL)"
+    "INSERT INTO search_findings (run_date, search_family, agent, canonical_url, window_hours, rank, "
+    "found_at, decision, verification, ats_date, ats_date_kind, model, effort) "
+    "VALUES (?, ?, ?, ?, 24, 1, '2026-01-01T00:00:00.000Z', NULL, ?, NULL, ?, 'm', NULL)"
 )
 RUN_SQL = (
     "INSERT INTO search_runs (run_date, trigger, agent, window_hours, mode, model, effort, "
@@ -138,7 +138,8 @@ def _posting(conn, agent, decision):
 
 def _finding(conn, agent="claude", verification="verified", kind=None):
     conn.execute(
-        FINDING_SQL, (uuid.uuid4().hex, agent, uuid.uuid4().hex, verification, kind)
+        FINDING_SQL,
+        (uuid.uuid4().hex, "analytics", agent, uuid.uuid4().hex, verification, kind),
     )
 
 
@@ -218,13 +219,40 @@ def test_findings_ats_date_kind_rejects_others(conn, kind):
         _finding(conn, kind=kind)
 
 
-def test_findings_primary_key_is_run_date_agent_canonical_url(conn):
+def test_findings_primary_key_is_run_date_search_family_agent_canonical_url(conn):
     run_date, url = uuid.uuid4().hex, uuid.uuid4().hex
-    conn.execute(FINDING_SQL, (run_date, "claude", url, "verified", None))
-    conn.execute(FINDING_SQL, (run_date, "gemini", url, "verified", None))
-    conn.execute(FINDING_SQL, (uuid.uuid4().hex, "claude", url, "verified", None))
+    conn.execute(FINDING_SQL, (run_date, "a", "claude", url, "verified", None))
+    # Differing in any one part of the key is a distinct row, the search family included.
+    conn.execute(FINDING_SQL, (run_date, "b", "claude", url, "verified", None))
+    conn.execute(FINDING_SQL, (run_date, "a", "gemini", url, "verified", None))
+    conn.execute(FINDING_SQL, (uuid.uuid4().hex, "a", "claude", url, "verified", None))
+    conn.execute(
+        FINDING_SQL, (run_date, "a", "claude", uuid.uuid4().hex, "verified", None)
+    )
     with pytest.raises(REJECTED):
-        conn.execute(FINDING_SQL, (run_date, "claude", url, "verified", None))
+        conn.execute(FINDING_SQL, (run_date, "a", "claude", url, "verified", None))
+
+
+def test_findings_with_no_search_family_are_distinct_rows_as_sql_treats_null(conn):
+    run_date, url = uuid.uuid4().hex, uuid.uuid4().hex
+    for _ in range(2):
+        conn.execute(FINDING_SQL, (run_date, None, "claude", url, "verified", None))
+    assert (
+        _count(
+            conn, "SELECT COUNT(*) FROM search_findings WHERE run_date = ?", (run_date,)
+        )
+        == 2
+    )
+
+
+def test_findings_and_runs_take_a_nullable_search_family(conn):
+    for table in ("search_findings", "search_runs"):
+        columns = {
+            row[1]: row
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        assert "search_family" in columns, table
+        assert columns["search_family"][3] == 0, table  # not NOT NULL
 
 
 @pytest.mark.parametrize("trigger", ["scheduled", "hand", "smoke"])
@@ -333,10 +361,11 @@ def test_postings_row_deletable_by_primary_key(http_conn):
 
 def test_search_findings_row_deletable_by_primary_key(http_conn):
     run_date, url = uuid.uuid4().hex, uuid.uuid4().hex
-    http_conn.execute(FINDING_SQL, (run_date, "claude", url, "verified", None))
+    http_conn.execute(FINDING_SQL, (run_date, "a", "claude", url, "verified", None))
     http_conn.execute(
-        "DELETE FROM search_findings WHERE run_date = ? AND agent = ? AND canonical_url = ?",
-        (run_date, "claude", url),
+        "DELETE FROM search_findings WHERE run_date = ? AND search_family = ? "
+        "AND agent = ? AND canonical_url = ?",
+        (run_date, "a", "claude", url),
     )
     assert (
         _count(
@@ -404,7 +433,7 @@ def test_search_runs_and_refinement_ids_autoincrement(conn):
 
 def test_no_foreign_key_from_findings_to_postings(conn):
     run_date, url = uuid.uuid4().hex, uuid.uuid4().hex
-    conn.execute(FINDING_SQL, (run_date, "claude", url, "verified", None))
+    conn.execute(FINDING_SQL, (run_date, "a", "claude", url, "verified", None))
     assert (
         _count(
             conn, "SELECT COUNT(*) FROM search_findings WHERE run_date = ?", (run_date,)
