@@ -29,6 +29,8 @@ model  = "claude-fable-5-1"
 effort = "medium"
 # Optional hard stop, in seconds, so a hung run can't bill the inbox machine indefinitely. Unset means no limit.
 # wall_clock_seconds = 600
+# Optional cap on skill suggestions a redline run writes as comments. Unset defaults to 3.
+# skill_suggestion_cap = 3
 
 # Recommended: claude-opus-5-5 at "high" for refine.
 [agents.refine]
