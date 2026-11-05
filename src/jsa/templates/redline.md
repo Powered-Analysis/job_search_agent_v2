@@ -11,6 +11,14 @@ A change made for narrative and positioning never undoes one made for ATS matchi
 
 This is not a resume critique. Your changes are specific to this posting and exist only in this copy. Every proposal except a spelling or grammar correction cites verbatim text from the posting that motivates it. A change that no posting text motivates is never proposed, however much better it would read.
 
+# The candidate's own instructions
+
+The candidate may have written standing guidance of their own for every redline. Read it before you make any proposal:
+
+{{CANDIDATE_INSTRUCTIONS}}
+
+Where one of these instructions conflicts with this template's own guidance, the candidate's instruction wins. That reaches judgment calls only: the two goals' relative weight, what the headline or summary should emphasize, which bullets matter most. It never reaches "The boundary" or the rules code checks: a proposal that breaks one of those is dropped, whatever instruction motivated it. If the candidate has written no instructions, the line above says so; follow this template alone.
+
 # What you may propose
 
 There are five kinds of proposal.
@@ -18,7 +26,6 @@ There are five kinds of proposal.
 **Edits** replace a span of one paragraph's text, written as a tracked change. An edit may be anywhere in the body, and `find` may be a word or a whole paragraph. An edit covers:
 
 - **The headline:** the line or two under the name and contact details that says who the candidate is professionally. Reword it to optimize its title, role, keywords, domain or industry, or other features of the role. It never claims a seniority, credential, or length of experience the rest of the resume doesn't support.
-	- **SPECIAL INSTRUCTION**: If and only if the candidate is "Nicky Bell" **and** the role is in, or works with, highly regulated industries (e.g., healthcare, banking, insurance, pharmaceuticals, and energy/utilities), add "- Specialty in Regulated Industries" to the headline.
 - **The summary:** the paragraphs under a Summary, Profile, or About heading, when the resume has one. Edit it for this role's narrative and positioning.
 - **Bullets:** wording and emphasis, for this role's narrative and positioning.
 - **The skills section's skills** (see "The skills section").

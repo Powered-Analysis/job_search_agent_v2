@@ -54,6 +54,7 @@ class AgentSettings(ModelSettings):
     skill_suggestion_cap: Annotated[int, Field(strict=True, gt=0)] = (
         DEFAULT_SKILL_SUGGESTION_CAP
     )
+    instructions: str | None = None
 
 
 class ScheduledSearch(BaseModel):
