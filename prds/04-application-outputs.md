@@ -33,6 +33,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Choosing a posting's role family.** The user chooses it (PRD 03); no model call or rule picks one.
 - **Rebuilding a packet or moving a tracker row when a posting's role family changes.** Both are made once, from the role family the posting had then.
 - **Tailoring, generating, or reading the cover letter.** It is copied into the packet as the user's file; the redline never sees it. Filling its placeholders is the only change the app makes to it.
+- **Per-posting or interactive instructions.** `instructions` ("Candidate instructions" below) is one standing block the candidate maintains in their own config; the redline never asks for guidance mid-run and never varies it by posting.
 - **Posting data storage and queue queries** — PRD 02 (the packet, tracker, and refetch queues, marking tracked, and JD capture).
 - **ATS fetcher shapes** — PRD 01 (refetch reuses them).
 - **Application state (Date Applied, Status)** — the user's columns, never agent-written (`XC-4`).
@@ -55,6 +56,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - As the job seeker, I want each packet to start from the base resume and cover letter of the role family I picked, so that the redline tailors a resume that already tells the right story.
 - As the job seeker, I want to add a role family by adding its folder and its tracker tab, so that a new kind of role gets its own base resume without any other change.
 - As the job seeker, I want the company, title, and date filled in wherever I marked them in my resume and cover letter, so that I don't retype them for every application.
+- As the job seeker, I want to add my own standing instructions to the redline without touching the app's template, so a personal rule (such as calling out regulated-industry experience) lives in my own config, not in code every candidate's redline shares.
 
 **Operator / Developer**
 - As the operator, I want a failed tracker append to leave the row in the backlog (never optimistically flagged), so that no job silently drops out of the tracker.
@@ -143,7 +145,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
   | `skill_suggestion` | the skills section | changes nothing; leaves a comment asking whether the candidate has a skill the posting names, absent from the skills list and section |
 
   Together they cover:
-  - **the headline:** the line that names who the candidate is professionally (e.g. "Communications Expert for Policy Non-Profits"), reworded to optimize its title, role, keywords, domain or industry, or other features of the role. It never claims a seniority, credential, or length of experience the rest of the resume doesn't support. For the owner's own resume the template adds one fixed rule: when the role is in, or works with, a highly regulated industry (healthcare, banking, insurance, pharmaceuticals, energy/utilities), the headline gains "- Specialty in Regulated Industries";
+  - **the headline:** the line that names who the candidate is professionally (e.g. "Communications Expert for Policy Non-Profits"), reworded to optimize its title, role, keywords, domain or industry, or other features of the role. It never claims a seniority, credential, or length of experience the rest of the resume doesn't support;
   - **the summary,** when the resume has one: edited for this role's narrative and positioning;
   - **bullets:** wording and emphasis, which bullets stay, and the order they appear in, all for this role's narrative and positioning;
   - **the skills section** ("Skills section" below): its skills and their order;
@@ -227,6 +229,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **Re-entry:** `redline_edits.json` marks the redline step done and records whether any proposal was applied; it is written after the resume copy is replaced. No command runs the redline while that file exists: not the queue path, so a run interrupted after the redline resumes at the tracker append, and not `--id` or a refetch refresh, because the copy may hold changes the user is reviewing or has already resolved. To get a fresh redline of a revised resume, or of a posting whose description changed, the user deletes `redline_edits.json` and runs `jsa generate --id`.
 - **Unresolved tracked changes in the resume copy:** the redline is skipped for that row, with a warning, and the row continues to its tracker append. The copy's paragraph text is ambiguous until the user accepts or rejects those changes, and that is the user's state to fix, not a failure.
 - **Text in scope:** the body paragraphs. Text in tables, headers, footers, and text boxes isn't redlined, so a headline or summary kept there is out of reach.
+- **Candidate instructions (Priority: P1):** an optional field, **`instructions`** in `[agents.redline]` in `profile/config.toml`, where the candidate writes their own standing guidance for every redline — a quirk of their own resume or positioning that doesn't belong in a template every candidate's redline shares (what used to live here as a rule hardcoded to one candidate's name — when the role is in, or works with, a highly regulated industry, add a line to the headline — is the worked example: it moves to that candidate's own config instead). It is inserted into the template as its own section, read before any proposal is made, and the template states plainly that where it conflicts with the template's own guidance, the candidate's instruction wins. It reaches only judgment calls: the goals' relative weight, what the headline or summary should emphasize, which bullets matter most for this candidate. It never reaches **the boundary** or **validation** (above and below), because those are enforced in code regardless of what any instruction says — a proposal an instruction motivates is dropped at validation exactly like any other proposal that breaks a boundary rule. Unset, a fixed placeholder stands in and the prompt is exactly as it is today.
 - **Skills section (Priority: P1):** the one place the redline may change what the resume lists, not only how it words it.
   - **The skills list:** `profile/resume_skills.md`, optional (`XC-11`), holds the skills the user has. Only the redline reads it; the search has its own `skills.md` fragment (PRD 01). Items are separated by line breaks, by commas, or by both in one file:
 
@@ -246,7 +249,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
   - **What differs from the ordinary rules (the paragraph decides, never the agent):** an edit in the section may insert words from the skills list, so a skill reaches the section only from the user's own list or in the posting's own words; its `replace` may be shorter or empty, since removing a skill is allowed; and the number rule doesn't apply. Reorders there may span the section's lines and aren't confined to a run. Removals don't apply there.
   - **Skill suggestions (Priority: P1):** with the skills section present and the skills list in use, the agent may also notice that this posting names or implies a skill that is on neither the skills list nor the skills section, and that the rest of the resume makes it plausible the candidate has, and leave a comment asking whether they do instead of assuming it ("What it may propose" above). It never writes `resume_skills.md` or the resume itself; the user confirms and adds the skill to both, by hand, the next time they edit either.
   - **What code can't check** is whether a posting's term is a true synonym for a skill the user has, or whether a removal helps the narrative. Those rest on the template's rules and on the user's accept or reject, with the reason beside each change.
-- **Prompt (`XC-13`):** the app's redline template. It is candidate-agnostic except for the headline rule above, which names the owner, and its one profile slot is the skills list. It states the purpose and its two ranked goals, the five kinds of proposal and what each covers (including how to recognize the headline and the summary, and that a reorder preserves the resume's original formatting and spacing), the boundary, when a flag or a skill suggestion is warranted and that both are few, the skills section's latitude, the output contract, and the two causes an empty result must choose between.
+- **Prompt (`XC-13`):** the app's redline template. It is candidate-agnostic; its profile slots are the skills list and, when the candidate has set one, their own instructions. It states the purpose and its two ranked goals, the five kinds of proposal and what each covers (including how to recognize the headline and the summary, and that a reorder preserves the resume's original formatting and spacing), the boundary, when a flag or a skill suggestion is warranted and that both are few, the skills section's latitude, the output contract, and the two causes an empty result must choose between.
 
   | Slot | Source | Required | Precedence |
   |---|---|---|---|
@@ -254,6 +257,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
   | `{{RESUME_PARAGRAPHS}}` | the resume copy's body paragraphs as plain text, each prefixed with its index and, where it applies, the tags `bullet` and `bold` (a wholly bold paragraph); empty paragraphs are omitted but keep their indices (rendering is pure, beside "Base resume") | yes | The text under edit. Proposals address it by index. |
   | `{{SKILLS}}` | `profile/resume_skills.md`, parsed, one item per line | optional | The only skills, beyond the posting's own words, an edit in the skills section may add. The boundary and the output contract override it. Absent, a fixed note says the skills section is edited under the ordinary rules. |
   | `{{SKILLS_SECTION}}` | the indices of the skills section's paragraphs, located by code; a fixed note when the resume has none or the skills list is absent | — | Tells the agent which paragraphs take the skills section's latitude, so the agent and the validator agree. |
+  | `{{CANDIDATE_INSTRUCTIONS}}` | `instructions` in `[agents.redline]` in `profile/config.toml` | optional | Stated in the template as overriding any other template guidance it conflicts with — except the boundary and validation, which code enforces regardless of this slot's content. Absent, a fixed placeholder stands in and nothing else in the prompt changes. |
 
 **Tracker write (Step 5) (Priority: P0)**
 - **Row shape A:H** (pure): **A** ID (`postings.id`, the join key), **B** Company (`normalized_company`), **C** Title, **D** URL, **E** Date Posted, **F** Date Added (today, in the profile's `timezone`), **G** Date Applied (blank — user-owned), **H** Status (blank — user-owned dropdown).
@@ -316,6 +320,8 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **A skill suggestion names a skill already on the skills list, or already in the skills section's text:** dropped and recorded with its reason, like any invalid proposal.
 - **More than `skill_suggestion_cap` skill suggestions:** the first that many to pass are written as comments; the rest are dropped and recorded.
 - **No skills section, or no skills list in use:** no `skill_suggestion` can pass, for the same reason the skills section itself gets no latitude.
+- **`instructions` unset:** the redline prompt is exactly as it is today, with a fixed placeholder standing in for the slot.
+- **An `instructions` rule that would produce a proposal breaking the boundary or a validation rule:** the proposal is dropped and recorded in `redline_edits.json` with its reason, exactly like any other invalid proposal; the instruction can shape judgment, never the code-enforced guarantees.
 - **Redline applies a proposal:** the resume copy now carries tracked changes or comments, and the packet has no resume PDF.
 - **No `resume_skills.md`, or a resume with no `Skills` paragraph:** the skills section gets no special latitude; the ordinary rules apply to every paragraph.
 - **An edit in the skills section inserts a word that is on neither the skills list, nor in its `jd_quote`, nor in its `find`:** dropped and recorded with its reason, like any invalid proposal.
@@ -368,6 +374,7 @@ What an Apply decision turns into: a per-job **application packet** on disk (`{p
 - **`candidate_name`** (the resume file-name prefix) in `profile/config.toml`, optional.
 - **`wall_clock_seconds`** in `[agents.redline]` in `profile/config.toml`, optional: the hard stop for the redline's run. Unset means unbounded.
 - **`skill_suggestion_cap`** in `[agents.redline]` in `profile/config.toml`, optional: the most skill suggestions a redline run writes as comments. A positive integer; unset defaults to 3.
+- **`instructions`** in `[agents.redline]` in `profile/config.toml`, optional: free text the candidate adds to every redline prompt, which the template treats as overriding its own guidance where the two conflict, outside the boundary and validation rules, which code enforces regardless. Unset, the prompt is exactly as it is today.
 - With the inbox in use: the Drive packets folder, created with `gws`, its id as `[inbox] drive_folder_id`, and `packets_dir` set to its Drive for Desktop path.
 - **Microsoft Word** (redline review).
 
