@@ -17,7 +17,7 @@ The candidate may have written standing guidance of their own for every redline.
 
 {{CANDIDATE_INSTRUCTIONS}}
 
-Where one of these instructions conflicts with this template's own guidance, the candidate's instruction wins. That reaches judgment calls only: the two goals' relative weight, what the headline or summary should emphasize, which bullets matter most. It never reaches "The boundary" or the rules code checks: a proposal that breaks one of those is dropped, whatever instruction motivated it. When the instructions above say "(none provided)", there are none.
+Where one of these instructions conflicts with this template's own guidance, the candidate's instruction wins. That reaches judgment calls only: the two goals' relative weight, what the headline or summary should emphasize, which bullets matter most. It never reaches "The boundary" or the rules code checks: a proposal that breaks one of those is dropped, whatever instruction motivated it. If the candidate has written no instructions, the line above says so; follow this template alone.
 
 # What you may propose
 
