@@ -31,6 +31,7 @@ RESUME_DOCX = "resume.docx"
 COVER_LETTER_PREFIX = "cover_letter"
 _COVER_LETTER = re.compile(rf"{COVER_LETTER_PREFIX}\..+")
 SHARED_FAMILY = "shared"
+DEFAULT_SKILL_SUGGESTION_CAP = 3
 _RUN_AT = re.compile(r"([01]\d|2[0-3]):([0-5]\d)")
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
@@ -46,10 +47,13 @@ class ModelSettings(BaseModel):
 
 
 class AgentSettings(ModelSettings):
-    """The redline runs unattended on the inbox machine, so they may carry a hard stop (PRD 04)."""
+    """The redline's settings: it runs unattended on the inbox machine, so it may carry a hard stop (PRD 04)."""
 
     # XC-14: no default number, because the right one depends on the model and effort the user chose.
     wall_clock_seconds: Annotated[float, Field(strict=True, gt=0)] | None = None
+    skill_suggestion_cap: Annotated[int, Field(strict=True, gt=0)] = (
+        DEFAULT_SKILL_SUGGESTION_CAP
+    )
 
 
 class ScheduledSearch(BaseModel):

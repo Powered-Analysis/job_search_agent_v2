@@ -1,4 +1,4 @@
-"""The redline (PRD 04): edits, removals, reorders and flags that tailor a resume to its posting, validated in code, written as tracked changes and comments."""
+"""The redline (PRD 04): edits, removals, reorders, flags and skill suggestions that tailor a resume to its posting, validated in code, written as tracked changes and comments."""
 
 import json
 import re
@@ -16,7 +16,7 @@ from docx.document import Document
 from jsa import agent_loop
 from jsa.assemble import Slot, app_template, assemble
 from jsa.errors import JsaError
-from jsa.profile import RESUME_SKILLS, AgentSettings
+from jsa.profile import DEFAULT_SKILL_SUGGESTION_CAP, RESUME_SKILLS, AgentSettings
 from jsa.redline_docx import (
     ParagraphComment,
     TrackedChange,
@@ -47,10 +47,11 @@ _FLAG_FIELDS = {
     "suggestion": str,
     "reason": str,
 }
+_SKILL_SUGGESTION_FIELDS = {"skill": str, "jd_quote": str, "reason": str}
 _REMOVAL_FIELDS = {"paragraph": int, "jd_quote": str, "reason": str}
 _REORDER_FIELDS = {"paragraphs": list, "jd_quote": str, "reason": str}
-_PROPOSAL_KEYS = {"edits", "removals", "reorders", "flags", "explanation"}
-_PROPOSAL_LISTS = ("edits", "removals", "reorders", "flags")
+_PROPOSAL_LISTS = ("edits", "removals", "reorders", "flags", "skill_suggestions")
+_PROPOSAL_KEYS = {*_PROPOSAL_LISTS, "explanation"}
 _REMOVED_PARAGRAPH = "paragraph {} is deleted by a removal"
 GOALS = ("ats", "narrative", "correction")
 MAX_FLAGS = 3
@@ -98,13 +99,21 @@ class Flag:
 
 
 @dataclass(frozen=True)
+class SkillSuggestion:
+    skill: str
+    jd_quote: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class Proposal:
-    """What the redline agent returned: `explanation` is set exactly when all four lists are empty."""
+    """What the redline agent returned: `explanation` is set exactly when all five lists are empty."""
 
     edits: list[Edit]
     removals: list[Removal]
     reorders: list[Reorder]
     flags: list[Flag]
+    skill_suggestions: list[SkillSuggestion]
     explanation: str | None
 
 
@@ -507,6 +516,60 @@ def validate_flags(
     return results
 
 
+def _skill_suggestion_problem(
+    suggestion: SkillSuggestion,
+    job_description: str,
+    skills: Sequence[str],
+    section_text: str,
+) -> str | None:
+    skill = suggestion.skill.strip()
+    if not skill:
+        return "skill is empty"
+    folded = skill.casefold()
+    if folded in {listed.casefold() for listed in skills}:
+        return "skill is already on the skills list"
+    # Whole words only, so "R" is not found inside "Tableau" nor "Java" inside "JavaScript".
+    if re.search(rf"(?<!\w){re.escape(folded)}(?!\w)", section_text.casefold()):
+        return "skill is already in the skills section"
+    if problem := _quote_problem(suggestion.jd_quote, job_description):
+        return problem
+    if not suggestion.reason.strip():
+        return "reason is empty"
+    return None
+
+
+def validate_skill_suggestions(
+    suggestions: list[SkillSuggestion],
+    paragraphs: list[str],
+    job_description: str,
+    skills: Sequence[str] = (),
+    skills_section: Collection[int] = (),
+    cap: int = DEFAULT_SKILL_SUGGESTION_CAP,
+) -> list[str | None]:
+    """Each skill suggestion's result in order: None when it passes, else why it is dropped (PRD 04, "Validation").
+
+    `skills_section` is empty while no skills list is in use, so nothing passes then.
+    """
+    if not skills or not skills_section:
+        return ["the resume has no skills section, or no skills list is in use"] * len(
+            suggestions
+        )
+    section_text = "\n".join(paragraphs[index] for index in sorted(skills_section))
+    results = []
+    passed = 0
+    for suggestion in suggestions:
+        problem = _skill_suggestion_problem(
+            suggestion, job_description, skills, section_text
+        )
+        if problem is None:
+            if passed == cap:
+                problem = f"only the first {cap} skill suggestions that pass are kept"
+            else:
+                passed += 1
+        results.append(problem)
+    return results
+
+
 def _edit_comment(edit: Edit) -> str:
     lines = [f"Goal: {edit.goal}"]
     if edit.jd_quote:
@@ -526,6 +589,17 @@ def _flag_comment(flag: Flag) -> str:
             f"Suggestion: {flag.suggestion}",
             f'Posting: "{flag.jd_quote}"',
             f"Reason: {flag.reason}",
+        ]
+    )
+
+
+def _skill_suggestion_comment(suggestion: SkillSuggestion) -> str:
+    return "\n".join(
+        [
+            "For you to decide; this is not a change.",
+            f"Question: do you have {suggestion.skill.strip()}, and should it be on your skills list?",
+            f'Posting: "{suggestion.jd_quote}"',
+            f"Reason: {suggestion.reason}",
         ]
     )
 
@@ -563,7 +637,7 @@ def _object_items[Item](
 
 
 def parse_proposal(text: str) -> Proposal:
-    """The agent's final text as a proposal; anything but a JSON `{edits, removals, reorders, flags, explanation}` object raises."""
+    """The agent's final text as a proposal; anything but a JSON `{edits, removals, reorders, flags, skill_suggestions, explanation}` object raises."""
     try:
         raw = json.loads(text)
     except json.JSONDecodeError as error:
@@ -576,7 +650,8 @@ def parse_proposal(text: str) -> Proposal:
     ):
         raise JsaError(
             "the redline agent's output is not a JSON object with exactly an edits array, "
-            "a removals array, a reorders array, a flags array, and an explanation string or null"
+            "a removals array, a reorders array, a flags array, a skill_suggestions array, "
+            "and an explanation string or null"
         )
     edits = _object_items(raw, "edits", _EDIT_FIELDS, Edit)
     removals = _object_items(raw, "removals", _REMOVAL_FIELDS, Removal)
@@ -591,18 +666,21 @@ def parse_proposal(text: str) -> Proposal:
                 "entry that is not an integer"
             )
     flags = _object_items(raw, "flags", _FLAG_FIELDS, Flag)
+    skill_suggestions = _object_items(
+        raw, "skill_suggestions", _SKILL_SUGGESTION_FIELDS, SkillSuggestion
+    )
     explanation = raw["explanation"]
     # `null`, not an empty string, is how a reply with proposals carries no explanation.
     valid = (
         explanation is None
-        if edits or removals or reorders or flags
+        if edits or removals or reorders or flags or skill_suggestions
         else bool(explanation and explanation.strip())
     )
     if not valid:
         raise JsaError(
             "the redline agent's explanation must be non-empty exactly when it proposes nothing"
         )
-    return Proposal(edits, removals, reorders, flags, explanation)
+    return Proposal(edits, removals, reorders, flags, skill_suggestions, explanation)
 
 
 def assemble_redline_prompt(
@@ -733,6 +811,14 @@ def redline_resume(
         proposal.edits, paragraphs, job_description, skills, section, removed
     )
     flag_results = validate_flags(proposal.flags, paragraphs, job_description, removed)
+    skill_suggestion_results = validate_skill_suggestions(
+        proposal.skill_suggestions,
+        paragraphs,
+        job_description,
+        skills,
+        section,
+        settings.skill_suggestion_cap,
+    )
     tracked = [
         _tracked_edit(
             paragraphs, edit.paragraph, edit.find, edit.replace, _edit_comment(edit)
@@ -745,6 +831,15 @@ def redline_resume(
         for flag, problem in zip(proposal.flags, flag_results, strict=True)
         if problem is None
     ]
+    if section:
+        # The comment sits on the section's first paragraph, which holds the skills the question is about.
+        comments += [
+            ParagraphComment(min(section), _skill_suggestion_comment(suggestion))
+            for suggestion, problem in zip(
+                proposal.skill_suggestions, skill_suggestion_results, strict=True
+            )
+            if problem is None
+        ]
     removals = [
         TrackedRemoval(removal.paragraph, _structural_comment(removal))
         for removal, problem in zip(proposal.removals, removal_results, strict=True)
@@ -764,9 +859,18 @@ def redline_resume(
         "removals": _record(proposal.removals, removal_results),
         "reorders": _record(proposal.reorders, reorder_results),
         "flags": _record(proposal.flags, flag_results),
+        "skill_suggestions": _record(
+            proposal.skill_suggestions, skill_suggestion_results
+        ),
     }
     edits_file.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-    results = edit_results + removal_results + reorder_results + flag_results
+    results = (
+        edit_results
+        + removal_results
+        + reorder_results
+        + flag_results
+        + skill_suggestion_results
+    )
     return RedlineResult(
         results.count(None), len(results) - results.count(None), located is not None
     )
