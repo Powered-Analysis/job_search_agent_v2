@@ -70,6 +70,7 @@ REDLINE_JSON = json.dumps(
         "removals": [],
         "reorders": [],
         "flags": [],
+        "skill_suggestions": [],
         "explanation": None,
     }
 )
@@ -82,6 +83,7 @@ NO_EDITS_RECORD = json.dumps(
         "removals": [],
         "reorders": [],
         "flags": [],
+        "skill_suggestions": [],
     }
 )
 
@@ -1411,6 +1413,7 @@ def redline_reply(*edits, flags=(), explanation=None):
                 "removals": [],
                 "reorders": [],
                 "flags": list(flags),
+                "skill_suggestions": [],
                 "explanation": explanation,
             }
         )
@@ -1518,6 +1521,7 @@ def test_a_run_where_the_agent_proposes_no_edits_records_why_and_renders_the_res
         "removals": [],
         "reorders": [],
         "flags": [],
+        "skill_suggestions": [],
     }
     folder = packets / PLAIN
     assert (folder / RESUME_COPY).read_bytes() == (
@@ -1642,6 +1646,7 @@ def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_bas
                 "removals": [],
                 "reorders": [],
                 "flags": [],
+                "skill_suggestions": [],
                 "explanation": None,
             }
         ),
@@ -1651,6 +1656,7 @@ def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_bas
                 "removals": [],
                 "reorders": [],
                 "flags": [],
+                "skill_suggestions": [],
                 "explanation": "",
             }
         ),
@@ -1660,6 +1666,7 @@ def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_bas
                 "edits": [],
                 "reorders": [],
                 "flags": [],
+                "skill_suggestions": [],
                 "explanation": NO_EDITS_EXPLANATION,
             }
         ),
@@ -1668,6 +1675,7 @@ def test_the_redline_replaces_the_packets_resume_copy_and_never_the_profiles_bas
                 "edits": [],
                 "removals": [],
                 "flags": [],
+                "skill_suggestions": [],
                 "explanation": NO_EDITS_EXPLANATION,
             }
         ),
@@ -1806,6 +1814,7 @@ def applied_record() -> str:
             "removals": [],
             "reorders": [],
             "flags": [],
+            "skill_suggestions": [],
         }
     )
 
@@ -1848,6 +1857,7 @@ def test_a_record_whose_only_applied_proposal_is_a_flag_gets_no_resume_pdf(
             "removals": [],
             "reorders": [],
             "flags": [{**QUUX_FLAG, "validation": None}],
+            "skill_suggestions": [],
         }
     )
     (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")
@@ -1868,6 +1878,13 @@ PREVIOUS_RECORDS = {
     "three-keys": {
         "explanation": NO_EDITS_EXPLANATION,
         "edits": [],
+        "flags": [],
+    },
+    "five-keys": {
+        "explanation": NO_EDITS_EXPLANATION,
+        "edits": [],
+        "removals": [],
+        "reorders": [],
         "flags": [],
     },
 }
@@ -2413,6 +2430,7 @@ def structural_reply(removals=(), reorders=()):
                 "removals": list(removals),
                 "reorders": list(reorders),
                 "flags": [],
+                "skill_suggestions": [],
                 "explanation": None,
             }
         )
@@ -2476,6 +2494,7 @@ def test_a_record_whose_only_applied_proposal_is_a_removal_gets_no_resume_pdf(
             ],
             "reorders": [],
             "flags": [],
+            "skill_suggestions": [],
         }
     )
     (folder / REDLINE_EDITS).write_text(record, encoding="utf-8")

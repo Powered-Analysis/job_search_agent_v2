@@ -577,6 +577,11 @@ def make_resume(path, build=None):
 
 EXPLANATION = "The resume already uses the posting's terms."
 REMOVAL = {"paragraph": 1, "jd_quote": "Frobnicator platform", "reason": "off-topic"}
+SKILL_SUGGESTION = {
+    "skill": "Looker",
+    "jd_quote": "Frobnicator platform",
+    "reason": "the dashboards on the resume make it plausible",
+}
 REORDER = {
     "paragraphs": [2, 1],
     "jd_quote": "Frobnicator platform",
@@ -584,20 +589,28 @@ REORDER = {
 }
 
 
-def reply_object(edits, explanation=None, flags=(), removals=(), reorders=()):
+def reply_object(
+    edits,
+    explanation=None,
+    flags=(),
+    removals=(),
+    reorders=(),
+    skill_suggestions=(),
+):
     return json.dumps(
         {
             "edits": list(edits),
             "removals": list(removals),
             "reorders": list(reorders),
             "flags": list(flags),
+            "skill_suggestions": list(skill_suggestions),
             "explanation": explanation,
         }
     )
 
 
 def run(tmp_path, stand_in, reply, *, build=None, jd=JD, skills=(), flags=()):
-    """`reply` is raw text, or a list of edit dicts sent as `{edits, removals, reorders, flags, explanation}`."""
+    """`reply` is raw text, or a list of edit dicts sent as `{edits, removals, reorders, flags, skill_suggestions, explanation}`."""
     if isinstance(reply, list):
         reply = reply_object(reply, None if reply or flags else EXPLANATION, flags)
     stand_in.reply = reply
@@ -634,6 +647,7 @@ def test_a_no_proposal_result_records_the_explanation_and_empty_lists(
         "removals": [],
         "reorders": [],
         "flags": [],
+        "skill_suggestions": [],
     }
     assert ran.copy.read_bytes() == ran.before
     assert (ran.outcome.applied, ran.outcome.dropped) == (0, 0)
@@ -642,10 +656,18 @@ def test_a_no_proposal_result_records_the_explanation_and_empty_lists(
 def test_a_result_with_edits_records_a_null_explanation(tmp_path, stand_in):
     ran = run(tmp_path, stand_in, [as_dict(edit())])
     record = record_of(ran)
-    assert set(record) == {"explanation", "edits", "removals", "reorders", "flags"}
+    assert set(record) == {
+        "explanation",
+        "edits",
+        "removals",
+        "reorders",
+        "flags",
+        "skill_suggestions",
+    }
     assert record["explanation"] is None
     assert len(record["edits"]) == 1 and record["flags"] == []
     assert record["removals"] == [] and record["reorders"] == []
+    assert record["skill_suggestions"] == []
 
 
 def test_a_result_with_only_a_flag_is_accepted_with_a_null_explanation(
@@ -675,7 +697,10 @@ def test_a_result_with_only_a_flag_is_accepted_with_a_null_explanation(
         "```\n" + reply_object([], EXPLANATION) + "\n```",
         "Here you go: " + reply_object([], EXPLANATION),
         reply_object([], EXPLANATION) + "\nThanks!",
-        '{"edits": [], "removals": [], "reorders": [], "flags": [], "explanation": "x"',
+        (
+            '{"edits": [], "removals": [], "reorders": [], "flags": [], '
+            '"skill_suggestions": [], "explanation": "x"'
+        ),
     ],
     ids=[
         "empty",
@@ -696,7 +721,7 @@ def test_a_result_with_only_a_flag_is_accepted_with_a_null_explanation(
         "truncated",
     ],
 )
-def test_text_that_is_not_the_five_key_object_raises(tmp_path, stand_in, reply):
+def test_text_that_is_not_the_six_key_object_raises(tmp_path, stand_in, reply):
     copy = make_resume(tmp_path / "resume.docx")
     stand_in.reply = reply
     before = copy.read_bytes()
@@ -728,7 +753,15 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
     [
         reply_object([], None),
         reply_object([], ""),
-        json.dumps({"edits": [], "removals": [], "reorders": [], "flags": []}),
+        json.dumps(
+            {
+                "edits": [],
+                "removals": [],
+                "reorders": [],
+                "flags": [],
+                "skill_suggestions": [],
+            }
+        ),
         reply_object([], 7),
         reply_object([], "  \n "),
         json.dumps({"explanation": EXPLANATION}),
@@ -742,6 +775,7 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
                 "removals": [],
                 "reorders": [],
                 "flags": [],
+                "skill_suggestions": [],
             }
         ),
         reply_object([as_dict(edit())], 7),
@@ -753,6 +787,7 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
                 "removals": [],
                 "reorders": [],
                 "flags": None,
+                "skill_suggestions": [],
                 "explanation": EXPLANATION,
             }
         ),
@@ -762,6 +797,7 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
                 "removals": [],
                 "reorders": [],
                 "flags": {},
+                "skill_suggestions": [],
                 "explanation": EXPLANATION,
             }
         ),
@@ -774,6 +810,7 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
                 "removals": [],
                 "reorders": [],
                 "flags": [],
+                "skill_suggestions": [],
                 "explanation": EXPLANATION,
             }
         ),
@@ -786,6 +823,7 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
             {
                 "edits": [as_dict(edit())],
                 "flags": [],
+                "skill_suggestions": [],
                 "explanation": None,
             }
         ),
@@ -794,6 +832,7 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
                 "edits": [],
                 "reorders": [],
                 "flags": [],
+                "skill_suggestions": [],
                 "explanation": EXPLANATION,
             }
         ),
@@ -803,6 +842,7 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
                 "removals": None,
                 "reorders": [],
                 "flags": [],
+                "skill_suggestions": [],
                 "explanation": EXPLANATION,
             }
         ),
@@ -812,12 +852,53 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
                 "removals": [],
                 "reorders": {},
                 "flags": [],
+                "skill_suggestions": [],
                 "explanation": EXPLANATION,
             }
         ),
         reply_object([], EXPLANATION, removals=[REMOVAL]),
         reply_object([], "", reorders=[REORDER]),
         reply_object([], "x", removals=[REMOVAL], reorders=[REORDER]),
+        reply_object([], EXPLANATION, skill_suggestions=[SKILL_SUGGESTION]),
+        reply_object([], "", skill_suggestions=[SKILL_SUGGESTION]),
+        json.dumps(
+            {
+                "edits": [],
+                "removals": [],
+                "reorders": [],
+                "flags": [],
+                "explanation": EXPLANATION,
+            }
+        ),
+        json.dumps(
+            {
+                "edits": [as_dict(edit())],
+                "removals": [],
+                "reorders": [],
+                "flags": [],
+                "explanation": None,
+            }
+        ),
+        json.dumps(
+            {
+                "edits": [],
+                "removals": [],
+                "reorders": [],
+                "flags": [],
+                "skill_suggestions": None,
+                "explanation": EXPLANATION,
+            }
+        ),
+        json.dumps(
+            {
+                "edits": [],
+                "removals": [],
+                "reorders": [],
+                "flags": [],
+                "skill_suggestions": {},
+                "explanation": EXPLANATION,
+            }
+        ),
     ],
     ids=[
         "nothing-null-explanation",
@@ -849,6 +930,12 @@ def test_a_fenced_object_of_real_edits_also_raises(tmp_path, stand_in):
         "a-removal-with-an-explanation",
         "a-reorder-with-an-empty-explanation",
         "removal-and-reorder-with-an-explanation",
+        "a-skill-suggestion-with-an-explanation",
+        "a-skill-suggestion-with-an-empty-explanation",
+        "the-five-key-shape-without-skill-suggestions",
+        "the-five-key-shape-with-an-edit",
+        "null-skill-suggestions",
+        "object-skill-suggestions",
     ],
 )
 def test_an_object_that_breaks_the_explanation_rule_or_shape_raises(
@@ -1121,6 +1208,7 @@ def test_the_record_says_whether_any_edit_or_flag_was_applied(
             "removals": [],
             "reorders": [],
             "flags": flags,
+            "skill_suggestions": [],
         },
     )
     assert edits_applied(path) is applied
@@ -1132,6 +1220,10 @@ def removal_entry(validation):
 
 def reorder_entry(validation):
     return {**REORDER, "validation": validation}
+
+
+def skill_suggestion_entry(validation):
+    return {**SKILL_SUGGESTION, "validation": validation}
 
 
 @pytest.mark.parametrize(
@@ -1162,6 +1254,31 @@ def test_the_record_says_a_removal_or_reorder_was_applied(
             "removals": removals,
             "reorders": reorders,
             "flags": [],
+            "skill_suggestions": [],
+        },
+    )
+    assert edits_applied(path) is applied
+
+
+@pytest.mark.parametrize(
+    ("suggestions", "applied"),
+    [
+        ([skill_suggestion_entry("dropped")], False),
+        ([skill_suggestion_entry(None)], True),
+        ([skill_suggestion_entry("dropped"), skill_suggestion_entry(None)], True),
+    ],
+    ids=["dropped", "applied", "one-of-two-applied"],
+)
+def test_the_record_says_a_skill_suggestion_was_applied(tmp_path, suggestions, applied):
+    path = write_record(
+        tmp_path,
+        {
+            "explanation": None,
+            "edits": [],
+            "removals": [],
+            "reorders": [],
+            "flags": [],
+            "skill_suggestions": suggestions,
         },
     )
     assert edits_applied(path) is applied
@@ -1180,12 +1297,14 @@ def test_the_record_says_a_removal_or_reorder_was_applied(
             "edits": [],
             "removals": [removal_entry(None)],
             "flags": [],
+            "skill_suggestions": [],
         },
         {
             "explanation": None,
             "edits": [],
             "reorders": [reorder_entry(None)],
             "flags": [],
+            "skill_suggestions": [],
         },
         {
             "explanation": None,
@@ -1194,6 +1313,23 @@ def test_the_record_says_a_removal_or_reorder_was_applied(
             "reorders": [],
         },
         {
+            "edits": [entry(None)],
+            "removals": [],
+            "reorders": [],
+            "flags": [],
+            "skill_suggestions": [],
+        },
+        {
+            "explanation": None,
+            "edits": [],
+            "removals": [],
+            "reorders": [],
+            "flags": [],
+            "skill_suggestions": [],
+            "skills_edits": [],
+        },
+        {
+            "explanation": None,
             "edits": [entry(None)],
             "removals": [],
             "reorders": [],
@@ -1204,8 +1340,7 @@ def test_the_record_says_a_removal_or_reorder_was_applied(
             "edits": [],
             "removals": [],
             "reorders": [],
-            "flags": [],
-            "skills_edits": [],
+            "skill_suggestions": [skill_suggestion_entry(None)],
         },
         [entry(None)],
         [],
@@ -1223,6 +1358,8 @@ def test_the_record_says_a_removal_or_reorder_was_applied(
         "no-flags-key",
         "no-explanation",
         "an-extra-key",
+        "the-five-key-shape-with-an-edit",
+        "no-flags-key-with-a-skill-suggestion",
         "a-bare-array",
         "an-empty-array",
         "a-string",
@@ -2450,7 +2587,14 @@ def test_the_record_holds_skills_paragraph_edits_among_the_edits(tmp_path, stand
         edits=[edit(paragraph=5), bad_skill, good_skill],
     )
     record = record_of(ran)
-    assert set(record) == {"explanation", "edits", "removals", "reorders", "flags"}
+    assert set(record) == {
+        "explanation",
+        "edits",
+        "removals",
+        "reorders",
+        "flags",
+        "skill_suggestions",
+    }
     assert record["explanation"] is None
     assert [e["validation"] is None for e in record["edits"]] == [True, False, True]
     assert (ran.outcome.applied, ran.outcome.dropped) == (2, 1)

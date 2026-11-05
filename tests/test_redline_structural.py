@@ -566,7 +566,14 @@ def test_removals_and_reorders_in_the_reply_are_recorded_with_their_fields_and_v
         reorders=[REORDER, {**REORDER, "paragraphs": [4]}],
     )
     record = record_of(ran)
-    assert list(record) == ["explanation", "edits", "removals", "reorders", "flags"]
+    assert list(record) == [
+        "explanation",
+        "edits",
+        "removals",
+        "reorders",
+        "flags",
+        "skill_suggestions",
+    ]
     assert record["explanation"] is None
     first, second = record["removals"]
     assert {k: first[k] for k in REMOVAL} == REMOVAL and first["validation"] is None

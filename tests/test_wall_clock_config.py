@@ -28,6 +28,7 @@ REDLINE_JSON = json.dumps(
         "removals": [],
         "reorders": [],
         "flags": [],
+        "skill_suggestions": [],
         "explanation": "Nothing to change.",
     }
 )
