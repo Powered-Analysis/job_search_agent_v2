@@ -2544,3 +2544,45 @@ def test_packet_and_track_treat_a_posting_kept_out_of_refinement_like_any_other(
     assert code == 0
     assert [row[0] for row in appended_rows(gws)] == [excluded]
     assert column(gdb, excluded, "added_to_tracker") == 1
+
+
+# --- skill suggestions (issue #236; PRD 04 "Redline") --------------------------------------
+
+
+def test_a_skill_suggestion_becomes_a_comment_and_generate_never_writes_the_skills_file(
+    gdb, env, agent, monkeypatch, capsys
+):
+    profile, packets = env
+    write_resume_with(profile, "Skills", SKILLS_LINE)
+    skills_file = profile / "resume_skills.md"
+    skills_before = skills_file.read_bytes()
+    seed(gdb)
+    suggestion = {
+        "skill": "Canva",
+        "jd_quote": "Frobnicator platform",
+        "reason": "GEN-SUGGESTION-REASON-MARKER",
+    }
+    agent.respond = lambda prompt: result_message(
+        result=json.dumps(
+            {
+                "edits": [],
+                "removals": [],
+                "reorders": [],
+                "flags": [],
+                "skill_suggestions": [suggestion],
+                "explanation": None,
+            }
+        )
+    )
+    code, output = jsa_generate(monkeypatch, capsys)
+    assert code == 0
+    folder = packets / PLAIN
+    (entry,) = proposed(folder)["skill_suggestions"]
+    assert entry == {**suggestion, "validation": None}
+    with zipfile.ZipFile(folder / RESUME_COPY) as archive:
+        comments = archive.read("word/comments.xml").decode("utf-8")
+        body = archive.read("word/document.xml").decode("utf-8")
+    assert "GEN-SUGGESTION-REASON-MARKER" in comments and "Canva" in comments
+    assert "<w:ins " not in body and "<w:del " not in body
+    assert re.search(r"\b1\b[^\n\d]*applied[^\n\d]*\b0\b[^\n\d]*dropped", output)
+    assert skills_file.read_bytes() == skills_before
