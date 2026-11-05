@@ -157,13 +157,20 @@ def test_the_prompt_explains_the_bullet_and_bold_tags(prompt):
     assert re.search(r"bold[^.]*(role|section|head)", lowered)
 
 
-def test_the_prompt_asks_for_the_five_fields_in_its_output_contract(prompt):
+def test_the_prompt_asks_for_the_six_fields_in_its_output_contract(prompt):
     output = (
         prompt[prompt.rindex("# Your output") :]
         if "# Your output" in prompt
         else prompt
     )
-    for field in ("edits", "removals", "reorders", "flags", "explanation"):
+    for field in (
+        "edits",
+        "removals",
+        "reorders",
+        "flags",
+        "skill_suggestions",
+        "explanation",
+    ):
         assert f"`{field}`" in output, field
 
 
@@ -182,10 +189,10 @@ def test_a_reorder_is_asked_for_the_paragraphs_in_their_new_order_a_quote_and_a_
     assert "order" in block.lower()
 
 
-def test_the_explanation_is_empty_exactly_when_all_four_arrays_are(prompt):
+def test_the_explanation_is_empty_exactly_when_all_five_arrays_are(prompt):
     block = prompt[prompt.rindex("`explanation`") :].lower()
     assert "null" in block
-    assert re.search(r"all four|all of", block)
+    assert "all five" in block
     assert "well aligned" in block
     assert re.search(r"share so little|little in common", block)
 

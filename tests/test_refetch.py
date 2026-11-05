@@ -795,6 +795,7 @@ NO_EDIT_RECORD = json.dumps(
         "removals": [],
         "reorders": [],
         "flags": [],
+        "skill_suggestions": [],
     }
 )
 
@@ -1015,6 +1016,7 @@ def test_a_retitle_leaves_a_redlined_copy_without_a_pdf_and_renders_none(
             "removals": [],
             "reorders": [],
             "flags": [],
+            "skill_suggestions": [],
         }
     )
     (folder / REDLINE_EDITS).write_text(applied, encoding="utf-8")
