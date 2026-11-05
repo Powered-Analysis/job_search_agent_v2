@@ -690,8 +690,9 @@ def assemble_redline_prompt(
     skills_section: Collection[int] = (),
     bold: Collection[int] = (),
     bullets: Collection[int] = (),
+    instructions: str | None = None,
 ) -> str:
-    """The posting, the indexed resume paragraphs, and the skills list are the only inputs (PRD 04, XC-13)."""
+    """The posting, the indexed resume paragraphs, the skills list, and the candidate's instructions are the only inputs (PRD 04, XC-13)."""
     empty = _empty_paragraphs(paragraphs)
     numbered = "\n".join(
         f"{index}{' [bullet]' if index in bullets else ''}{' [bold]' if index in bold else ''}: {text}"
@@ -713,6 +714,9 @@ def assemble_redline_prompt(
             else NO_SKILLS_SECTION,
             "the resume's skills section",
             required=False,
+        ),
+        "CANDIDATE_INSTRUCTIONS": Slot(
+            instructions, "instructions in [agents.redline]", required=False
         ),
     }
     return assemble(app_template("redline.md"), slots)
@@ -787,6 +791,7 @@ def redline_resume(
             section,
             bold_paragraphs(document),
             bullets,
+            settings.instructions,
         ),
         settings,
     )
