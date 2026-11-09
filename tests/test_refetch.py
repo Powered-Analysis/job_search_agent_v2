@@ -90,7 +90,9 @@ OLD_DIR = "Acme Widgets - Staff Engineer"
 NEW_DIR = "Acme Widgets - Principal Engineer"
 OLD_COPY = "PatExample_Resume_StaffEngineer_AcmeWidgets.docx"
 NEW_COPY = "PatExample_Resume_PrincipalEngineer_AcmeWidgets.docx"
-APPLIED = "2026-10-02"
+APPLIED = "Applied"
+DID_NOT_APPLY = "Did not apply"
+DATE_APPLIED = "2026-10-02"
 JOB_IDS = itertools.count(4000000)
 
 
@@ -155,13 +157,17 @@ def rdb(db_url):
 
 
 def sheet_cells(*rows):
-    """One tab as `gws` returns it: a header, then one row per `(posting id, Date Applied)`."""
+    """One tab as `gws` returns it: a header, then one row per `(posting id, Status[, Date Applied])`.
+
+    Like Sheets, it drops the trailing blank cells of a row.
+    """
     cells = [["ID", "Company", "Title", "URL", "Posted", "Added", "Applied", "Status"]]
-    for posting_id, applied in rows:
-        cells.append(
-            [str(posting_id), "Acme Widgets", OLD_TITLE, "u", "", "2026-10-01"]
-            + ([applied] if applied else [])
-        )
+    for posting_id, status, *date_applied in rows:
+        row = [str(posting_id), "Acme Widgets", OLD_TITLE, "u", "", "2026-10-01"]
+        row += [*date_applied, ""][:1] + [status]
+        while row[-1] == "":
+            row.pop()
+        cells.append(row)
     return cells
 
 
@@ -294,21 +300,38 @@ def flagged(code, output, posting_id) -> bool:
 # --- the tracker index --------------------------------------------------------
 
 
-def test_the_index_maps_posting_ids_to_tab_row_number_and_date_applied(gws):
+def test_the_index_maps_posting_ids_to_tab_row_number_and_status(gws):
     set_sheet(gws, (7, ""), (12, APPLIED))
     index = tracker.sheet_index("sheet-123", ROLE_FAMILIES)
     assert index[7].tab == ROLE_FAMILY
-    assert index[7].number == 2 and index[7].date_applied == ""
+    assert index[7].number == 2 and index[7].status == ""
     assert index[12].tab == ROLE_FAMILY
-    assert index[12].number == 3 and index[12].date_applied == APPLIED
+    assert index[12].number == 3 and index[12].status == APPLIED
+
+
+def test_the_index_reads_status_from_column_h_not_date_applied_from_g(gws):
+    set_sheet(
+        gws, (7, "", DATE_APPLIED), (8, DID_NOT_APPLY), (9, APPLIED, DATE_APPLIED)
+    )
+    index = tracker.sheet_index("sheet-123", ROLE_FAMILIES)
+    assert index[7].status == ""
+    assert index[8].status == DID_NOT_APPLY
+    assert index[9].status == APPLIED
+    assert not hasattr(index[7], "date_applied")
+
+
+def test_the_index_reads_the_a_to_h_range(gws):
+    set_sheet(gws, (7, ""))
+    tracker.sheet_index("sheet-123", [ROLE_FAMILY])
+    assert f"'{ROLE_FAMILY}'!A:H" in gws.read_text(encoding="utf-8")
 
 
 def test_the_index_covers_every_role_familys_tab(gws):
     first, second = ROLE_FAMILIES
     set_sheet(gws, (7, ""), tab=first, elsewhere={second: [(8, APPLIED), (9, "")]})
     index = tracker.sheet_index("sheet-123", ROLE_FAMILIES)
-    assert (index[7].tab, index[7].number, index[7].date_applied) == (first, 2, "")
-    assert (index[8].tab, index[8].number, index[8].date_applied) == (
+    assert (index[7].tab, index[7].number, index[7].status) == (first, 2, "")
+    assert (index[8].tab, index[8].number, index[8].status) == (
         second,
         2,
         APPLIED,
@@ -335,7 +358,7 @@ def test_the_index_skips_rows_whose_id_cell_is_not_an_integer(gws):
         [],
         ["", "Acme"],
         ["4.5", "Acme"],
-        ["21", "Acme", "Role", "u", "", "2026-10-01", APPLIED],
+        ["21", "Acme", "Role", "u", "", "2026-10-01", "", APPLIED],
     ]
     write_tabs(
         gws, {name: cells if name == ROLE_FAMILY else [] for name in ROLE_FAMILIES}
@@ -368,22 +391,68 @@ def test_a_failed_title_write_raises(gws, monkeypatch):
 # --- scope --------------------------------------------------------------------
 
 
-def test_the_default_scope_is_unapplied_apply_rows(rdb, web, gws, monkeypatch, capsys):
+def test_the_default_scope_is_apply_rows_with_a_blank_status(
+    rdb, web, gws, monkeypatch, capsys
+):
     absent = seed(rdb)
     blank = seed(rdb)
     applied = seed(rdb)
+    did_not_apply = seed(rdb)
+    other_status = seed(rdb)
     skipped = seed(rdb, decision="Skip")
     undecided = seed(rdb, decision=None)
-    for posting_id in (absent, blank, applied, skipped, undecided):
+    for posting_id in (
+        absent,
+        blank,
+        applied,
+        did_not_apply,
+        other_status,
+        skipped,
+        undecided,
+    ):
         employer(web, rdb, posting_id)
-    set_sheet(gws, (blank, ""), (applied, APPLIED), (skipped, ""))
+    set_sheet(
+        gws,
+        (blank, ""),
+        (applied, APPLIED),
+        (did_not_apply, DID_NOT_APPLY),
+        (other_status, "Interviewing"),
+        (skipped, ""),
+    )
     code, _ = refetch(monkeypatch, capsys)
     assert code == 0
     for posting_id in (absent, blank):
         assert column(rdb, posting_id, "jd_markdown") == NEW_JD
-    for posting_id in (applied, skipped, undecided):
+    for posting_id in (applied, did_not_apply, other_status, skipped, undecided):
         assert column(rdb, posting_id, "jd_markdown") == OLD_JD
         assert column(rdb, posting_id, "title") == OLD_TITLE
+
+
+def test_a_filled_date_applied_with_a_blank_status_is_still_in_the_default_scope(
+    rdb, web, gws, monkeypatch, capsys
+):
+    posting_id = seed(rdb)
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, "", DATE_APPLIED))
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert column(rdb, posting_id, "jd_markdown") == NEW_JD
+    assert column(rdb, posting_id, "title") == NEW_TITLE
+    assert title_updates(gws) == [(f"'{ROLE_FAMILY}'!C2", NEW_TITLE)]
+
+
+def test_a_date_applied_does_not_exclude_a_blank_status_row_but_a_status_does(
+    rdb, web, gws, monkeypatch, capsys
+):
+    open_row = seed(rdb)
+    closed = seed(rdb)
+    for posting_id in (open_row, closed):
+        employer(web, rdb, posting_id)
+    set_sheet(gws, (open_row, "", DATE_APPLIED), (closed, DID_NOT_APPLY, DATE_APPLIED))
+    code, _ = refetch(monkeypatch, capsys)
+    assert code == 0
+    assert column(rdb, open_row, "jd_markdown") == NEW_JD
+    assert column(rdb, closed, "jd_markdown") == OLD_JD
 
 
 def test_a_failed_sheet_read_in_the_default_scope_exits_non_zero_before_any_change(
@@ -400,18 +469,19 @@ def test_a_failed_sheet_read_in_the_default_scope_exits_non_zero_before_any_chan
     assert title_updates(gws) == []
 
 
-def test_all_processes_every_row_including_applied_and_skipped(
+def test_all_processes_every_row_including_applied_did_not_apply_and_skipped(
     rdb, web, gws, monkeypatch, capsys
 ):
     applied = seed(rdb)
+    did_not_apply = seed(rdb)
     skipped = seed(rdb, decision="Skip")
     undecided = seed(rdb, decision=None)
-    for posting_id in (applied, skipped, undecided):
+    for posting_id in (applied, did_not_apply, skipped, undecided):
         employer(web, rdb, posting_id)
-    set_sheet(gws, (applied, APPLIED))
+    set_sheet(gws, (applied, APPLIED), (did_not_apply, DID_NOT_APPLY))
     code, _ = refetch(monkeypatch, capsys, "--all")
     assert code == 0
-    for posting_id in (applied, skipped, undecided):
+    for posting_id in (applied, did_not_apply, skipped, undecided):
         assert column(rdb, posting_id, "jd_markdown") == NEW_JD
     assert title_updates(gws) == []
 
@@ -588,15 +658,27 @@ def test_a_retitle_to_formula_text_is_written_to_the_sheet_as_literal_text(
     assert cell == f"'{ROLE_FAMILY}'!C2" and value.startswith("'=HYPERLINK")
 
 
-def test_a_retitled_row_with_a_date_applied_keeps_its_title_cell(
+@pytest.mark.parametrize("status", [APPLIED, DID_NOT_APPLY, "Interviewing"])
+@pytest.mark.parametrize("date_applied", ["", DATE_APPLIED])
+def test_a_retitled_row_with_a_status_keeps_its_title_cell(
+    rdb, web, gws, monkeypatch, capsys, status, date_applied
+):
+    posting_id = seed(rdb)
+    employer(web, rdb, posting_id)
+    set_sheet(gws, (posting_id, status, date_applied))
+    refetch(monkeypatch, capsys, "--all")
+    assert column(rdb, posting_id, "title") == NEW_TITLE
+    assert title_updates(gws) == []
+
+
+def test_a_retitled_row_with_a_date_applied_but_a_blank_status_gets_its_title_cell_rewritten(
     rdb, web, gws, monkeypatch, capsys
 ):
     posting_id = seed(rdb)
     employer(web, rdb, posting_id)
-    set_sheet(gws, (posting_id, APPLIED))
+    set_sheet(gws, (posting_id, "", DATE_APPLIED))
     refetch(monkeypatch, capsys, "--all")
-    assert column(rdb, posting_id, "title") == NEW_TITLE
-    assert title_updates(gws) == []
+    assert title_updates(gws) == [(f"'{ROLE_FAMILY}'!C2", NEW_TITLE)]
 
 
 def test_a_retitled_row_missing_from_the_sheet_has_no_cell_to_rewrite(
