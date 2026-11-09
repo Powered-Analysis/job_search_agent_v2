@@ -329,7 +329,7 @@ def main() -> None:
     refetch_command.add_argument(
         "--all",
         action="store_true",
-        help="reconcile every posting, not just unapplied Apply rows",
+        help="reconcile every posting, not just Apply rows whose Status is blank",
     )
     refetch_command.add_argument(
         "--dry-run", action="store_true", help="show the changes without making them"

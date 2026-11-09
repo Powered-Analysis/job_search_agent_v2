@@ -46,9 +46,9 @@ def _read_sheet(
         return None
 
 
-def _unapplied(index: dict[int, tracker.SheetRow], posting_id: int) -> bool:
+def _open(index: dict[int, tracker.SheetRow], posting_id: int) -> bool:
     row = index.get(posting_id)
-    return row is None or not row.date_applied
+    return row is None or not row.status
 
 
 def _taken(name: Path, source: Path) -> bool:
@@ -260,7 +260,7 @@ def _reconcile(
     has_packet = old_directory.is_dir()
     fixes = []
     sheet_row = index.get(job.id) if index is not None else None
-    if title_changed and sheet_row and not sheet_row.date_applied:
+    if title_changed and sheet_row and not sheet_row.status:
         try:
             tracker.set_title(
                 spreadsheet_id, sheet_row.tab, sheet_row.number, fresh.title
@@ -322,7 +322,7 @@ def refetch(
     if posting_id is not None and not targets:
         raise JsaError(f"posting {posting_id} does not exist")
     if default_scope:
-        targets = [t for t in targets if _unapplied(index, t.job.id)]
+        targets = [t for t in targets if _open(index, t.job.id)]
     if not targets:
         print("No postings to refetch.")
         return

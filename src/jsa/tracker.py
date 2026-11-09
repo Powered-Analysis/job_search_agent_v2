@@ -86,11 +86,11 @@ def append_row(spreadsheet_id: str, tab: str, row: list[str | int]) -> None:
 class SheetRow(NamedTuple):
     tab: str
     number: int
-    date_applied: str
+    status: str
 
 
 def sheet_index(spreadsheet_id: str, tabs: Iterable[str]) -> dict[int, SheetRow]:
-    """`postings.id` -> its tab, row number and Date Applied, across the role families' tabs.
+    """`postings.id` -> its tab, row number and Status, across the role families' tabs.
 
     Rows whose ID cell isn't an integer are skipped; a posting on two tabs is found on the first listed.
     """
@@ -99,7 +99,7 @@ def sheet_index(spreadsheet_id: str, tabs: Iterable[str]) -> dict[int, SheetRow]
         with _on_tab(tab):
             # The range starts at row 1, so a value's position is its row number; blank rows come back empty.
             response = _gws(
-                "get", {"spreadsheetId": spreadsheet_id, "range": _range(tab, "A:G")}
+                "get", {"spreadsheetId": spreadsheet_id, "range": _range(tab, "A:H")}
             )
             rows = response.get("values", []) if isinstance(response, dict) else None
             if not isinstance(rows, list):
@@ -109,7 +109,7 @@ def sheet_index(spreadsheet_id: str, tabs: Iterable[str]) -> dict[int, SheetRow]
             if cells and cells[0].isdecimal():
                 index.setdefault(
                     int(cells[0]),
-                    SheetRow(tab, number, cells[6] if len(cells) > 6 else ""),
+                    SheetRow(tab, number, cells[7] if len(cells) > 7 else ""),
                 )
     return index
 
